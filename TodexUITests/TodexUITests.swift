@@ -286,6 +286,13 @@ nonisolated final class TodexUITests: XCTestCase {
         git.name = "Git workspace status"
         git.lifetime = .keepAlways
         add(git)
+        // The header Git icon drives operations; the tab itself only lists changes.
+        let gitMenu = app.buttons["Git 操作"]
+        XCTAssertTrue(gitMenu.waitForExistence(timeout: 5))
+        gitMenu.tap()
+        let refresh = app.descendants(matching: .any)["刷新状态"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        refresh.tap()
         app.terminate()
     }
 

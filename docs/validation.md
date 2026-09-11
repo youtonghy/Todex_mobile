@@ -19,7 +19,7 @@
 
 - [iOS 26.5 · 4 项通过](/private/tmp/todex-mobile-fixture-ke6n6g8s/ui-3E414370-B1F2-4ADF-B17E-93B4368202FA-1789057667.xcresult)
 - [iPadOS 27 · 4 项通过](/private/tmp/todex-mobile-fixture-ke6n6g8s/ui-C7B85E55-DB33-47BE-B4F9-1F9214F9185C-1789057824.xcresult)
-- [iPadOS 27 · 6 项通过](/private/tmp/todex-mobile-fixture-spdhta6q/ui-C7B85E55-DB33-47BE-B4F9-1F9214F9185C-1789133045.xcresult)
+- [iPadOS 27 · 6 项通过](/private/tmp/todex-mobile-fixture-spdhta6q/ui-C7B85E55-DB33-47BE-B4F9-1F9214F9185C-1789135664.xcresult)
 
 已查看并保留的原始模拟器截图：[iPad 双栏](screenshots/ipad-conversation-workbench.png)、[离线公式与代码](screenshots/ipad-markdown-math.png)、[iPhone 对话](screenshots/iphone-conversation.png)、[原生审批](screenshots/iphone-approval.png)、[深色辅助字体](screenshots/iphone-dark-large-text.png)、[真实 PTY](screenshots/iphone-terminal.png)。
 

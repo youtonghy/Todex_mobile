@@ -74,7 +74,7 @@ final class ConversationContainerController: UIViewController {
             wideConstraint = chat.view.widthAnchor.constraint(
                 equalTo: panes.widthAnchor, multiplier: 0.51, constant: -0.5)
         }
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
+        let more = UIBarButtonItem(
             image: Theme.icon("ellipsis.circle"),
             menu: UIMenu(children: [
                 UIAction(title: "能力目录", image: Theme.icon("square.grid.2x2")) { [weak self] _ in self?.showCatalog() },
@@ -82,7 +82,16 @@ final class ConversationContainerController: UIViewController {
                 UIAction(title: "子代理与记忆", image: Theme.icon("brain")) { [weak self] _ in self?.showAuxiliary() },
                 UIAction(title: "导出对话", image: Theme.icon("square.and.arrow.up")) { [weak self] _ in self?.export() },
             ]))
-        navigationItem.rightBarButtonItem?.accessibilityLabel = "对话菜单"
+        more.accessibilityLabel = "对话菜单"
+        var items = [more]
+        if let workbench {
+            let git = UIBarButtonItem(
+                image: Theme.icon("point.3.connected.trianglepath.dotted"),
+                menu: workbench.gitMenu(host: self))
+            git.accessibilityLabel = "Git 操作"
+            items.append(git)
+        }
+        navigationItem.rightBarButtonItems = items
         observer = session.observe { [weak self] in
             self?.title = self?.session.conversations.first { $0.id == self?.conversation.id }?.title ?? "对话"
         }
