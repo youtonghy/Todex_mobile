@@ -121,7 +121,13 @@ nonisolated struct LocalStore: Sendable {
     func save<T: Encodable>(_ value: T, key: String) throws {
         let data = try JSONEncoder().encode(value)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try data.write(to: url(key), options: [.atomic, .completeFileProtection])
+        // File-protection classes exist only on iOS; a macOS session-test binary
+        // cannot set the attribute.
+        var options: Data.WritingOptions = [.atomic]
+        #if os(iOS)
+            options.insert(.completeFileProtection)
+        #endif
+        try data.write(to: url(key), options: options)
     }
 }
 
@@ -140,6 +146,74 @@ nonisolated struct SessionSnapshot: Codable, Sendable {
     var pinnedConversations: [String] = []
     var pausedQueues: Set<String> = []
     var activeConversationID: String?
+    var tasks: [KanbanTask] = []
+}
+
+/// Every field decodes with decodeIfPresent so a snapshot written by an older
+/// build (missing newer keys) still loads instead of discarding local state.
+extension SessionSnapshot {
+    nonisolated init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        workspaces = try c.decodeIfPresent([WorkspaceRecord].self, forKey: .workspaces) ?? []
+        conversations = try c.decodeIfPresent([ConversationManifest].self, forKey: .conversations) ?? []
+        drafts = try c.decodeIfPresent([String: ComposerDraft].self, forKey: .drafts) ?? [:]
+        preferences = try c.decodeIfPresent([String: ConversationPreferences].self, forKey: .preferences) ?? [:]
+        queues = try c.decodeIfPresent([String: [QueuedDraft]].self, forKey: .queues) ?? [:]
+        pendingSends = try c.decodeIfPresent([String: PendingSend].self, forKey: .pendingSends) ?? [:]
+        legacyCursors = try c.decodeIfPresent([String: Int].self, forKey: .legacyCursors) ?? [:]
+        readSequences = try c.decodeIfPresent([String: Int].self, forKey: .readSequences) ?? [:]
+        pinnedWorkspaces = try c.decodeIfPresent([String].self, forKey: .pinnedWorkspaces) ?? []
+        pinnedConversations = try c.decodeIfPresent([String].self, forKey: .pinnedConversations) ?? []
+        pausedQueues = try c.decodeIfPresent(Set<String>.self, forKey: .pausedQueues) ?? []
+        activeConversationID = try c.decodeIfPresent(String.self, forKey: .activeConversationID)
+        tasks = try c.decodeIfPresent([KanbanTask].self, forKey: .tasks) ?? []
+    }
+}
+
+/// A local task-plan entry, mirroring the desktop kanban board: tasks live in
+/// the namespaced snapshot, independent of the backend, and may link to a
+/// conversation of the same workspace.
+nonisolated struct KanbanTask: Identifiable, Codable, Sendable, Equatable {
+    enum Status: String, Codable, CaseIterable, Sendable {
+        case planned
+        case inProgress = "in-progress"
+        case done
+        var label: String {
+            switch self {
+            case .planned: "计划"
+            case .inProgress: "进行中"
+            case .done: "已完成"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .planned: "circle"
+            case .inProgress: "circle.dotted.circle"
+            case .done: "checkmark.circle.fill"
+            }
+        }
+    }
+    var id: String
+    var workspaceId: String
+    var title: String
+    var status: Status
+    var conversationId: String?
+    var createdAt: Int
+    var updatedAt: Int
+    init(workspaceId: String, title: String) {
+        let now = Int(Date().timeIntervalSince1970 * 1_000)
+        self.init(
+            id: "task-\(UUID().uuidString)", workspaceId: workspaceId, title: title, status: .planned,
+            createdAt: now, updatedAt: now)
+    }
+    init(id: String, workspaceId: String, title: String, status: Status, createdAt: Int, updatedAt: Int) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.title = title
+        self.status = status
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
 }
 
 /// Serial disk work is isolated from the main actor. Version checks also handle

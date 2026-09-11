@@ -5,8 +5,12 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
     let session: AppSession
     private var observer: UUID?
     private let search = UISearchController(searchResultsController: nil)
-    private let filter = UISegmentedControl(items: ["工作区", "今天", "归档"])
-    private var groups: [(WorkspaceRecord, [ConversationManifest])] = []
+    private let filter = UISegmentedControl(items: ["工作区", "任务", "归档"])
+    private enum HomeRow {
+        case conversation(ConversationManifest)
+        case task(KanbanTask)
+    }
+    private var groups: [(WorkspaceRecord, [HomeRow])] = []
     private var collapsed: Set<String> = []
     private var expanded: Set<String> = []
     private let statusLabel = Theme.label("尚未连接", style: .subheadline, color: .secondaryLabel)
@@ -88,33 +92,39 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
     func updateSearchResults(for searchController: UISearchController) { reload() }
     private func reload() {
         let query = (search.searchBar.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let today = ISO8601DateFormatter()
-        groups = session.workspaces.sorted { left, right in
+        let sortedWorkspaces = session.workspaces.sorted { left, right in
             let a = session.pinnedWorkspaces.firstIndex(of: left.id) ?? Int.max
             let b = session.pinnedWorkspaces.firstIndex(of: right.id) ?? Int.max
             return a == b ? left.name.localizedStandardCompare(right.name) == .orderedAscending : a < b
-        }.compactMap { workspace in
-            let records = session.conversations.filter { conversation in
-                guard conversation.workspaceId == workspace.id || conversation.workspace == workspace.path else {
-                    return false
+        }
+        if filter.selectedSegmentIndex == 1 {
+            // Task plan: one section per workspace, mirroring the desktop board.
+            groups = sortedWorkspaces.compactMap { workspace in
+                let items = session.tasks(for: workspace.id).filter {
+                    query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)
+                        || workspace.name.localizedCaseInsensitiveContains(query)
                 }
-                let archived = conversation.archivedAt != nil
-                guard (filter.selectedSegmentIndex == 2) == archived else { return false }
-                if filter.selectedSegmentIndex == 1 {
-                    today.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                    let date =
-                        today.date(from: conversation.updatedAt)
-                        ?? ISO8601DateFormatter().date(from: conversation.updatedAt)
-                    guard let date, Calendar.current.isDateInToday(date) else { return false }
-                }
-                return query.isEmpty || (conversation.title ?? "").localizedCaseInsensitiveContains(query)
-                    || workspace.name.localizedCaseInsensitiveContains(query)
-            }.sorted { left, right in
-                let a = session.pinnedConversations.firstIndex(of: left.id) ?? Int.max
-                let b = session.pinnedConversations.firstIndex(of: right.id) ?? Int.max
-                return a == b ? left.updatedAt > right.updatedAt : a < b
+                return !query.isEmpty && items.isEmpty ? nil : (workspace, items.map(HomeRow.task))
             }
-            return (!query.isEmpty || filter.selectedSegmentIndex != 0) && records.isEmpty ? nil : (workspace, records)
+        } else {
+            groups = sortedWorkspaces.compactMap { workspace in
+                let records = session.conversations.filter { conversation in
+                    guard conversation.workspaceId == workspace.id || conversation.workspace == workspace.path else {
+                        return false
+                    }
+                    guard (filter.selectedSegmentIndex == 2) == (conversation.archivedAt != nil) else {
+                        return false
+                    }
+                    return query.isEmpty || (conversation.title ?? "").localizedCaseInsensitiveContains(query)
+                        || workspace.name.localizedCaseInsensitiveContains(query)
+                }.sorted { left, right in
+                    let a = session.pinnedConversations.firstIndex(of: left.id) ?? Int.max
+                    let b = session.pinnedConversations.firstIndex(of: right.id) ?? Int.max
+                    return a == b ? left.updatedAt > right.updatedAt : a < b
+                }
+                return (!query.isEmpty || filter.selectedSegmentIndex != 0) && records.isEmpty
+                    ? nil : (workspace, records.map(HomeRow.conversation))
+            }
         }
         statusLabel.text = [session.connection?.name, session.status].compactMap { $0 }.joined(separator: " · ")
         statusLabel.textColor = session.isConnected ? Theme.accent : .secondaryLabel
@@ -123,9 +133,16 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
             config.image = Theme.icon(
                 session.connections.isEmpty ? "network" : "bubble.left.and.bubble.right", pointSize: 40)
             config.text =
-                session.connections.isEmpty ? "连接你的工作区" : (filter.selectedSegmentIndex == 2 ? "没有归档对话" : "从一个想法开始")
+                session.connections.isEmpty
+                ? "连接你的工作区"
+                : (filter.selectedSegmentIndex == 2
+                    ? "没有归档对话" : (filter.selectedSegmentIndex == 1 ? "还没有工作区可管理任务" : "从一个想法开始"))
             config.secondaryText =
-                session.connections.isEmpty ? "连接 TodeX 后端，随时继续你的对话与工作。" : session.lastError ?? "添加后端上的项目目录，创建你的第一个对话。"
+                session.connections.isEmpty
+                ? "连接 TodeX 后端，随时继续你的对话与工作。"
+                : session.lastError
+                    ?? (filter.selectedSegmentIndex == 1
+                        ? "添加工作区后，可在这里按工作区管理任务并贴到对话。" : "添加后端上的项目目录，创建你的第一个对话。")
             config.button.title = session.connections.isEmpty ? "连接后端" : (session.isConnected ? "添加工作区" : "重新连接")
             config.buttonProperties.primaryAction = UIAction { [weak self] _ in
                 guard let self else { return }
@@ -193,25 +210,50 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         var config = cell.defaultContentConfiguration()
         if indexPath.row >= visible {
-            config.text = visible < items.count ? "显示其余 \(items.count - visible) 个对话" : "新建对话"
-            config.image = Theme.icon(visible < items.count ? "chevron.down" : "plus.bubble")
+            if filter.selectedSegmentIndex == 1 {
+                config.text = "新建任务"
+                config.image = Theme.icon("plus")
+            } else {
+                config.text = visible < items.count ? "显示其余 \(items.count - visible) 个对话" : "新建对话"
+                config.image = Theme.icon(visible < items.count ? "chevron.down" : "plus.bubble")
+            }
             config.textProperties.color = Theme.accent
         } else {
-            let item = items[indexPath.row]
-            let runtime = session.runtimes[item.id]
-            let state = runtime?.status ?? item.status
-            config.text = item.title?.isEmpty == false ? item.title : "新对话"
-            let unread = (session.readSequences[item.id] ?? 0) < item.lastSequence
-            config.secondaryText = [item.provider, statusText(state), unread ? "有新消息" : nil].compactMap { $0 }.joined(
-                separator: " · ")
-            config.secondaryTextProperties.color = .secondaryLabel
-            config.image = Theme.icon(
-                session.pinnedConversations.contains(item.id)
-                    ? "pin.fill" : (state == "running" ? "circle.dotted.circle" : "bubble.left"))
-            config.imageProperties.tintColor = unread || state == "running" ? Theme.accent : .secondaryLabel
-            config.textProperties.numberOfLines = 2
-            cell.accessoryType = .disclosureIndicator
-            cell.accessibilityIdentifier = "conversation.\(item.id)"
+            switch items[indexPath.row] {
+            case .conversation(let item):
+                let runtime = session.runtimes[item.id]
+                let state = runtime?.status ?? item.status
+                config.text = item.title?.isEmpty == false ? item.title : "新对话"
+                let unread = (session.readSequences[item.id] ?? 0) < item.lastSequence
+                config.secondaryText = [
+                    item.provider, statusText(state), unread ? "有新消息" : nil,
+                    session.taskConversationIDs.contains(item.id) ? "有任务" : nil,
+                ].compactMap { $0 }.joined(separator: " · ")
+                config.secondaryTextProperties.color = .secondaryLabel
+                config.image = Theme.icon(
+                    session.pinnedConversations.contains(item.id)
+                        ? "pin.fill" : (state == "running" ? "circle.dotted.circle" : "bubble.left"))
+                config.imageProperties.tintColor = unread || state == "running" ? Theme.accent : .secondaryLabel
+                config.textProperties.numberOfLines = 2
+                cell.accessoryType = .disclosureIndicator
+                cell.accessibilityIdentifier = "conversation.\(item.id)"
+            case .task(let task):
+                config.text = task.title
+                let linked = task.conversationId.flatMap { id in
+                    session.conversations.first { $0.id == id }
+                }
+                config.secondaryText = [
+                    task.status.label,
+                    task.conversationId == nil ? "未关联对话" : (linked?.title ?? "对话已失效"),
+                ].joined(separator: " · ")
+                config.secondaryTextProperties.color = .secondaryLabel
+                config.image = Theme.icon(task.status.symbol)
+                config.imageProperties.tintColor =
+                    task.status == .done
+                    ? .systemGreen : (task.status == .inProgress ? Theme.accent : .secondaryLabel)
+                config.textProperties.numberOfLines = 2
+                cell.accessibilityIdentifier = "task.\(task.id)"
+            }
         }
         cell.contentConfiguration = config
         cell.backgroundColor = Theme.surface
@@ -222,7 +264,11 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
         let (workspace, items) = groups[indexPath.section]
         let visible = min(items.count, expanded.contains(workspace.id) ? Int.max : 5)
         if indexPath.row >= visible {
-            if visible < items.count {
+            if filter.selectedSegmentIndex == 1 {
+                askText(title: "新建任务", message: workspace.name, value: "") { [weak self] title in
+                    self?.session.addTask(workspaceId: workspace.id, title: title)
+                }
+            } else if visible < items.count {
                 expanded.insert(workspace.id)
                 reload()
             } else {
@@ -230,7 +276,17 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
             }
             return
         }
-        open(items[indexPath.row])
+        switch items[indexPath.row] {
+        case .conversation(let item): open(item)
+        case .task(let task):
+            if let id = task.conversationId,
+                let linked = session.conversations.first(where: { $0.id == id })
+            {
+                open(linked)
+            } else {
+                presentTaskSheet(task, workspace: workspace)
+            }
+        }
     }
     func open(_ conversation: ConversationManifest) {
         search.isActive = false
@@ -243,22 +299,40 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
     ) -> UIContextMenuConfiguration? {
         let group = groups[indexPath.section]
         guard indexPath.row < min(group.1.count, expanded.contains(group.0.id) ? Int.max : 5) else { return nil }
-        let item = groups[indexPath.section].1[indexPath.row]
-        return UIContextMenuConfiguration(actionProvider: { [weak self] _ in self?.conversationMenu(item) })
+        switch group.1[indexPath.row] {
+        case .conversation(let item):
+            return UIContextMenuConfiguration(actionProvider: { [weak self] _ in self?.conversationMenu(item) })
+        case .task(let task):
+            return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
+                self?.taskMenu(task, workspace: group.0)
+            })
+        }
     }
     override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
         -> UISwipeActionsConfiguration?
     {
         let group = groups[indexPath.section]
         guard indexPath.row < min(group.1.count, expanded.contains(group.0.id) ? Int.max : 5) else { return nil }
-        let item = groups[indexPath.section].1[indexPath.row]
-        let action = UIContextualAction(style: .normal, title: item.archivedAt == nil ? "归档" : "恢复") {
-            [weak self] _, _, done in
-            self?.archive(item, archived: item.archivedAt == nil)
-            done(true)
+        switch group.1[indexPath.row] {
+        case .conversation(let item):
+            let action = UIContextualAction(style: .normal, title: item.archivedAt == nil ? "归档" : "恢复") {
+                [weak self] _, _, done in
+                self?.archive(item, archived: item.archivedAt == nil)
+                done(true)
+            }
+            action.backgroundColor = Theme.accent
+            return UISwipeActionsConfiguration(actions: [action])
+        case .task(let task):
+            let next: KanbanTask.Status = task.status == .done ? .planned : .done
+            let action = UIContextualAction(
+                style: .normal, title: next == .done ? "标记完成" : "重新计划"
+            ) { [weak self] _, _, done in
+                self?.session.setTaskStatus(task.id, next)
+                done(true)
+            }
+            action.backgroundColor = next == .done ? .systemGreen : Theme.accent
+            return UISwipeActionsConfiguration(actions: [action])
         }
-        action.backgroundColor = Theme.accent
-        return UISwipeActionsConfiguration(actions: [action])
     }
     private func conversationMenu(_ item: ConversationManifest) -> UIMenu {
         let pinned = session.pinnedConversations.contains(item.id)
@@ -308,6 +382,127 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
                 })
         }
         return UIMenu(children: actions)
+    }
+    private func workspaceConversations(_ workspace: WorkspaceRecord) -> [ConversationManifest] {
+        session.conversations
+            .filter {
+                ($0.workspaceId == workspace.id || $0.workspace == workspace.path) && $0.archivedAt == nil
+            }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+    private func linkedConversation(_ task: KanbanTask) -> ConversationManifest? {
+        task.conversationId.flatMap { id in session.conversations.first { $0.id == id } }
+    }
+    private func attachMenu(_ task: KanbanTask, workspace: WorkspaceRecord) -> UIMenuElement {
+        let conversations = workspaceConversations(workspace)
+        var children: [UIMenuElement] = conversations.prefix(12).map { conversation in
+            UIAction(
+                title: conversation.title?.isEmpty == false ? conversation.title! : "新对话",
+                state: task.conversationId == conversation.id ? .on : .off
+            ) { [weak self] _ in
+                self?.session.attachTask(task.id, conversationId: conversation.id)
+            }
+        }
+        if task.conversationId != nil {
+            children.append(
+                UIAction(title: "取消关联", attributes: .destructive) { [weak self] _ in
+                    self?.session.attachTask(task.id, conversationId: nil)
+                })
+        }
+        if conversations.isEmpty { children = [UIAction(title: "这个工作区还没有对话", attributes: .disabled) { _ in }] }
+        return UIMenu(
+            title: task.conversationId == nil ? "关联到对话" : "更换关联对话",
+            image: Theme.icon("pin", pointSize: 13), children: children)
+    }
+    private func taskMenu(_ task: KanbanTask, workspace: WorkspaceRecord) -> UIMenu {
+        var elements: [UIMenuElement] = [
+            UIMenu(
+                title: "任务状态", options: .displayInline,
+                children: KanbanTask.Status.allCases.map { status in
+                    UIAction(
+                        title: status.label, image: Theme.icon(status.symbol, pointSize: 13),
+                        state: task.status == status ? .on : .off
+                    ) { [weak self] _ in self?.session.setTaskStatus(task.id, status) }
+                }),
+            attachMenu(task, workspace: workspace),
+        ]
+        if let linked = linkedConversation(task) {
+            elements.append(
+                UIAction(title: "写入对话草稿", image: Theme.icon("square.and.pencil", pointSize: 13)) {
+                    [weak self] _ in
+                    guard let self else { return }
+                    var draft = session.drafts[linked.id] ?? ComposerDraft()
+                    draft.text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "任务：\(task.title)" : "\(draft.text)\n任务：\(task.title)"
+                    session.drafts[linked.id] = draft
+                    session.saveSoon()
+                    open(linked)
+                })
+            elements.append(
+                UIAction(title: "打开对话", image: Theme.icon("bubble.left", pointSize: 13)) {
+                    [weak self] _ in self?.open(linked)
+                })
+        }
+        elements.append(
+            UIAction(title: "重命名", image: Theme.icon("pencil", pointSize: 13)) { [weak self] _ in
+                self?.askText(title: "任务标题", value: task.title) { name in
+                    self?.session.renameTask(task.id, title: name)
+                }
+            })
+        elements.append(
+            UIAction(title: "删除任务", image: Theme.icon("trash", pointSize: 13), attributes: .destructive) {
+                [weak self] _ in self?.session.removeTask(task.id)
+            })
+        return UIMenu(children: elements)
+    }
+    /// Tap on an unlinked task presents the same operations as an action sheet.
+    private func presentTaskSheet(_ task: KanbanTask, workspace: WorkspaceRecord) {
+        let sheet = UIAlertController(title: task.title, message: "状态：\(task.status.label)", preferredStyle: .actionSheet)
+        for status in KanbanTask.Status.allCases where status != task.status {
+            sheet.addAction(
+                UIAlertAction(title: "标记为\(status.label)", style: .default) { [weak self] _ in
+                    self?.session.setTaskStatus(task.id, status)
+                })
+        }
+        sheet.addAction(
+            UIAlertAction(
+                title: task.conversationId == nil ? "关联到对话" : "更换关联对话", style: .default
+            ) { [weak self] _ in
+                guard let self else { return }
+                let conversations = workspaceConversations(workspace)
+                guard !conversations.isEmpty else {
+                    WBUI.message(on: self, title: "没有可关联的对话", text: "这个工作区还没有对话。")
+                    return
+                }
+                let picker = UIAlertController(title: "关联到对话", message: nil, preferredStyle: .actionSheet)
+                for conversation in conversations.prefix(12) {
+                    picker.addAction(
+                        UIAlertAction(
+                            title: conversation.title?.isEmpty == false ? conversation.title! : "新对话",
+                            style: .default
+                        ) { [weak self] _ in
+                            self?.session.attachTask(task.id, conversationId: conversation.id)
+                        })
+                }
+                if task.conversationId != nil {
+                    picker.addAction(
+                        UIAlertAction(title: "取消关联", style: .destructive) { [weak self] _ in
+                            self?.session.attachTask(task.id, conversationId: nil)
+                        })
+                }
+                WBUI.presentSheet(picker, on: self)
+            })
+        sheet.addAction(
+            UIAlertAction(title: "重命名", style: .default) { [weak self] _ in
+                self?.askText(title: "任务标题", value: task.title) { name in
+                    self?.session.renameTask(task.id, title: name)
+                }
+            })
+        sheet.addAction(
+            UIAlertAction(title: "删除任务", style: .destructive) { [weak self] _ in
+                self?.session.removeTask(task.id)
+            })
+        WBUI.presentSheet(sheet, on: self)
     }
     private func workspaceMenu(_ workspace: WorkspaceRecord) -> UIMenu {
         let pinned = session.pinnedWorkspaces.contains(workspace.id)

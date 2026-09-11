@@ -25,6 +25,7 @@ extension RealtimeClient: SessionSocket {}
     var lastError: String? { storageError ?? operationError }
     var storageError: String? { storageFailures[stateNamespace]?.message }
     private(set) var workspaces: [WorkspaceRecord] = []
+    private(set) var tasks: [KanbanTask] = []
     private(set) var conversations: [ConversationManifest] = []
     private(set) var providers: [ProviderDescriptor] = []
     private(set) var runtimes: [String: ConversationRuntime] = [:]
@@ -983,6 +984,51 @@ extension RealtimeClient: SessionSocket {}
             persist()
         }
     }
+    // MARK: Task plan (local, per-backend snapshot; mirrors the desktop board)
+    var taskConversationIDs: Set<String> { Set(tasks.compactMap(\.conversationId)) }
+    func tasks(for workspaceId: String) -> [KanbanTask] {
+        tasks.filter { $0.workspaceId == workspaceId }.sorted { left, right in
+            let a = KanbanTask.Status.allCases.firstIndex(of: left.status) ?? 0
+            let b = KanbanTask.Status.allCases.firstIndex(of: right.status) ?? 0
+            return a == b
+                ? (left.createdAt, left.id) < (right.createdAt, right.id) : a < b
+        }
+    }
+    @discardableResult func addTask(workspaceId: String, title: String) -> KanbanTask? {
+        let name = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+        guard !workspaceId.isEmpty, !name.isEmpty, tasks.count < 500 else { return nil }
+        let task = KanbanTask(workspaceId: workspaceId, title: name)
+        tasks.append(task)
+        tasksChanged()
+        return task
+    }
+    func renameTask(_ id: String, title: String) {
+        let name = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+        guard !name.isEmpty else { return }
+        mutateTask(id) { $0.title = name }
+    }
+    func setTaskStatus(_ id: String, _ status: KanbanTask.Status) {
+        mutateTask(id) { $0.status = status }
+    }
+    func attachTask(_ id: String, conversationId: String?) {
+        mutateTask(id) { $0.conversationId = conversationId }
+    }
+    func removeTask(_ id: String) {
+        guard tasks.contains(where: { $0.id == id }) else { return }
+        tasks.removeAll { $0.id == id }
+        tasksChanged()
+    }
+    private func mutateTask(_ id: String, _ change: (inout KanbanTask) -> Void) {
+        guard let index = tasks.firstIndex(where: { $0.id == id }) else { return }
+        change(&tasks[index])
+        tasks[index].updatedAt = Int(Date().timeIntervalSince1970 * 1_000)
+        tasksChanged()
+    }
+    private func tasksChanged() {
+        saveSoon()
+        changed(immediate: true)
+    }
+
     func persist() {
         saveTask?.cancel()
         saveTask = nil
@@ -1012,7 +1058,7 @@ extension RealtimeClient: SessionSocket {}
             workspaces: workspaces, conversations: conversations, drafts: drafts, preferences: preferences,
             queues: queues, pendingSends: pendingSends, legacyCursors: legacyCursors, readSequences: reads,
             pinnedWorkspaces: pinnedWorkspaces, pinnedConversations: pinnedConversations,
-            pausedQueues: pausedQueues, activeConversationID: activeConversationID)
+            pausedQueues: pausedQueues, activeConversationID: activeConversationID, tasks: tasks)
         let checkpoint = Checkpoint(version: saveVersion, snapshot: snapshot)
         unsavedSnapshots[stateNamespace] = checkpoint
         return checkpoint
@@ -1093,6 +1139,7 @@ extension RealtimeClient: SessionSocket {}
         pausedQueues = []
         pinnedWorkspaces = []
         pinnedConversations = []
+        tasks = []
         readSequences = [:]
         legacyCursors = [:]
         rawEvents = [:]
@@ -1141,6 +1188,8 @@ extension RealtimeClient: SessionSocket {}
                     conversations.compactMap { conversation in
                         snapshot.readSequences[conversationScope(conversation)].map { (conversation.id, $0) }
                     }, uniquingKeysWith: max)
+                tasks = (snapshot.tasks + tasks).reduce(into: [String: KanbanTask]()) { $0[$1.id] = $1 }
+                    .values.sorted { $0.createdAt < $1.createdAt || ($0.createdAt == $1.createdAt && $0.id < $1.id) }
                 pausedQueues = Set(queues.keys)  // Restarts never automatically drain a persisted queue.
                 activeConversationID = activeConversationID ?? snapshot.activeConversationID
                 stateLoaded = true

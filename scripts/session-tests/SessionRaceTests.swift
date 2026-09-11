@@ -393,6 +393,25 @@ actor FakeSocket: SessionSocket {
     try check(session.connection?.token == "fixture-token", "fixture token changed")
     #endif
 }
+@MainActor func taskPlanPersistence() async throws {
+    let h = try Harness()
+    let task = h.session.addTask(workspaceId: "w", title: " 回归任务 ")
+    try check(task?.title == "回归任务", "task title not trimmed")
+    guard let task else { throw TodexError.invalid("addTask rejected a valid task") }
+    h.session.setTaskStatus(task.id, .inProgress)
+    h.session.attachTask(task.id, conversationId: "c")
+    h.session.persist()
+    try await eventually("tasks persisted") {
+        try h.store.read(h.stateKey, as: SessionSnapshot.self)?.tasks.contains {
+            $0.id == task.id && $0.status == .inProgress && $0.conversationId == "c"
+        } == true
+    }
+    // Snapshots written before the tasks field existed must still decode.
+    let legacy = try JSONDecoder().decode(
+        SessionSnapshot.self, from: JSONEncoder().encode(["drafts": JSONValue.object([:])]))
+    try check(legacy.tasks.isEmpty, "legacy snapshot failed to decode without tasks")
+    h.session.disconnect()
+}
 @MainActor func fixtureNeverOverwritesCatalog() async throws {
     #if DEBUG
     let store = try TestEnvironment.store()
@@ -431,7 +450,8 @@ actor FakeSocket: SessionSocket {
             ("wire subscriber overflow gap", streamOverflowSignalsGap),
             ("backend switch during HTTP replay", staleReplayResponse),
             ("DEBUG port environment fixture", debugPortFixture),
-            ("fixture launch never overwrites catalog", fixtureNeverOverwritesCatalog)
+            ("fixture launch never overwrites catalog", fixtureNeverOverwritesCatalog),
+            ("task plan persistence + legacy snapshot decode", taskPlanPersistence)
         ]
         var failures = 0
         for (name, run) in tests {
