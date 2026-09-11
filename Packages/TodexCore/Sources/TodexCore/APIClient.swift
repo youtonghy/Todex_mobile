@@ -196,6 +196,10 @@ public final class APIClient: Sendable {
         try await http.request(.post, path: "/v2/git/operation", body: request)
     }
 
+    public func gitPullRequest(workspacePath: String) async throws -> JSONValue {
+        try await queryRequest(path: "/v2/git/pull-request", query: ["workspacePath": workspacePath])
+    }
+
     public func browserFetch(url: String) async throws -> JSONValue {
         try await http.request(.post, path: "/v2/browser/fetch", body: ["url": .string(url)])
     }

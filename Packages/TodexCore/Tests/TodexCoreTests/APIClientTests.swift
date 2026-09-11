@@ -454,6 +454,10 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
             ])
         },
         .init(
+            name: "gitPullRequest", method: "GET", path: "/v2/git/pull-request",
+            query: ["workspacePath": workspacePath]
+        ) { try await $0.gitPullRequest(workspacePath: workspacePath) },
+        .init(
             name: "browserFetch", method: "POST", path: "/v2/browser/fetch",
             body: ["url": "https://example.test/a?x=1&y=2"]
         ) { try await $0.browserFetch(url: "https://example.test/a?x=1&y=2") },
