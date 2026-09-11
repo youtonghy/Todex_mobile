@@ -498,8 +498,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
                 return outgoing
             }
             config.titleAlignment = .leading
-            config.contentInsets = .init(top: 8, leading: 12, bottom: 8, trailing: 12)
+            config.contentInsets = .init(top: 5, leading: 14, bottom: 5, trailing: 14)
             let button = UIButton(configuration: config)
+            button.contentHorizontalAlignment = .leading
             button.accessibilityIdentifier = "chat.suggestion.\(index)"
             button.isEnabled = interactive
             if interactive {
