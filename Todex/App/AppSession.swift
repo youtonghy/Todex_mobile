@@ -13,6 +13,10 @@ extension RealtimeClient: SessionSocket {}
 @MainActor final class AppSession {
     private(set) var connections: [BackendConnection] = []
     private(set) var selectedID: String?
+    // The environment-injected test fixture is merged into the catalog but must
+    // never reach connections.json, or a Settings save under a fixture launch
+    // would overwrite the real backend list.
+    private var fixtureConnectionID: String?
     private var connectionStatus = "尚未连接"
     var status: String { storageError.map { "本地保存失败：\($0)" } ?? connectionStatus }
     private(set) var isConnected = false
@@ -142,8 +146,10 @@ extension RealtimeClient: SessionSocket {}
                 let fixture = BackendConnection(
                     id: "simulator-fixture", name: "测试后端", serverURL: url,
                     token: environment["TODEX_TEST_TOKEN"] ?? "")
-                connections = [fixture]
+                connections.removeAll { $0.id == fixture.id }
+                connections.append(fixture)
                 selectedID = fixture.id
+                fixtureConnectionID = fixture.id
             }
         #endif
         stateNamespace = LocalStore.namespace(connections.first { $0.id == selectedID })
@@ -194,8 +200,9 @@ extension RealtimeClient: SessionSocket {}
         let removed = connections.filter { old in !values.contains { $0.id == old.id } }
         do {
             // The catalog is saved before credentials so a Keychain failure cannot
-            // discard the whole connection list.
-            try store.save(values, key: "connections")
+            // discard the whole connection list. The environment fixture is a
+            // launch-time convenience and never enters the on-disk catalog.
+            try store.save(values.filter { $0.id != fixtureConnectionID }, key: "connections")
             for value in values { try saveCredential(value.token, value.id) }
             for old in removed { try saveCredential("", old.id) }
         } catch {
@@ -236,7 +243,7 @@ extension RealtimeClient: SessionSocket {}
             // A connection introduced through connect() must reach the catalog even
             // when no Settings save preceded it, or it would vanish on relaunch.
             do {
-                try store.save(connections, key: "connections")
+                try store.save(connections.filter { $0.id != fixtureConnectionID }, key: "connections")
                 try saveCredential(next.token, next.id)
             } catch {
                 reportStorageError(error, namespace: stateNamespace, version: saveVersion)

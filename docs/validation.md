@@ -31,7 +31,7 @@ Apple 发布的最新 [Xcode 27 RC（27A266a）](https://developer.apple.com/new
 | --- | --- | --- |
 | TodexCore | Swift Testing 报告 80 tests / 7 suites 通过；其中 2 个可选 live test 在普通运行中跳过 | API 线协议、Rust 加密向量、nonce/伪造/重放、配对取消竞态、HTTP 错误与超时、事件序号缺口和缓存边界 |
 | Foundation WebSocket → 真实 Rust | 2 个测试 / 3 个参数场景通过 | 缺失/错误认证、ping、回放、Codex 和 Claude 的发送→审批→完成及重连 |
-| AppSession / LocalStore | 13/13 独立场景通过 | connect/replay 单次并发执行、HTTP 与实时事件交错、分页、迟到响应隔离、切换后端、草稿保护、原子待发送记录、磁盘失败、后台暂停、流溢出 |
+| AppSession / LocalStore | 14/14 独立场景通过 | connect/replay 单次并发执行、HTTP 与实时事件交错、分页、迟到响应隔离、切换后端、草稿保护、原子待发送记录、磁盘失败、后台暂停、流溢出、fixture 环境不覆盖真实后端目录 |
 | 离线 Markdown / TeX | 全部断言通过 | 6 种公式分隔形式、5 个代码/转义/不完整公式案例、表格、HTML/危险链接、公式长度上限 |
 
 核心测试源码在 [TodexCoreTests](../Packages/TodexCore/Tests/TodexCoreTests)，渲染检查在 [test_renderer.cjs](../scripts/test_renderer.cjs)。[AppSession runner](../scripts/run_session_tests.sh) 使用真实的 AppSession/LocalStore 源码，替换 HTTP、Socket 和 Keychain，独立于 XCTest 计数；从全新临时构建目录重跑的 13 个场景同样全部通过，源码已保存在仓库。
