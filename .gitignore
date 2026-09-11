@@ -1,0 +1,12 @@
+.DS_Store
+.build/
+.build-artifacts/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcresult
+.swiftpm/
+.test-server/
+*.log
+__pycache__/
+*.pyc

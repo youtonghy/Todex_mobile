@@ -1,0 +1,67 @@
+name: Todex
+options:
+  bundleIdPrefix: com.todex
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+packages:
+  TodexCore:
+    path: Packages/TodexCore
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm.git
+    exactVersion: 1.20.0
+targets:
+  Todex:
+    type: application
+    platform: iOS
+    sources:
+      - path: Todex
+        excludes: [Resources/Chat]
+      - path: Todex/Resources/Chat
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.todex.mobile
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Todex/Resources/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
+    dependencies:
+      - package: TodexCore
+      - package: SwiftTerm
+  TodexUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [TodexUITests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        PRODUCT_BUNDLE_IDENTIFIER: com.todex.mobile.uitests
+    dependencies:
+      - target: Todex
+schemes:
+  Todex:
+    build:
+      targets:
+        Todex: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TodexUITests
+      gatherCoverageData: true
