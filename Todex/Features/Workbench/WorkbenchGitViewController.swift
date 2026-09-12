@@ -23,6 +23,12 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     private var writing = false
     private var outcomeUnknown = false
     private var refreshedAfterUnknown = false
+    // Inline per-file diffs under expanded change rows.
+    private var expandedPaths = Set<String>()
+    private var fileDiffs: [String: JSONValue] = [:]
+    private var diffErrors: [String: String] = [:]
+    private var loadingDiffs = Set<String>()
+    private var fileDiffTasks: [String: Task<Void, Never>] = [:]
     // Used only if a host returns an acknowledgement containing an ID instead of the correlated result.
     private var controlResults: [(String, JSONValue)] = []
     private var readRevision = UUID()
@@ -49,6 +55,7 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
         writeTask?.cancel()
         diffTask?.cancel()
         prTask?.cancel()
+        fileDiffTasks.values.forEach { $0.cancel() }
     }
 
     override func viewDidLoad() {
@@ -287,8 +294,27 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         section == 0 ? "状态" : "变更文件\(repository?["filesTruncated"].boolValue == true ? "（后端已截断）" : "")"
     }
+    // A file row followed by its inline diff row when expanded.
+    private enum FileRow {
+        case file(JSONValue)
+        case diff(String)
+    }
+    private var fileRows: [FileRow] {
+        changedFiles.flatMap { file -> [FileRow] in
+            let path = file["path"].stringValue
+            var rows: [FileRow] = [.file(file)]
+            if expandedPaths.contains(path) { rows.append(.diff(path)) }
+            return rows
+        }
+    }
+    private static func diffStats(_ diff: String) -> (added: Int, removed: Int) {
+        diff.split(separator: "\n").reduce(into: (0, 0)) { counts, line in
+            if line.hasPrefix("+") && !line.hasPrefix("+++") { counts.0 += 1 }
+            if line.hasPrefix("-") && !line.hasPrefix("---") { counts.1 += 1 }
+        }
+    }
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        section == 0 ? (summary == nil ? 0 : 1) : changedFiles.count
+        section == 0 ? (summary == nil ? 0 : 1) : fileRows.count
     }
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
@@ -302,53 +328,68 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
                 content.image = UIImage(systemName: "checklist")
             }
         } else {
-            let file = changedFiles[indexPath.row]
-            content.text = file["path"].stringValue
-            content.secondaryText = "Git 状态：\(file["status"].stringValue) · 查看差异"
-            content.image = UIImage(systemName: "doc.text")
-            cell.accessoryType = .disclosureIndicator
+            switch fileRows[indexPath.row] {
+            case .file(let file):
+                let path = file["path"].stringValue
+                content.text = path
+                var detail = "Git 状态：\(file["status"].stringValue)"
+                if let diff = fileDiffs[path] {
+                    let (added, removed) = Self.diffStats(diff["diff"].stringValue)
+                    detail += " · +\(added) −\(removed)"
+                }
+                detail += expandedPaths.contains(path) ? " · 收起差异" : " · 查看差异"
+                content.secondaryText = detail
+                content.image = UIImage(systemName: "doc.text")
+                cell.accessoryType = expandedPaths.contains(path) ? .none : .disclosureIndicator
+                cell.contentConfiguration = content
+            case .diff(let path):
+                cell.selectionStyle = .none
+                cell.textLabel?.numberOfLines = 0
+                if let error = diffErrors[path] {
+                    cell.textLabel?.text = "差异读取失败：\(error)"
+                    cell.textLabel?.textColor = .systemRed
+                    cell.textLabel?.font = .preferredFont(forTextStyle: .caption1)
+                } else if let response = fileDiffs[path] {
+                    var diff = response["diff"].stringValue
+                    if diff.isEmpty { diff = "没有可显示的差异（文件未更改或为二进制）。" }
+                    if response["truncated"].boolValue { diff += "\n…（差异过大已截断）" }
+                    cell.textLabel?.attributedText = Self.attributedDiff(diff)
+                } else {
+                    cell.textLabel?.text = "正在读取差异…"
+                    cell.textLabel?.textColor = .secondaryLabel
+                    cell.textLabel?.font = .preferredFont(forTextStyle: .subheadline)
+                }
+            }
         }
-        cell.contentConfiguration = content
         return cell
     }
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard indexPath.section == 1 else { return }
-        showFileDiff(changedFiles[indexPath.row])
-    }
-    /// Per-file diff from the backend, rendered with added/removed line colors.
-    private func showFileDiff(_ file: JSONValue) {
+        guard indexPath.section == 1, case .file(let file) = fileRows[indexPath.row] else { return }
         let path = file["path"].stringValue
-        operationInfo.text = "正在读取 \(path) 的差异…"
-        Task { [weak self] in
+        if expandedPaths.contains(path) {
+            expandedPaths.remove(path)
+        } else {
+            expandedPaths.insert(path)
+            loadFileDiff(path)
+        }
+        tableView.reloadData()
+    }
+    private func loadFileDiff(_ path: String) {
+        guard fileDiffs[path] == nil, diffErrors[path] == nil, !loadingDiffs.contains(path) else { return }
+        loadingDiffs.insert(path)
+        fileDiffTasks[path] = Task { [weak self] in
             guard let self else { return }
+            defer {
+                self.loadingDiffs.remove(path)
+                self.table.reloadData()
+            }
             do {
-                let result = try await self.http.request(
+                self.fileDiffs[path] = try await self.http.request(
                     .get, path: "/v2/git/diff",
                     query: ["workspacePath": self.workspace.path, "path": path])
-                guard !Task.isCancelled else { return }
-                let diff = result["diff"].stringValue
-                let lines = diff.split(separator: "\n", omittingEmptySubsequences: false)
-                let added = lines.filter { $0.hasPrefix("+") && !$0.hasPrefix("+++") }.count
-                let removed = lines.filter { $0.hasPrefix("-") && !$0.hasPrefix("---") }.count
-                self.operationInfo.text = ""
-                WBUI.textSheet(
-                    on: self.presenter,
-                    title: "\((path as NSString).lastPathComponent)  +\(added) −\(removed)",
-                    text: diff,
-                    attributed: Self.attributedDiff(diff.isEmpty ? "没有可显示的差异（文件可能未更改或为二进制）。" : diff),
-                    actions: [
-                        ("插入文件引用", { [weak self] _ in
-                            guard let self else { return }
-                            self.insertReference(
-                                "@\((self.workspace.path as NSString).appendingPathComponent(path))")
-                            self.operationInfo.text = "已插入文件路径到对话草稿。"
-                        })
-                    ])
             } catch {
-                guard !Task.isCancelled else { return }
-                self.operationInfo.text = "差异读取失败：\(error.localizedDescription)"
-                WBUI.error(error, on: self.presenter)
+                self.diffErrors[path] = error.localizedDescription
             }
         }
     }
