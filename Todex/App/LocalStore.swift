@@ -250,6 +250,7 @@ nonisolated struct MessageAttachment: Identifiable, Codable, Sendable, Equatable
     var reference: Reference?
     var isImage: Bool { mimeType.hasPrefix("image/") }
     var isReference: Bool { reference != nil }
+    var referenceToken: String { "[引用:\(name)]" }
     struct Reference: Codable, Sendable, Equatable {
         var path: String?
         var lineStart: Int?

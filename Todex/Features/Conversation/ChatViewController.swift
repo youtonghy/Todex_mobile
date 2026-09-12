@@ -177,7 +177,18 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
             status.text = "附件最多 6 个，请先移除部分附件后再添加引用"
             return
         }
-        value.attachments.append(attachment)
+        var name = attachment.name
+        var index = 2
+        let taken = Set(value.attachments.filter(\.isReference).map(\.name))
+        while taken.contains(name) || value.text.contains("[引用:\(name)]") {
+            name = "\(attachment.name) \(index)"
+            index += 1
+        }
+        var reference = attachment
+        reference.name = name
+        let token = reference.referenceToken
+        value.text += (value.text.isEmpty ? "" : "\n") + token
+        value.attachments.append(reference)
         setDraft(value)
     }
     func insertSkill(_ id: String, name: String) {
@@ -201,7 +212,26 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         updateSuggestions()
     }
     func textViewDidChangeSelection(_ textView: UITextView) {
+        resetTypingAttributes()
         updateSuggestions()
+    }
+    private func resetTypingAttributes() {
+        composer.typingAttributes = [
+            .font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label,
+        ]
+    }
+    private func styledComposerText(_ text: String) -> NSAttributedString {
+        let styled = NSMutableAttributedString(
+            string: text,
+            attributes: [.font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label])
+        if let regex = try? NSRegularExpression(pattern: #"\[引用:[^\]\n]+\]"#) {
+            for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                styled.addAttributes(
+                    [.foregroundColor: Theme.accent, .underlineStyle: NSUnderlineStyle.single.rawValue],
+                    range: match.range)
+            }
+        }
+        return styled
     }
     private var canSend: Bool {
         session.isConnected && session.runtimes[conversation.id]?.readyForActions == true && !draft.isEmpty
@@ -225,7 +255,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
             runtime?.messages ?? [], provider: session.provider(for: conversation)?.displayName ?? conversation.provider
         )
         if renderedDraft != draft {
-            composer.text = draft.text
+            composer.attributedText = styledComposerText(draft.text)
             renderedDraft = draft
         }
         composer.accessibilityHint = draft.isEmpty ? "描述你的任务" : nil
@@ -234,10 +264,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         stopButton.isHidden = !running
         stopButton.isEnabled = session.isConnected && runtime?.readyForActions == true
         chips.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for attachment in draft.attachments {
-            let icon = attachment.isImage ? "photo" : attachment.isReference ? "quote.opening" : "doc"
+        for attachment in draft.attachments where !attachment.isReference {
             chips.addArrangedSubview(
-                Theme.button("\(attachment.name) · 移除", icon: icon) { [weak self] in
+                Theme.button("\(attachment.name) · 移除", icon: attachment.isImage ? "photo" : "doc") { [weak self] in
                     guard let self else { return }
                     var value = draft
                     value.attachments.removeAll { $0.id == attachment.id }
