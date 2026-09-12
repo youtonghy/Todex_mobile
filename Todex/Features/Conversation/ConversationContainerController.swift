@@ -8,7 +8,10 @@ final class ConversationContainerController: UIViewController {
     private var workbench: WorkbenchViewController?
     private let panes = UIStackView()
     private let picker = UISegmentedControl(items: ["对话", "操作台"])
-    private var wideConstraint: NSLayoutConstraint?
+    private var chatWidth: NSLayoutConstraint?
+    private var splitRatio: CGFloat = 0.51
+    private var splitDragStart: CGFloat = 0
+    private let divider = UIView()
     private var observer: UUID?
     init(session: AppSession, conversation: ConversationManifest) {
         self.session = session
@@ -71,8 +74,30 @@ final class ConversationContainerController: UIViewController {
                 self?.picker.selectedSegmentIndex = 1
                 self?.layoutPanes()
             }
-            wideConstraint = chat.view.widthAnchor.constraint(
-                equalTo: panes.widthAnchor, multiplier: 0.51, constant: -0.5)
+            chatWidth = chat.view.widthAnchor.constraint(equalToConstant: 0)
+            // Drag handle overlaid on the 1pt separator between the two panes.
+            divider.isHidden = true
+            divider.backgroundColor = .clear
+            divider.accessibilityIdentifier = "conversation.split"
+            let grip = UIView()
+            grip.backgroundColor = .tertiaryLabel
+            grip.layer.cornerRadius = 2
+            grip.translatesAutoresizingMaskIntoConstraints = false
+            divider.addSubview(grip)
+            view.addSubview(divider)
+            divider.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                divider.centerXAnchor.constraint(equalTo: chat.view.trailingAnchor, constant: 0.5),
+                divider.topAnchor.constraint(equalTo: panes.topAnchor),
+                divider.bottomAnchor.constraint(equalTo: panes.bottomAnchor),
+                divider.widthAnchor.constraint(equalToConstant: 18),
+                grip.centerXAnchor.constraint(equalTo: divider.centerXAnchor),
+                grip.centerYAnchor.constraint(equalTo: divider.centerYAnchor),
+                grip.widthAnchor.constraint(equalToConstant: 4),
+                grip.heightAnchor.constraint(equalToConstant: 32),
+            ])
+            divider.addGestureRecognizer(
+                UIPanGestureRecognizer(target: self, action: #selector(dragSplit(_:))))
         }
         let more = UIBarButtonItem(
             image: Theme.icon("ellipsis.circle"),
@@ -109,12 +134,31 @@ final class ConversationContainerController: UIViewController {
     }
     private func layoutPanes() {
         let wide = view.bounds.width >= 900 && traitCollection.horizontalSizeClass == .regular && workbench != nil
-        wideConstraint?.isActive = wide
+        if let chatWidth {
+            chatWidth.isActive = wide
+            if wide { chatWidth.constant = panes.bounds.width * splitRatio - 0.5 }
+        }
+        divider.isHidden = !wide
         if !wide, picker.selectedSegmentIndex == 1 { chat.view.endEditing(true) }
         if !wide, picker.selectedSegmentIndex == 0 { workbench?.view.endEditing(true) }
         chat.view.isHidden = !wide && picker.selectedSegmentIndex == 1 && workbench != nil
         workbench?.view.isHidden = !wide && picker.selectedSegmentIndex == 0
         navigationItem.titleView = wide ? nil : picker
+    }
+    @objc private func dragSplit(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            splitDragStart = chatWidth?.constant ?? chat.view.bounds.width
+        case .changed:
+            let total = panes.bounds.width
+            guard total > 0 else { return }
+            // Keep both panes usable: at least 320pt for chat, 280 for workbench.
+            let width = min(max(splitDragStart + gesture.translation(in: view).x, 320), total - 281)
+            chatWidth?.constant = width
+            splitRatio = width / total
+        default:
+            break
+        }
     }
     private func showCatalog() {
         guard let connection = session.connection else { return }
