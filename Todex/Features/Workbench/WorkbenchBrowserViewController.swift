@@ -41,6 +41,10 @@ final class WorkbenchBrowserViewController: UIViewController, WKNavigationDelega
         address.returnKeyType = .go
         address.delegate = self
         address.text = descriptor.url ?? connection.serverURL
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
+            (self: WorkbenchBrowserViewController, _: UITraitCollection) in
+            self.web.superview?.layer.borderColor = UIColor.separator.cgColor
+        }
         address.accessibilityIdentifier = "workbench.browser.address"
         web.accessibilityIdentifier = "workbench.browser.page"
         info.accessibilityIdentifier = "workbench.browser.status"
@@ -65,12 +69,6 @@ final class WorkbenchBrowserViewController: UIViewController, WKNavigationDelega
         WBUI.pin(web, to: surface)
         WBUI.installStack(in: view, views: [addressRow, info, surface], keyboard: true)
         navigate()
-    }
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        if traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) {
-            web.superview?.layer.borderColor = UIColor.separator.cgColor
-        }
     }
     private func setInfo(_ text: String?) {
         info.text = text

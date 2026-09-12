@@ -69,6 +69,10 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
         directory.returnKeyType = .go
         directory.delegate = self
         directory.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
+            (self: WorkbenchTerminalViewController, _: UITraitCollection) in
+            self.terminal.superview?.layer.borderColor = UIColor.separator.cgColor
+        }
         statusLabel.font = .preferredFont(forTextStyle: .caption1)
         statusLabel.textColor = .secondaryLabel
         statusLabel.numberOfLines = 1
@@ -120,12 +124,6 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
         // A restored ID must be queried before starting; it can already name a live process.
         markGap("仅恢复 PTY 标识；离开操作台期间的输出和历史滚屏无法重放。")
         refreshStatus()
-    }
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        if traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) {
-            terminal.superview?.layer.borderColor = UIColor.separator.cgColor
-        }
     }
     private func primaryAction() {
         if [.running, .unknown, .starting].contains(state) {
