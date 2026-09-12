@@ -131,6 +131,13 @@ nonisolated struct LocalStore: Sendable {
     }
 }
 
+/// The provider/profile pair chosen when a conversation was created. Composer
+/// memory replays it as the default choice for the next conversation.
+nonisolated struct AgentSelection: Codable, Sendable, Equatable {
+    var provider = ""
+    var profile: String?
+}
+
 /// A draft, queue removal and outgoing request ledger move together in one
 /// atomic file. A crash cannot leave a sent queued draft eligible for auto-send.
 nonisolated struct SessionSnapshot: Codable, Sendable {
@@ -138,6 +145,8 @@ nonisolated struct SessionSnapshot: Codable, Sendable {
     var conversations: [ConversationManifest] = []
     var drafts: [String: ComposerDraft] = [:]
     var preferences: [String: ConversationPreferences] = [:]
+    var lastPreferencesByProvider: [String: ConversationPreferences] = [:]
+    var lastAgent: AgentSelection?
     var queues: [String: [QueuedDraft]] = [:]
     var pendingSends: [String: PendingSend] = [:]
     var legacyCursors: [String: Int] = [:]
@@ -158,6 +167,9 @@ extension SessionSnapshot {
         conversations = try c.decodeIfPresent([ConversationManifest].self, forKey: .conversations) ?? []
         drafts = try c.decodeIfPresent([String: ComposerDraft].self, forKey: .drafts) ?? [:]
         preferences = try c.decodeIfPresent([String: ConversationPreferences].self, forKey: .preferences) ?? [:]
+        lastPreferencesByProvider =
+            try c.decodeIfPresent([String: ConversationPreferences].self, forKey: .lastPreferencesByProvider) ?? [:]
+        lastAgent = try c.decodeIfPresent(AgentSelection.self, forKey: .lastAgent)
         queues = try c.decodeIfPresent([String: [QueuedDraft]].self, forKey: .queues) ?? [:]
         pendingSends = try c.decodeIfPresent([String: PendingSend].self, forKey: .pendingSends) ?? [:]
         legacyCursors = try c.decodeIfPresent([String: Int].self, forKey: .legacyCursors) ?? [:]

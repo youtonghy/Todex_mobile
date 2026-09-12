@@ -635,22 +635,29 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             return
         }
         let alert = UIAlertController(title: "选择 Agent", message: Self.displayName(workspace), preferredStyle: .actionSheet)
+        var options: [(provider: ProviderDescriptor, profile: String?, title: String)] = []
         for provider in session.providers {
             if provider.id == "acp" && !provider.profiles.isEmpty {
                 for profile in provider.profiles {
-                    let action = UIAlertAction(title: "ACP · \(profile)", style: .default) { [weak self] _ in
-                        self?.create(workspace, provider: provider.id, profile: profile)
-                    }
-                    action.isEnabled = provider.available
-                    alert.addAction(action)
+                    options.append((provider, profile, "ACP · \(profile)"))
                 }
             } else {
-                let action = UIAlertAction(
-                    title: provider.displayName + (provider.available ? "" : " · 不可用"), style: .default
-                ) { [weak self] _ in self?.create(workspace, provider: provider.id, profile: nil) }
-                action.isEnabled = provider.available
-                alert.addAction(action)
+                options.append((provider, nil, provider.displayName + (provider.available ? "" : " · 不可用")))
             }
+        }
+        // The agent used for the previous conversation leads the list.
+        if let last = session.lastAgent,
+            let index = options.firstIndex(where: { $0.provider.id == last.provider && $0.profile == last.profile })
+        {
+            let match = options.remove(at: index)
+            options.insert((match.provider, match.profile, "\(match.title) · 上次使用"), at: 0)
+        }
+        for option in options {
+            let action = UIAlertAction(title: option.title, style: .default) { [weak self] _ in
+                self?.create(workspace, provider: option.provider.id, profile: option.profile)
+            }
+            action.isEnabled = option.provider.available
+            alert.addAction(action)
         }
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
         alert.popoverPresentationController?.sourceView = view
@@ -663,7 +670,11 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             do {
                 let conversation = try await api.createConversation(
                     workspace: workspace, provider: provider, profile: profile, title: nil)
+                session.rememberAgent(provider: provider, profile: profile)
                 try await session.refresh()
+                if let remembered = session.rememberedPreferences(for: provider) {
+                    session.updatePreferences(remembered, for: conversation)
+                }
                 open(conversation)
             } catch { showError(error) }
         }

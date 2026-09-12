@@ -25,6 +25,7 @@ mkdir -p "$session_work/Sources/SessionRaceTests" "$TODEX_SESSION_TEST_DATA"
 # Copy the current application sources into a disposable executable target;
 # neither the app project nor TodexCore's package manifest/build tree is edited.
 cp "$session_repo/Todex/App/AppSession.swift" \
+   "$session_repo/Todex/App/CompletionNotifications.swift" \
    "$session_repo/Todex/App/LocalStore.swift" \
    "$session_repo/scripts/session-tests/SessionRaceTests.swift" \
    "$session_work/Sources/SessionRaceTests/"

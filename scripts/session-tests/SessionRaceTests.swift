@@ -58,12 +58,14 @@ actor Backend {
     var journal: [ConversationEvent]
     var workspace = WorkspaceRecord(id: "w", name: "W", path: "/workspace", tenantId: "tenant-a")
     var manifest = ConversationManifest(id: "c", provider: "codex", workspace: "/workspace", workspaceId: "w")
+    var providers: [ProviderDescriptor] = []
     var eventCalls = 0
     var manifestCalls = 0
     var pageSize = 200
     var firstPageGate: Gate?
     init(_ events: [ConversationEvent] = []) { journal = events }
     func configure(gate: Gate? = nil, pageSize: Int = 200) { firstPageGate = gate; self.pageSize = pageSize }
+    func setProviders(_ values: [ProviderDescriptor]) { providers = values }
     func changeTenant() { workspace.tenantId = "tenant-b" }
     func append(_ events: [ConversationEvent]) { journal.append(contentsOf: events) }
     func handle(_ url: URL) async throws -> JSONValue {
@@ -72,7 +74,7 @@ actor Backend {
         case "/v2/conversations":
             var current = manifest; current.lastSequence = journal.last?.sequence ?? 0
             return ["conversations": try JSONValue(encoding: [current])]
-        case "/v2/providers": return ["providers": .array([])]
+        case "/v2/providers": return ["providers": try JSONValue(encoding: providers)]
         case "/v2/conversations/c":
             manifestCalls += 1
             var current = manifest; current.lastSequence = journal.last?.sequence ?? 0
@@ -412,6 +414,73 @@ actor FakeSocket: SessionSocket {
     try check(legacy.tasks.isEmpty, "legacy snapshot failed to decode without tasks")
     h.session.disconnect()
 }
+@MainActor func composerMemory() async throws {
+    let h = try Harness()
+    await h.backend.setProviders([
+        ProviderDescriptor(
+            id: "codex", displayName: "Codex", available: true,
+            capabilities: [
+                "permissionConfig": [
+                    "modes": ["ask", "auto", "full-access"], "defaultMode": "ask", "supportsPlan": true,
+                ],
+            ])
+    ])
+    try await h.ready()
+    var pref = h.session.preferences(for: h.manifest)
+    try check(pref.permissionMode == "ask" && pref.workMode == "implement", "unexpected preference defaults")
+    pref.model = "swe-2-high"
+    pref.reasoningEffort = "high"
+    pref.permissionMode = "auto"
+    pref.workMode = "plan"
+    h.session.updatePreferences(pref, for: h.manifest)
+    h.session.rememberAgent(provider: "codex", profile: nil)
+    h.session.persist()
+    try await eventually("composer memory persisted") {
+        let disk = try h.store.read(h.stateKey, as: SessionSnapshot.self)
+        return disk?.lastPreferencesByProvider["codex"]?.permissionMode == "auto"
+            && disk?.lastAgent?.provider == "codex"
+    }
+    let remembered = h.session.rememberedPreferences(for: "codex")
+    try check(
+        remembered?.model == "swe-2-high" && remembered?.permissionMode == "auto"
+            && remembered?.workMode == "plan",
+        "provider memory lost supported values")
+    try check(h.session.rememberedPreferences(for: "pi") == nil, "unknown provider invented memory")
+    // A narrower capability descriptor restores its own defaults.
+    await h.backend.setProviders([
+        ProviderDescriptor(
+            id: "codex", displayName: "Codex", available: true,
+            capabilities: ["permissionConfig": ["modes": ["ask"], "defaultMode": "ask"]])
+    ])
+    try await h.session.refresh()
+    let narrowed = h.session.rememberedPreferences(for: "codex")
+    try check(
+        narrowed?.permissionMode == "ask" && narrowed?.workMode == "implement",
+        "unsupported memory was not normalized")
+    // A restarted session restores the composer memory from the snapshot.
+    var seeded = SessionSnapshot()
+    var stored = ConversationPreferences()
+    stored.model = "swe-2-high"; stored.permissionMode = "auto"; stored.workMode = "plan"
+    seeded.lastPreferencesByProvider = ["codex": stored]
+    seeded.lastAgent = AgentSelection(provider: "acp", profile: "claude")
+    let revived = try Harness(snapshot: seeded)
+    try await eventually("composer memory restored") {
+        revived.session.lastAgent == AgentSelection(provider: "acp", profile: "claude")
+            && revived.session.lastPreferencesByProvider["codex"]?.workMode == "plan"
+    }
+    // Without a live descriptor the plan fallback applies.
+    try check(
+        revived.session.rememberedPreferences(for: "codex")?.workMode == "implement",
+        "undelcared plan capability kept")
+    // Snapshots written before the memory fields existed must still decode.
+    let legacy = try JSONDecoder().decode(
+        SessionSnapshot.self, from: JSONEncoder().encode(["drafts": JSONValue.object([:])]))
+    try check(
+        legacy.lastPreferencesByProvider.isEmpty && legacy.lastAgent == nil,
+        "legacy snapshot failed to decode without composer memory")
+    h.session.disconnect()
+    revived.session.disconnect()
+}
 @MainActor func fixtureNeverOverwritesCatalog() async throws {
     #if DEBUG
     let store = try TestEnvironment.store()
@@ -451,7 +520,8 @@ actor FakeSocket: SessionSocket {
             ("backend switch during HTTP replay", staleReplayResponse),
             ("DEBUG port environment fixture", debugPortFixture),
             ("fixture launch never overwrites catalog", fixtureNeverOverwritesCatalog),
-            ("task plan persistence + legacy snapshot decode", taskPlanPersistence)
+            ("task plan persistence + legacy snapshot decode", taskPlanPersistence),
+            ("composer memory persistence + capability fallback", composerMemory)
         ]
         var failures = 0
         for (name, run) in tests {

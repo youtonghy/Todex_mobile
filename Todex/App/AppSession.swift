@@ -35,6 +35,10 @@ extension RealtimeClient: SessionSocket {}
     var activeConversationID: String?
     var drafts: [String: ComposerDraft] = [:]
     var preferences: [String: ConversationPreferences] = [:]
+    // Composer memory: the last chip configuration used with each provider, and
+    // the agent picked for the most recently created conversation.
+    private(set) var lastPreferencesByProvider: [String: ConversationPreferences] = [:]
+    private(set) var lastAgent: AgentSelection?
     var queues: [String: [QueuedDraft]] = [:]
     var pausedQueues: Set<String> = []
     var pinnedWorkspaces: [String] = []
@@ -480,8 +484,27 @@ extension RealtimeClient: SessionSocket {}
     }
     func updatePreferences(_ value: ConversationPreferences, for conversation: ConversationManifest) {
         preferences[conversation.id] = value
+        lastPreferencesByProvider[conversation.provider] = value
         saveSoon()
         changed()
+    }
+    /// Composer memory for a provider's next conversation. Values the current
+    /// capability descriptor no longer supports fall back to its defaults.
+    func rememberedPreferences(for provider: String) -> ConversationPreferences? {
+        guard var value = lastPreferencesByProvider[provider] else { return nil }
+        let config = providers.first { $0.id == provider }?.capabilities["permissionConfig"] ?? .null
+        let modes = config["modes"].arrayValue.compactMap(\.optionalString)
+        if !modes.isEmpty, !modes.contains(value.permissionMode) {
+            value.permissionMode = config["defaultMode"].optionalString ?? "ask"
+        }
+        if value.workMode == "plan", config["supportsPlan"].boolValue != true {
+            value.workMode = "implement"
+        }
+        return value
+    }
+    func rememberAgent(provider: String, profile: String?) {
+        lastAgent = AgentSelection(provider: provider, profile: profile)
+        saveSoon()
     }
     func loadModels(for conversation: ConversationManifest) async throws {
         guard let api, isConnected else { throw TodexError.disconnected }
@@ -1084,6 +1107,7 @@ extension RealtimeClient: SessionSocket {}
             }, uniquingKeysWith: max)
         let snapshot = SessionSnapshot(
             workspaces: workspaces, conversations: conversations, drafts: drafts, preferences: preferences,
+            lastPreferencesByProvider: lastPreferencesByProvider, lastAgent: lastAgent,
             queues: queues, pendingSends: pendingSends, legacyCursors: legacyCursors, readSequences: reads,
             pinnedWorkspaces: pinnedWorkspaces, pinnedConversations: pinnedConversations,
             pausedQueues: pausedQueues, activeConversationID: activeConversationID, tasks: tasks)
@@ -1162,6 +1186,8 @@ extension RealtimeClient: SessionSocket {}
         commands = [:]
         drafts = [:]
         preferences = [:]
+        lastPreferencesByProvider = [:]
+        lastAgent = nil
         queues = [:]
         pendingSends = [:]
         pausedQueues = []
@@ -1201,6 +1227,9 @@ extension RealtimeClient: SessionSocket {}
                 // Preserve edits made while the asynchronous load was in flight.
                 drafts = snapshot.drafts.merging(drafts) { _, edited in edited }
                 preferences = snapshot.preferences.merging(preferences) { _, edited in edited }
+                lastPreferencesByProvider =
+                    snapshot.lastPreferencesByProvider.merging(lastPreferencesByProvider) { _, edited in edited }
+                lastAgent = lastAgent ?? snapshot.lastAgent
                 queues = snapshot.queues.merging(queues) { _, edited in edited }
                 pendingSends = snapshot.pendingSends
                 legacyCursors = snapshot.legacyCursors
