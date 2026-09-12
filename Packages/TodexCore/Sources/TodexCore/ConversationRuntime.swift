@@ -226,6 +226,10 @@ public struct ConversationRuntime: Sendable {
             category = "approval"
         } else if type == "turn.failed" {
             category = "error"
+        } else if type == "provider.commands.updated"
+            || (type == "provider.event" && method.hasPrefix("_"))
+        {
+            return
         } else if type == "provider.event", method.lowercased().contains("mcp"),
             method.lowercased().contains("initialized") || method.lowercased().contains("status")
         {
