@@ -66,6 +66,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         timeline.didMove(toParent: self)
         timeline.insertText = { [weak self] in self?.insert($0) }
         timeline.openFile = { [weak self] in self?.openFile?($0) }
+        timeline.addReference = { [weak self] in self?.addReference($0) }
         let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
         glass.layer.cornerRadius = 26
         glass.clipsToBounds = true
@@ -170,6 +171,15 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         value.text += (value.text.isEmpty ? "" : "\n") + text
         setDraft(value)
     }
+    func addReference(_ attachment: MessageAttachment) {
+        var value = draft
+        guard value.attachments.count < 6 else {
+            status.text = "附件最多 6 个，请先移除部分附件后再添加引用"
+            return
+        }
+        value.attachments.append(attachment)
+        setDraft(value)
+    }
     func insertSkill(_ id: String, name: String) {
         var value = draft
         guard !value.skills.contains(where: { $0.id == id }) else { return }
@@ -225,6 +235,14 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         stopButton.isEnabled = session.isConnected && runtime?.readyForActions == true
         chips.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for attachment in draft.attachments {
+            if attachment.isReference {
+                let annotated = attachment.reference?.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                chips.addArrangedSubview(
+                    Theme.button("\(attachment.name)\(annotated ? " · 批注" : "")", icon: "quote.opening") {
+                        [weak self] in self?.editReference(attachment)
+                    })
+                continue
+            }
             chips.addArrangedSubview(
                 Theme.button("\(attachment.name) · 移除", icon: attachment.isImage ? "photo" : "doc") { [weak self] in
                     guard let self else { return }
@@ -832,5 +850,93 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         var value = draft
         value.attachments.append(.init(name: name, mimeType: mime, data: data))
         setDraft(value)
+    }
+    private func editReference(_ attachment: MessageAttachment) {
+        let editor = ReferenceEditViewController(
+            attachment: attachment,
+            onSave: { [weak self] updated in
+                guard let self else { return }
+                var value = draft
+                if let index = value.attachments.firstIndex(where: { $0.id == updated.id }) {
+                    value.attachments[index] = updated
+                    setDraft(value)
+                }
+            },
+            onRemove: { [weak self] in
+                guard let self else { return }
+                var value = draft
+                value.attachments.removeAll { $0.id == attachment.id }
+                setDraft(value)
+            })
+        present(UINavigationController(rootViewController: editor), animated: true)
+    }
+}
+
+private final class ReferenceEditViewController: UIViewController {
+    private let attachment: MessageAttachment
+    private let onSave: @MainActor (MessageAttachment) -> Void
+    private let onRemove: @MainActor () -> Void
+    private let excerpt = UITextView()
+    private let note = UITextView()
+    init(
+        attachment: MessageAttachment, onSave: @escaping @MainActor (MessageAttachment) -> Void,
+        onRemove: @escaping @MainActor () -> Void
+    ) {
+        self.attachment = attachment
+        self.onSave = onSave
+        self.onRemove = onRemove
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = attachment.name
+        view.backgroundColor = .systemBackground
+        let location = attachment.reference?.location ?? ""
+        let locationLabel = Theme.label(
+            location.isEmpty ? attachment.name : location, style: .caption1, color: .secondaryLabel)
+        locationLabel.numberOfLines = 0
+        for (field, text, style, label) in [
+            (excerpt, String(decoding: attachment.data, as: UTF8.self), UIFont.monospacedSystemFont(ofSize: 13, weight: .regular), "摘录"),
+            (note, attachment.reference?.note ?? "", UIFont.preferredFont(forTextStyle: .body), "批注"),
+        ] as [(UITextView, String, UIFont, String)] {
+            field.text = text
+            field.font = style
+            field.isEditable = true
+            field.layer.cornerRadius = 8
+            field.backgroundColor = .secondarySystemBackground
+            field.textContainerInset = .init(top: 8, left: 6, bottom: 8, right: 6)
+            field.adjustsFontForContentSizeCategory = true
+            field.accessibilityLabel = label
+        }
+        excerpt.heightAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
+        note.heightAnchor.constraint(equalToConstant: 88).isActive = true
+        let save = WBUI.button("完成", "checkmark") { [weak self] in
+            guard let self else { return }
+            var updated = attachment
+            updated.data = Data((self.excerpt.text ?? "").utf8)
+            updated.reference?.note = self.note.text ?? ""
+            self.dismiss(animated: true) { [weak self] in
+                guard let self else { return }
+                self.onSave(updated)
+            }
+        }
+        let remove = WBUI.button("移除引用", "trash") { [weak self] in
+            guard let self else { return }
+            self.dismiss(animated: true) { [weak self] in
+                guard let self else { return }
+                self.onRemove()
+            }
+        }
+        WBUI.installStack(
+            in: view,
+            views: [
+                locationLabel,
+                Theme.label("摘录", style: .caption1, color: .secondaryLabel), excerpt,
+                Theme.label("批注", style: .caption1, color: .secondaryLabel), note,
+                WBUI.row([remove, save]),
+            ], keyboard: true)
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            systemItem: .cancel, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
     }
 }

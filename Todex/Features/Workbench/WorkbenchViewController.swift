@@ -47,6 +47,7 @@ final class WorkbenchViewController: UIViewController {
     private let command: WorkbenchCommand
     private let events: AsyncStream<JSONValue>
     private let insertReference: @MainActor (String) -> Void
+    private let addReference: @MainActor (MessageAttachment) -> Void
     private var eventTask: Task<Void, Never>?
     private var tabs: [WorkbenchTab] = []
     private var selected: String?
@@ -65,7 +66,8 @@ final class WorkbenchViewController: UIViewController {
     init(
         connection: BackendConnection, workspace: WorkspaceRecord, conversationId: String,
         command: @escaping @MainActor (String, JSONValue, TimeInterval) async throws -> JSONValue,
-        events: AsyncStream<JSONValue>, insertReference: @escaping @MainActor (String) -> Void
+        events: AsyncStream<JSONValue>, insertReference: @escaping @MainActor (String) -> Void,
+        addReference: @escaping @MainActor (MessageAttachment) -> Void
     ) {
         self.connection = connection
         self.workspace = workspace
@@ -73,6 +75,7 @@ final class WorkbenchViewController: UIViewController {
         self.command = command
         self.events = events
         self.insertReference = insertReference
+        self.addReference = addReference
         super.init(nibName: nil, bundle: nil)
         sharingScope =
             SharingScope(rawValue: UserDefaults.standard.string(forKey: preferenceKey) ?? "") ?? .conversation
@@ -292,7 +295,7 @@ final class WorkbenchViewController: UIViewController {
         case .files:
             child = WorkbenchFilesViewController(
                 tab: tab, connection: connection, workspacePath: workspace.path,
-                insertReference: insertReference, update: update,
+                insertReference: insertReference, addReference: addReference, update: update,
                 openFile: { [weak self] path in self?.addTab(.files, path: path) })
         case .browser:
             child = WorkbenchBrowserViewController(tab: tab, connection: connection, update: update)

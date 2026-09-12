@@ -247,10 +247,33 @@ nonisolated struct MessageAttachment: Identifiable, Codable, Sendable, Equatable
     var name: String
     var mimeType: String
     var data: Data
+    var reference: Reference?
     var isImage: Bool { mimeType.hasPrefix("image/") }
+    var isReference: Bool { reference != nil }
+    struct Reference: Codable, Sendable, Equatable {
+        var path: String?
+        var lineStart: Int?
+        var lineEnd: Int?
+        var note = ""
+        var location: String {
+            guard let path, !path.isEmpty else { return "" }
+            guard let lineStart else { return path }
+            let tail = lineEnd != nil && lineEnd != lineStart ? "-\(lineEnd ?? lineStart)" : ""
+            return "\(path):\(lineStart)\(tail)"
+        }
+    }
     var wireValue: JSONValue {
         if isImage {
             return ["type": "image", "data": .string(data.base64EncodedString()), "mimeType": .string(mimeType)]
+        }
+        if let reference {
+            let location = reference.location.isEmpty ? name : reference.location
+            var parts = ["[引用: \(location)]"]
+            let excerpt = String(decoding: data, as: UTF8.self)
+            if !excerpt.isEmpty { parts.append("Content:\n\(excerpt)") }
+            let note = reference.note.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !note.isEmpty { parts.append("批注: \(note)") }
+            return ["type": "text", "text": .string(parts.joined(separator: "\n"))]
         }
         return ["type": "text", "text": .string("附件：\(name)\n\(String(decoding: data, as: UTF8.self))")]
     }

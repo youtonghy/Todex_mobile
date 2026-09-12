@@ -64,6 +64,11 @@ final class ConversationContainerController: UIViewController {
                     self?.chat.insert(text)
                     self?.picker.selectedSegmentIndex = 0
                     self?.layoutPanes()
+                },
+                addReference: { [weak self] attachment in
+                    self?.chat.addReference(attachment)
+                    self?.picker.selectedSegmentIndex = 0
+                    self?.layoutPanes()
                 })
             self.workbench = workbench
             addChild(workbench)

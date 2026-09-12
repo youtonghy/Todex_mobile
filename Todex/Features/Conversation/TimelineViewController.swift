@@ -10,6 +10,7 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
     private var provider = "TodeX"
     var insertText: ((String) -> Void)?
     var openFile: ((String) -> Void)?
+    var addReference: ((MessageAttachment) -> Void)?
     override func viewDidLoad() {
         super.viewDidLoad()
         let config = WKWebViewConfiguration()
@@ -80,6 +81,13 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
                     self?.insertText?(
                         text.split(separator: "\n", omittingEmptySubsequences: false).map { "> \($0)" }.joined(
                             separator: "\n"))
+                })
+            menu.addAction(
+                UIAlertAction(title: "添加为引用", style: .default) { [weak self] _ in
+                    self?.addReference?(
+                        MessageAttachment(
+                            name: "对话摘录", mimeType: "text/plain", data: Data(text.utf8),
+                            reference: .init()))
                 })
             menu.addAction(UIAlertAction(title: "取消", style: .cancel))
             menu.popoverPresentationController?.sourceView = view

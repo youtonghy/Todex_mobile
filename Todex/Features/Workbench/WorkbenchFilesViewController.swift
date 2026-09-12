@@ -9,6 +9,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     private let http: HTTPClient
     private let workspacePath: String
     private let insertReference: @MainActor (String) -> Void
+    private let addReference: @MainActor (MessageAttachment) -> Void
     private let update: @MainActor (WorkbenchTab) -> Void
     private let openFileTab: @MainActor (String) -> Void
     private let table = UITableView(frame: .zero, style: .insetGrouped)
@@ -33,13 +34,16 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
 
     init(
         tab descriptor: WorkbenchTab, connection: BackendConnection, workspacePath: String,
-        insertReference: @escaping @MainActor (String) -> Void, update: @escaping @MainActor (WorkbenchTab) -> Void,
+        insertReference: @escaping @MainActor (String) -> Void,
+        addReference: @escaping @MainActor (MessageAttachment) -> Void,
+        update: @escaping @MainActor (WorkbenchTab) -> Void,
         openFile: @escaping @MainActor (String) -> Void
     ) {
         self.descriptor = descriptor
         self.http = HTTPClient(connection: connection)
         self.workspacePath = workspacePath
         self.insertReference = insertReference
+        self.addReference = addReference
         self.update = update
         self.openFileTab = openFile
         super.init(nibName: nil, bundle: nil)
@@ -437,16 +441,27 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             let range = Range(editor.selectedRange, in: editor.text ?? "")
         {
             let text = editor.text ?? ""
-            let line = text[..<range.lowerBound].filter { $0 == "\n" }.count + 1
+            let excerpt = String(text[range].prefix(2000))
             let rendered =
                 ["md", "markdown"].contains((path as NSString).pathExtension.lowercased())
                 && modes.selectedSegmentIndex == 0 && !editingText
-            let location = rendered ? " · Markdown 预览选区" : ":\(line)"
-            insertReference("[文件 \(path)\(location)]\n\(String(text[range].prefix(2000)))")
+            var reference = MessageAttachment.Reference(path: path)
+            if !rendered {
+                reference.lineStart = text[..<range.lowerBound].filter { $0 == "\n" }.count + 1
+                reference.lineEnd = text[..<range.upperBound].filter { $0 == "\n" }.count + 1
+            }
+            let baseName = (path as NSString).lastPathComponent
+            let name =
+                reference.lineStart.map {
+                    "\(baseName):\($0)\(reference.lineEnd != $0 ? "-\(reference.lineEnd ?? $0)" : "")"
+                } ?? "\(baseName) 摘录"
+            addReference(
+                MessageAttachment(name: name, mimeType: "text/plain", data: Data(excerpt.utf8), reference: reference))
+            info.text = "已添加引用到对话 · \(name)"
         } else {
             insertReference("@\(path)")
+            info.text = "已插入引用到对话草稿 · \(path)"
         }
-        info.text = "已插入引用到对话草稿 · \(path)"
     }
     private func discardIfNeeded(_ action: @escaping @MainActor () -> Void) {
         guard !isSaving else {
