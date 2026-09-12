@@ -38,6 +38,14 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
         self.provider = provider
         render()
     }
+    /// Scroll the timeline so the source message of a reference is visible.
+    func scrollToMessage(_ id: String) {
+        let escaped = id
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        web.evaluateJavaScript(
+            "document.querySelector('[data-id=\\'\(escaped)\\']')?.scrollIntoView({block:'center',behavior:'smooth'})")
+    }
     private func render() {
         guard loaded else { return }
         let values: [[String: Any]] = messages.reversed().map {
@@ -65,9 +73,11 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
         case "quote":
             let text = body["text"] ?? ""
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            let messageId = body["id"].flatMap { $0.isEmpty ? nil : $0 }
             addReference?(
                 MessageAttachment(
-                    name: "对话摘录", mimeType: "text/plain", data: Data(text.utf8), reference: .init()))
+                    name: "对话摘录", mimeType: "text/plain", data: Data(text.utf8),
+                    reference: .init(messageId: messageId)))
         case "link":
             guard let raw = body["url"] else { return }
             if raw.hasPrefix("/") || raw.hasPrefix("./") {
@@ -93,7 +103,7 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
                     self?.addReference?(
                         MessageAttachment(
                             name: "对话摘录", mimeType: "text/plain", data: Data(text.utf8),
-                            reference: .init()))
+                            reference: .init(messageId: body["id"].flatMap { $0.isEmpty ? nil : $0 })))
                 })
             menu.addAction(UIAlertAction(title: "取消", style: .cancel))
             menu.popoverPresentationController?.sourceView = view

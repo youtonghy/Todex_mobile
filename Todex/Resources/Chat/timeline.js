@@ -12,6 +12,8 @@ function updateQuote(){
  if(!s||s.isCollapsed||!s.rangeCount||!root.contains(s.getRangeAt(0).commonAncestorContainer)||!s.toString().trim()){quote.hidden=true;return;}
  const r=s.getRangeAt(0).getBoundingClientRect();
  quote.dataset.text=s.toString();
+ const anchorEl=s.anchorNode?.nodeType===1?s.anchorNode:s.anchorNode?.parentElement;
+ quote.dataset.id=anchorEl?.closest('[data-id]')?.dataset.id||'';
  quote.style.left=Math.max(8,Math.min(innerWidth-116,r.left+r.width/2-54))+'px';
  quote.style.top=(r.bottom+8)+'px';
  quote.hidden=false;
@@ -20,7 +22,7 @@ document.addEventListener('selectionchange',updateQuote);
 addEventListener('scroll',()=>{quote.hidden=true;},{passive:true});
 quote.onclick=()=>{
  const text=quote.dataset.text||'';
- if(text.trim())bridge({action:'quote',text});
+ if(text.trim())bridge({action:'quote',text,id:quote.dataset.id||''});
  getSelection()?.removeAllRanges();quote.hidden=true;
 };
 let initial=true;const openDetails=new Set();

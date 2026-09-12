@@ -467,7 +467,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         addReference(
             MessageAttachment(name: name, mimeType: "text/plain", data: Data(excerpt.utf8), reference: reference))
         editor.selectedRange = NSRange(location: selectedRange.location, length: 0)
-        info.text = "已添加引用到对话 · \(name)"
+        info.text = "已添加引用到对话"
     }
     func textView(
         _ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]

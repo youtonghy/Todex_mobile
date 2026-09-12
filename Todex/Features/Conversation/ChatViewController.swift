@@ -105,6 +105,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         composer.accessibilityIdentifier = "chat.composer"
         composer.textContainerInset = .init(top: 5, left: 6, bottom: 5, right: 6)
         composer.heightAnchor.constraint(equalToConstant: 75).isActive = true
+        let locateTap = UITapGestureRecognizer(target: self, action: #selector(composerTapped(_:)))
+        locateTap.cancelsTouchesInView = false
+        composer.addGestureRecognizer(locateTap)
         inputStack.addArrangedSubview(composer)
         let attach = Theme.iconButton("plus")
         attach.accessibilityLabel = "附件"
@@ -177,11 +180,13 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
             status.text = "附件最多 6 个，请先移除部分附件后再添加引用"
             return
         }
-        var name = attachment.name
+        let preview = Self.referencePreview(of: String(decoding: attachment.data, as: UTF8.self))
+        let base = preview.isEmpty ? attachment.name : preview
+        var name = base
         var index = 2
         let taken = Set(value.attachments.filter(\.isReference).map(\.name))
         while taken.contains(name) || value.text.contains("[引用:\(name)]") {
-            name = "\(attachment.name) \(index)"
+            name = "\(base) \(index)"
             index += 1
         }
         var reference = attachment
@@ -214,6 +219,38 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
     func textViewDidChangeSelection(_ textView: UITextView) {
         resetTypingAttributes()
         updateSuggestions()
+    }
+    @objc private func composerTapped(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended,
+              let range = composer.characterRange(at: gesture.location(in: composer))
+        else { return }
+        let location = composer.offset(from: composer.beginningOfDocument, to: range.start)
+        let text = draft.text
+        guard let regex = try? NSRegularExpression(pattern: #"\[引用:([^\]\n]+)\]"#) else { return }
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard NSLocationInRange(location, match.range),
+                  let nameRange = Range(match.range(at: 1), in: text)
+            else { continue }
+            locateReference(named: String(text[nameRange]))
+            return
+        }
+    }
+    private func locateReference(named name: String) {
+        guard let reference = draft.attachments
+            .first(where: { $0.isReference && $0.name == name })?.reference else { return }
+        if let path = reference.path, !path.isEmpty {
+            openFile?(path)
+        } else if let messageId = reference.messageId {
+            timeline.scrollToMessage(messageId)
+        }
+    }
+    /// First non-empty line of the excerpt, whitespace-collapsed, truncated for the token label.
+    static func referencePreview(of excerpt: String, max: Int = 10) -> String {
+        let line = excerpt.split(separator: "\n", omittingEmptySubsequences: false)
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { $0.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces) } ?? ""
+        return line.count > max ? String(line.prefix(max)) + "…" : line
     }
     private func resetTypingAttributes() {
         composer.typingAttributes = [

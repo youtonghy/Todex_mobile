@@ -255,6 +255,7 @@ nonisolated struct MessageAttachment: Identifiable, Codable, Sendable, Equatable
         var path: String?
         var lineStart: Int?
         var lineEnd: Int?
+        var messageId: String?
         var location: String {
             guard let path, !path.isEmpty else { return "" }
             guard let lineStart else { return path }
