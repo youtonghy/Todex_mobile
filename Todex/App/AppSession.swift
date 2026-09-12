@@ -839,7 +839,7 @@ extension RealtimeClient: SessionSocket {}
             return
         }
         if type == "conversation.event", let event = try? frame["payload"].decoded(ConversationEvent.self) {
-            ingest(event)
+            ingest(event, live: true)
             if runtimes[event.conversationId]?.needsRecovery == true, recoveryTasks[event.conversationId] == nil,
                 isConnected
             {
@@ -862,7 +862,9 @@ extension RealtimeClient: SessionSocket {}
             changed()
         }
     }
-    private func ingest(_ event: ConversationEvent) {
+    /// `live` marks events from the open socket; cache and history replays pass
+    /// the default so completion alerts only fire for turns that finish now.
+    private func ingest(_ event: ConversationEvent, live: Bool = false) {
         let id = event.conversationId
         var runtime = runtimes[id] ?? ConversationRuntime(conversationId: id)
         let before = runtime.appliedSequence
@@ -885,6 +887,7 @@ extension RealtimeClient: SessionSocket {}
             }
             if ["failed", "cancelled", "interrupted"].contains(runtime.status) { pausedQueues.insert(id) }
             if runtime.status == "completed", oldStatus != "completed", !oldTurn.isEmpty {
+                if live { notifyTurnCompleted(id, runtime: runtime) }
                 if let send = sending[id], runtime.appliedSequence > send.afterSequence {
                     completedDuringSend[id] = send.requestID
                 } else {
@@ -894,6 +897,28 @@ extension RealtimeClient: SessionSocket {}
             saveSoon()
         }
         changed()
+    }
+
+    /// Alerts only while the app is backgrounded: without a presentation
+    /// delegate, foreground delivery shows no banner and only drops the
+    /// notification into Notification Center.
+    private func notifyTurnCompleted(_ id: String, runtime: ConversationRuntime) {
+        guard !foreground, CompletionNotifications.isEnabled(in: defaults) else { return }
+        let manifest = conversations.first { $0.id == id }
+        let workspaceName = manifest.map {
+            $0.workspace.contains("/") ? URL(fileURLWithPath: $0.workspace).lastPathComponent : $0.workspace
+        }
+        let title = [manifest?.title, workspaceName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? "TodeX"
+        let reply = runtime.messages.first {
+            $0.role == "assistant" && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.text ?? ""
+        let excerpt = reply.components(separatedBy: .whitespacesAndNewlines).joined(separator: " ")
+        let body = excerpt.isEmpty
+            ? "任务已完成"
+            : String(excerpt.prefix(160)) + (excerpt.count > 160 ? "…" : "")
+        CompletionNotifications.post(conversationId: id, title: title, body: body)
     }
 
     /// Cache only a bounded contiguous prefix. Neither arrival order nor the

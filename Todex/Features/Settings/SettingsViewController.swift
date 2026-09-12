@@ -185,7 +185,50 @@ final class SettingsViewController: SettingsListController {
                         }
                     },
                 ]))
+        let notificationsEnabled = CompletionNotifications.isEnabled()
+        sections.append(
+            SettingsSection(
+                title: "通知",
+                footer: "任务正常完成并收到回复时发送系统通知；应用在前台时不提醒。",
+                rows: [
+                    SettingsRow(
+                        title: "任务完成提醒", detail: notificationsEnabled ? "已开启" : "已关闭",
+                        symbol: "bell.badge", id: "settings.completionNotifications",
+                        checked: notificationsEnabled
+                    ) { [weak self] in
+                        self?.setCompletionNotifications(!notificationsEnabled)
+                    },
+                ]))
         redraw()
+    }
+
+    private func setCompletionNotifications(_ enabled: Bool) {
+        if !enabled {
+            UserDefaults.standard.set(false, forKey: CompletionNotifications.defaultsKey)
+            render()
+            return
+        }
+        Task { [weak self] in
+            let granted = await CompletionNotifications.requestAuthorization()
+            guard let self else { return }
+            UserDefaults.standard.set(granted, forKey: CompletionNotifications.defaultsKey)
+            self.render()
+            if !granted { self.promptNotificationSettings() }
+        }
+    }
+
+    private func promptNotificationSettings() {
+        let alert = UIAlertController(
+            title: "通知权限未开启",
+            message: "系统拒绝了 TodeX 的通知权限。请在系统设置中允许通知后再开启。",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "打开系统设置", style: .default) { _ in
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+        })
+        present(alert, animated: true)
     }
 
     private func field(_ title: String, value: String, key: String, connection: BackendConnection) -> SettingsRow {
