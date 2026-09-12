@@ -90,6 +90,17 @@ enum Theme {
         button.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
         return button
     }
+    /// Icon-only capsule chip whose tint encodes the selected option
+    /// (permission/work mode indicators in the composer toolbar).
+    static func iconChipConfiguration(icon: String, tint: UIColor) -> UIButton.Configuration {
+        var config = UIButton.Configuration.gray()
+        config.cornerStyle = .capsule
+        config.baseBackgroundColor = secondary
+        config.baseForegroundColor = tint
+        config.image = Self.icon(icon, pointSize: 12)
+        config.contentInsets = .init(top: 7, leading: 11, bottom: 7, trailing: 11)
+        return config
+    }
     /// Compact icon-only button matching the desktop ghost toolbar icons.
     static func iconButton(_ symbol: String, pointSize: CGFloat = 13) -> UIButton {
         var config = UIButton.Configuration.gray()

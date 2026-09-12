@@ -15,8 +15,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
     private let chips = UIStackView()
     private let alerts = UIStackView()
     private let modelChip = Theme.chip("模型", icon: "cpu")
-    private let permissionChip = Theme.chip("权限", icon: "hand.raised")
-    private let workModeChip = Theme.chip("执行", icon: "checklist")
+    private let permissionChip = UIButton(configuration: Theme.iconChipConfiguration(icon: "hand.raised.fill", tint: .systemOrange))
+    private let workModeChip = UIButton(configuration: Theme.iconChipConfiguration(icon: "bolt.fill", tint: Theme.accent))
     private let moreChip = Theme.iconButton("ellipsis", pointSize: 11)
     private var sendButton: UIButton!
     private var stopButton: UIButton!
@@ -289,17 +289,17 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         modelChip.accessibilityLabel = "模型：\(modelTitle)"
         modelChip.menu = modelMenu()
         let capability = session.provider(for: conversation)?.capabilities ?? .null
-        let permissionTitle =
-            ["ask": "按需审批", "auto": "自动审批", "full-access": "完全访问"][pref.permissionMode]
-            ?? pref.permissionMode
-        permissionChip.configuration = Theme.chipConfiguration(
-            title: permissionTitle.isEmpty ? "权限" : permissionTitle, icon: "hand.raised")
-        permissionChip.accessibilityLabel = "权限模式：\(permissionTitle)"
+        let permissionStyle = Self.permissionStyle(pref.permissionMode)
+        permissionChip.configuration = Theme.iconChipConfiguration(
+            icon: permissionStyle.icon, tint: permissionStyle.color)
+        permissionChip.accessibilityLabel = "权限模式：\(permissionStyle.title)"
         permissionChip.isEnabled = !capability["permissionConfig"]["modes"].arrayValue.isEmpty
         permissionChip.menu = permissionMenu()
         workModeChip.isHidden = !capability["permissionConfig"]["supportsPlan"].boolValue
-        workModeChip.configuration = Theme.chipConfiguration(
-            title: pref.workMode == "plan" ? "计划" : "执行", icon: "checklist")
+        let workModeStyle = Self.workModeStyle(pref.workMode)
+        workModeChip.configuration = Theme.iconChipConfiguration(
+            icon: workModeStyle.icon, tint: workModeStyle.color)
+        workModeChip.accessibilityLabel = "工作模式：\(workModeStyle.title)"
         workModeChip.menu = workModeMenu()
         moreChip.menu = moreMenu()
         updateSuggestions()
@@ -547,13 +547,31 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         }
         return UIMenu(children: values)
     }
+    // Icon + tint encode the active option so the icon-only chips stay legible.
+    private static func permissionStyle(_ mode: String) -> (title: String, icon: String, color: UIColor) {
+        switch mode {
+        case "auto": return ("自动审批", "checkmark.shield.fill", Theme.accent)
+        case "full-access": return ("完全访问", "lock.open.fill", .systemRed)
+        case "ask": return ("按需审批", "hand.raised.fill", .systemOrange)
+        default: return (mode.isEmpty ? "权限" : mode, "hand.raised", .secondaryLabel)
+        }
+    }
+    private static func workModeStyle(_ mode: String) -> (title: String, icon: String, color: UIColor) {
+        mode == "plan" ? ("计划", "map.fill", .systemIndigo) : ("执行", "bolt.fill", Theme.accent)
+    }
+    private static func coloredIcon(_ icon: String, _ color: UIColor) -> UIImage? {
+        Theme.icon(icon, pointSize: 13)?.withTintColor(color, renderingMode: .alwaysOriginal)
+    }
     private func permissionMenu() -> UIMenu {
         let pref = session.preferences(for: conversation)
         let capability = session.provider(for: conversation)?.capabilities ?? .null
         let permissions = capability["permissionConfig"]["modes"].arrayValue.map { value -> UIMenuElement in
             let id = value.stringValue
-            let title = ["ask": "按需审批", "auto": "自动审批", "full-access": "完全访问"][id] ?? id
-            return UIAction(title: title, state: pref.permissionMode == id ? .on : .off) { [weak self] _ in
+            let style = Self.permissionStyle(id)
+            return UIAction(
+                title: style.title, image: Self.coloredIcon(style.icon, style.color),
+                state: pref.permissionMode == id ? .on : .off
+            ) { [weak self] _ in
                 guard let self else { return }
                 if id == "full-access" {
                     confirm(
@@ -570,14 +588,15 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
     }
     private func workModeMenu() -> UIMenu {
         let pref = session.preferences(for: conversation)
-        return UIMenu(children: [
-            UIAction(title: "执行", state: pref.workMode == "implement" ? .on : .off) { [weak self] _ in
-                self?.configure { $0.workMode = "implement" }
-            },
-            UIAction(title: "计划", state: pref.workMode == "plan" ? .on : .off) { [weak self] _ in
-                self?.configure { $0.workMode = "plan" }
-            },
-        ])
+        return UIMenu(children: ["implement", "plan"].map { mode -> UIMenuElement in
+            let style = Self.workModeStyle(mode)
+            return UIAction(
+                title: style.title, image: Self.coloredIcon(style.icon, style.color),
+                state: pref.workMode == mode ? .on : .off
+            ) { [weak self] _ in
+                self?.configure { $0.workMode = mode }
+            }
+        })
     }
     private func moreMenu() -> UIMenu {
         let capability = session.provider(for: conversation)?.capabilities ?? .null
