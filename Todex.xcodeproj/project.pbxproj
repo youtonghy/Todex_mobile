@@ -34,6 +34,7 @@
 		D77BB42F7E3FA641974BA2DC /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D9D444CCD78823FE4D9E2E1 /* AppDelegate.swift */; };
 		E8612533DA5CE3F28E6E0B42 /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E702E6310573847EA39CF87 /* AppSession.swift */; };
 		E88E3E80DC4D3353CA37DB3B /* SettingsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49F509EC6CE7C518DB26A93C /* SettingsViewController.swift */; };
+		FC32E2AAC7CE825C824DD6D5 /* TaskBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0464BB12B759F5C01CC3F279 /* TaskBoardView.swift */; };
 		FDF662274A0BFA50B67CF129 /* AuxiliaryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4116C9C6F9FF556816D80D04 /* AuxiliaryViewController.swift */; };
 /* End PBXBuildFile section */
 
@@ -49,6 +50,7 @@
 
 /* Begin PBXFileReference section */
 		044B6049579D1A4B0376E130 /* DirectoryPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryPicker.swift; sourceTree = "<group>"; };
+		0464BB12B759F5C01CC3F279 /* TaskBoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardView.swift; sourceTree = "<group>"; };
 		0E702E6310573847EA39CF87 /* AppSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSession.swift; sourceTree = "<group>"; };
 		2EC3797C64B5595C12C046BD /* PermissionViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionViewController.swift; sourceTree = "<group>"; };
 		38CBAFAA70C87108D4EB0D31 /* PairingQRScannerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingQRScannerViewController.swift; sourceTree = "<group>"; };
@@ -168,6 +170,7 @@
 			children = (
 				044B6049579D1A4B0376E130 /* DirectoryPicker.swift */,
 				4EB322422A711D553BA2D0EF /* HomeViewController.swift */,
+				0464BB12B759F5C01CC3F279 /* TaskBoardView.swift */,
 			);
 			path = Home;
 			sourceTree = "<group>";
@@ -351,6 +354,7 @@
 				4418BB411B4DED497791BE48 /* PermissionViewController.swift in Sources */,
 				09A6BA3AC4DB34C25244D657 /* SettingsUI.swift in Sources */,
 				E88E3E80DC4D3353CA37DB3B /* SettingsViewController.swift in Sources */,
+				FC32E2AAC7CE825C824DD6D5 /* TaskBoardView.swift in Sources */,
 				B822D321BDCBDC6A1C8B3E58 /* Theme.swift in Sources */,
 				86C38986A674B9CDE0CEBFDC /* TimelineViewController.swift in Sources */,
 				89B1CFAADFE78FB74B0A21DA /* UsageViewController.swift in Sources */,

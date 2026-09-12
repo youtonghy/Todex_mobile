@@ -177,9 +177,11 @@ nonisolated final class TodexUITests: XCTestCase {
         XCTAssertTrue(
             app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Isolated Fixture")).firstMatch
                 .waitForExistence(timeout: 30))
-        // Task plan: per-workspace task lists replaced the today board (desktop parity).
+        // Task plan: desktop-parity kanban, one column per workspace.
         app.buttons["任务"].tap()
-        let newTask = app.staticTexts["新建任务"]
+        let newTask = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "新建任务")
+        ).firstMatch
         XCTAssertTrue(newTask.waitForExistence(timeout: 5))
         newTask.tap()
         let taskField = app.alerts["新建任务"].textFields.firstMatch
@@ -188,8 +190,11 @@ nonisolated final class TodexUITests: XCTestCase {
         app.alerts["新建任务"].buttons["确定"].tap()
         let taskTitle = app.staticTexts["回归任务"]
         XCTAssertTrue(taskTitle.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["计划 · 未关联对话"].waitForExistence(timeout: 3))
-        app.cells.containing(.staticText, identifier: "回归任务").firstMatch.press(forDuration: 1)
+        let statusChip = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "任务状态：计划")
+        ).firstMatch
+        XCTAssertTrue(statusChip.waitForExistence(timeout: 3))
+        statusChip.tap()
         let markDone = app.descendants(matching: .any)["已完成"]
         XCTAssertTrue(markDone.waitForExistence(timeout: 5))
         markDone.tap()

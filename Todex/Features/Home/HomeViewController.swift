@@ -1,14 +1,17 @@
 import TodexCore
 import UIKit
 
-final class HomeViewController: UITableViewController, UISearchResultsUpdating {
+final class HomeViewController: UIViewController, UITableViewDataSource, UITableViewDelegate,
+    UISearchResultsUpdating
+{
     let session: AppSession
     private var observer: UUID?
     private let search = UISearchController(searchResultsController: nil)
     private let filter = UISegmentedControl(items: ["工作区", "任务", "归档"])
+    private let table = UITableView(frame: .zero, style: .insetGrouped)
+    private let board = TaskBoardView()
     private enum HomeRow {
         case conversation(ConversationManifest)
-        case task(KanbanTask)
     }
     private var groups: [(WorkspaceRecord, [HomeRow])] = []
     private var collapsed: Set<String> = []
@@ -17,7 +20,7 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
 
     init(session: AppSession) {
         self.session = session
-        super.init(style: .insetGrouped)
+        super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func viewDidLoad() {
@@ -56,31 +59,58 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
         header.spacing = 14
         header.isLayoutMarginsRelativeArrangement = true
         header.directionalLayoutMargins = .init(top: 10, leading: 20, bottom: 12, trailing: 20)
-        header.frame = CGRect(x: 0, y: 0, width: 390, height: 96)
-        tableView.tableHeaderView = header
-        tableView.accessibilityIdentifier = "home.list"
-        refreshControl = UIRefreshControl()
-        refreshControl?.addAction(
+        view.addSubview(header)
+        view.addSubview(table)
+        view.addSubview(board)
+        for child in [header, table, board] { child.translatesAutoresizingMaskIntoConstraints = false }
+        NSLayoutConstraint.activate([
+            header.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            header.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            table.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            table.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            table.topAnchor.constraint(equalTo: header.bottomAnchor),
+            table.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            board.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            board.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            board.topAnchor.constraint(equalTo: header.bottomAnchor),
+            board.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        table.dataSource = self
+        table.delegate = self
+        table.accessibilityIdentifier = "home.list"
+        board.isHidden = true
+        board.handlers = .init(
+            open: { [weak self] task in self?.openTask(task) },
+            enterWorkspace: { [weak self] workspace in self?.enterWorkspace(workspace) },
+            addTask: { [weak self] workspace in
+                self?.askText(title: "新建任务", message: workspace.name, value: "") { title in
+                    self?.session.addTask(workspaceId: workspace.id, title: title)
+                }
+            },
+            statusMenu: { [weak self] task in self?.taskStatusMenu(task) ?? UIMenu() },
+            attachMenu: { [weak self] task, workspace in
+                self?.attachMenu(task, workspace: workspace) ?? UIMenu()
+            },
+            moreMenu: { [weak self] task, workspace in
+                self?.taskMenu(task, workspace: workspace) ?? UIMenu()
+            },
+            linkedTitle: { [weak self] task in
+                guard let self, task.conversationId != nil else { return nil }
+                return self.linkedConversation(task)?.title?.isEmpty == false
+                    ? self.linkedConversation(task)?.title : "对话已失效"
+            })
+        table.refreshControl = UIRefreshControl()
+        table.refreshControl?.addAction(
             UIAction { [weak self] _ in
                 Task { [weak self] in
                     guard let self else { return }
                     do { try await session.refresh() } catch { showError(error) }
-                    refreshControl?.endRefreshing()
+                    table.refreshControl?.endRefreshing()
                 }
             }, for: .valueChanged)
         observer = session.observe { [weak self] in self?.reload() }
         reload()
-    }
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        guard let header = tableView.tableHeaderView else { return }
-        let size = header.systemLayoutSizeFitting(
-            CGSize(width: tableView.bounds.width, height: UIView.layoutFittingCompressedSize.height),
-            withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
-        if abs(header.frame.height - size.height) > 0.5 || header.frame.width != tableView.bounds.width {
-            header.frame.size = CGSize(width: tableView.bounds.width, height: size.height)
-            tableView.tableHeaderView = header
-        }
     }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
@@ -97,15 +127,18 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
             let b = session.pinnedWorkspaces.firstIndex(of: right.id) ?? Int.max
             return a == b ? left.name.localizedStandardCompare(right.name) == .orderedAscending : a < b
         }
-        if filter.selectedSegmentIndex == 1 {
-            // Task plan: one section per workspace, mirroring the desktop board.
-            groups = sortedWorkspaces.compactMap { workspace in
-                let items = session.tasks(for: workspace.id).filter {
+        let showingBoard = filter.selectedSegmentIndex == 1
+        table.isHidden = showingBoard
+        board.isHidden = !showingBoard
+        if showingBoard {
+            // Task plan: desktop-parity vertical kanban, one column per workspace.
+            board.reload(workspaces: sortedWorkspaces) { workspace in
+                session.tasks(for: workspace.id).filter {
                     query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)
                         || workspace.name.localizedCaseInsensitiveContains(query)
                 }
-                return !query.isEmpty && items.isEmpty ? nil : (workspace, items.map(HomeRow.task))
             }
+            groups = []
         } else {
             groups = sortedWorkspaces.compactMap { workspace in
                 let records = session.conversations.filter { conversation in
@@ -128,7 +161,7 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
         }
         statusLabel.text = [session.connection?.name, session.status].compactMap { $0 }.joined(separator: " · ")
         statusLabel.textColor = session.isConnected ? Theme.accent : .secondaryLabel
-        if groups.isEmpty {
+        if showingBoard ? sortedWorkspaces.isEmpty : groups.isEmpty {
             var config = UIContentUnavailableConfiguration.empty()
             config.image = Theme.icon(
                 session.connections.isEmpty ? "network" : "bubble.left.and.bubble.right", pointSize: 40)
@@ -158,15 +191,15 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
         } else {
             contentUnavailableConfiguration = nil
         }
-        tableView.reloadData()
+        table.reloadData()
     }
-    override func numberOfSections(in tableView: UITableView) -> Int { groups.count }
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+    func numberOfSections(in tableView: UITableView) -> Int { groups.count }
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         let (workspace, items) = groups[section]
         if collapsed.contains(workspace.id) { return 0 }
         return min(items.count, expanded.contains(workspace.id) ? Int.max : 5) + 1
     }
-    override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+    func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
         let workspace = groups[section].0
         let name = UIButton(type: .system)
         name.contentHorizontalAlignment = .leading
@@ -201,22 +234,17 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
         stack.spacing = 8
         return stack
     }
-    override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
         max(54, UIFont.preferredFont(forTextStyle: .headline).lineHeight + 20)
     }
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let (workspace, items) = groups[indexPath.section]
         let visible = min(items.count, expanded.contains(workspace.id) ? Int.max : 5)
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         var config = cell.defaultContentConfiguration()
         if indexPath.row >= visible {
-            if filter.selectedSegmentIndex == 1 {
-                config.text = "新建任务"
-                config.image = Theme.icon("plus")
-            } else {
-                config.text = visible < items.count ? "显示其余 \(items.count - visible) 个对话" : "新建对话"
-                config.image = Theme.icon(visible < items.count ? "chevron.down" : "plus.bubble")
-            }
+            config.text = visible < items.count ? "显示其余 \(items.count - visible) 个对话" : "新建对话"
+            config.image = Theme.icon(visible < items.count ? "chevron.down" : "plus.bubble")
             config.textProperties.color = Theme.accent
         } else {
             switch items[indexPath.row] {
@@ -237,38 +265,18 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
                 config.textProperties.numberOfLines = 2
                 cell.accessoryType = .disclosureIndicator
                 cell.accessibilityIdentifier = "conversation.\(item.id)"
-            case .task(let task):
-                config.text = task.title
-                let linked = task.conversationId.flatMap { id in
-                    session.conversations.first { $0.id == id }
-                }
-                config.secondaryText = [
-                    task.status.label,
-                    task.conversationId == nil ? "未关联对话" : (linked?.title ?? "对话已失效"),
-                ].joined(separator: " · ")
-                config.secondaryTextProperties.color = .secondaryLabel
-                config.image = Theme.icon(task.status.symbol)
-                config.imageProperties.tintColor =
-                    task.status == .done
-                    ? .systemGreen : (task.status == .inProgress ? Theme.accent : .secondaryLabel)
-                config.textProperties.numberOfLines = 2
-                cell.accessibilityIdentifier = "task.\(task.id)"
             }
         }
         cell.contentConfiguration = config
         cell.backgroundColor = Theme.surface
         return cell
     }
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         let (workspace, items) = groups[indexPath.section]
         let visible = min(items.count, expanded.contains(workspace.id) ? Int.max : 5)
         if indexPath.row >= visible {
-            if filter.selectedSegmentIndex == 1 {
-                askText(title: "新建任务", message: workspace.name, value: "") { [weak self] title in
-                    self?.session.addTask(workspaceId: workspace.id, title: title)
-                }
-            } else if visible < items.count {
+            if visible < items.count {
                 expanded.insert(workspace.id)
                 reload()
             } else {
@@ -278,14 +286,6 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
         }
         switch items[indexPath.row] {
         case .conversation(let item): open(item)
-        case .task(let task):
-            if let id = task.conversationId,
-                let linked = session.conversations.first(where: { $0.id == id })
-            {
-                open(linked)
-            } else {
-                presentTaskSheet(task, workspace: workspace)
-            }
         }
     }
     func open(_ conversation: ConversationManifest) {
@@ -294,7 +294,7 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
         navigationController?.pushViewController(
             ConversationContainerController(session: session, conversation: conversation), animated: true)
     }
-    override func tableView(
+    func tableView(
         _ tableView: UITableView, contextMenuConfigurationForRowAt indexPath: IndexPath, point: CGPoint
     ) -> UIContextMenuConfiguration? {
         let group = groups[indexPath.section]
@@ -302,13 +302,9 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
         switch group.1[indexPath.row] {
         case .conversation(let item):
             return UIContextMenuConfiguration(actionProvider: { [weak self] _ in self?.conversationMenu(item) })
-        case .task(let task):
-            return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
-                self?.taskMenu(task, workspace: group.0)
-            })
         }
     }
-    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
+    func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
         -> UISwipeActionsConfiguration?
     {
         let group = groups[indexPath.section]
@@ -321,16 +317,6 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
                 done(true)
             }
             action.backgroundColor = Theme.accent
-            return UISwipeActionsConfiguration(actions: [action])
-        case .task(let task):
-            let next: KanbanTask.Status = task.status == .done ? .planned : .done
-            let action = UIContextualAction(
-                style: .normal, title: next == .done ? "标记完成" : "重新计划"
-            ) { [weak self] _, _, done in
-                self?.session.setTaskStatus(task.id, next)
-                done(true)
-            }
-            action.backgroundColor = next == .done ? .systemGreen : Theme.accent
             return UISwipeActionsConfiguration(actions: [action])
         }
     }
@@ -414,16 +400,37 @@ final class HomeViewController: UITableViewController, UISearchResultsUpdating {
             title: task.conversationId == nil ? "关联到对话" : "更换关联对话",
             image: Theme.icon("pin", pointSize: 13), children: children)
     }
+    private func taskStatusMenu(_ task: KanbanTask) -> UIMenu {
+        UIMenu(
+            title: "任务状态",
+            children: KanbanTask.Status.allCases.map { status in
+                UIAction(
+                    title: status.label, image: Theme.icon(status.symbol, pointSize: 13),
+                    state: task.status == status ? .on : .off
+                ) { [weak self] _ in self?.session.setTaskStatus(task.id, status) }
+            })
+    }
+    /// Board actions: open the linked conversation, or offer task operations.
+    private func openTask(_ task: KanbanTask) {
+        if let linked = linkedConversation(task) {
+            open(linked)
+        } else if let workspace = session.workspaces.first(where: { $0.id == task.workspaceId }) {
+            presentTaskSheet(task, workspace: workspace)
+        }
+    }
+    /// Column header arrow: open the workspace's latest conversation or create one.
+    private func enterWorkspace(_ workspace: WorkspaceRecord) {
+        if let latest = workspaceConversations(workspace).first {
+            open(latest)
+        } else {
+            createConversation(workspace)
+        }
+    }
     private func taskMenu(_ task: KanbanTask, workspace: WorkspaceRecord) -> UIMenu {
         var elements: [UIMenuElement] = [
             UIMenu(
                 title: "任务状态", options: .displayInline,
-                children: KanbanTask.Status.allCases.map { status in
-                    UIAction(
-                        title: status.label, image: Theme.icon(status.symbol, pointSize: 13),
-                        state: task.status == status ? .on : .off
-                    ) { [weak self] _ in self?.session.setTaskStatus(task.id, status) }
-                }),
+                children: taskStatusMenu(task).children),
             attachMenu(task, workspace: workspace),
         ]
         if let linked = linkedConversation(task) {
