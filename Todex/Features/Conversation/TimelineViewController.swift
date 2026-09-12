@@ -62,6 +62,12 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
         case "copy":
             UIPasteboard.general.string = body["text"]
             UIAccessibility.post(notification: .announcement, argument: "已复制")
+        case "quote":
+            let text = body["text"] ?? ""
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            addReference?(
+                MessageAttachment(
+                    name: "对话摘录", mimeType: "text/plain", data: Data(text.utf8), reference: .init()))
         case "link":
             guard let raw = body["url"] else { return }
             if raw.hasPrefix("/") || raw.hasPrefix("./") {

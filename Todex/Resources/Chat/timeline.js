@@ -4,6 +4,25 @@ md.use(window.todexMath);
 // Markdown images are links: no third-party request runs when a message arrives.
 md.renderer.rules.image=(tokens,i)=>{const t=tokens[i],src=t.attrGet('src')||'';return md.validateLink(src)?'<a href="'+md.utils.escapeHtml(src)+'">▧ '+md.utils.escapeHtml(t.content||'图片')+'</a>':'[图片]';};
 const root=document.getElementById('timeline'),bottom=document.getElementById('bottom');
+const quote=document.createElement('button');
+quote.id='quote';quote.type='button';quote.textContent='添加到对话';quote.hidden=true;
+quote.setAttribute('aria-label','把选中的内容添加到对话');document.body.append(quote);
+function updateQuote(){
+ const s=getSelection();
+ if(!s||s.isCollapsed||!s.rangeCount||!root.contains(s.getRangeAt(0).commonAncestorContainer)||!s.toString().trim()){quote.hidden=true;return;}
+ const r=s.getRangeAt(0).getBoundingClientRect();
+ quote.dataset.text=s.toString();
+ quote.style.left=Math.max(8,Math.min(innerWidth-116,r.left+r.width/2-54))+'px';
+ quote.style.top=(r.bottom+8)+'px';
+ quote.hidden=false;
+}
+document.addEventListener('selectionchange',updateQuote);
+addEventListener('scroll',()=>{quote.hidden=true;},{passive:true});
+quote.onclick=()=>{
+ const text=quote.dataset.text||'';
+ if(text.trim())bridge({action:'quote',text});
+ getSelection()?.removeAllRanges();quote.hidden=true;
+};
 let initial=true;const openDetails=new Set();
 const activityLabel={tool:'工具活动',reasoning:'思考过程',status:'状态',assistant_progress:'进度',usage:'用量'};
 const isActivity=m=>Object.prototype.hasOwnProperty.call(activityLabel,m.category);

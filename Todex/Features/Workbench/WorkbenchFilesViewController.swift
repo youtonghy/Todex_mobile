@@ -437,31 +437,47 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     }
     private func referenceCurrent() {
         let path = descriptor.filePath ?? descriptor.path
-        if descriptor.filePath != nil, editor.selectedRange.length > 0,
-            let range = Range(editor.selectedRange, in: editor.text ?? "")
-        {
-            let text = editor.text ?? ""
-            let excerpt = String(text[range].prefix(2000))
-            let rendered =
-                ["md", "markdown"].contains((path as NSString).pathExtension.lowercased())
-                && modes.selectedSegmentIndex == 0 && !editingText
-            var reference = MessageAttachment.Reference(path: path)
-            if !rendered {
-                reference.lineStart = text[..<range.lowerBound].filter { $0 == "\n" }.count + 1
-                reference.lineEnd = text[..<range.upperBound].filter { $0 == "\n" }.count + 1
-            }
-            let baseName = (path as NSString).lastPathComponent
-            let name =
-                reference.lineStart.map {
-                    "\(baseName):\($0)\(reference.lineEnd != $0 ? "-\(reference.lineEnd ?? $0)" : "")"
-                } ?? "\(baseName) 摘录"
-            addReference(
-                MessageAttachment(name: name, mimeType: "text/plain", data: Data(excerpt.utf8), reference: reference))
-            info.text = "已添加引用到对话 · \(name)"
+        if descriptor.filePath != nil, editor.selectedRange.length > 0 {
+            addSelectionReference(editor.selectedRange)
         } else {
             insertReference("@\(path)")
             info.text = "已插入引用到对话草稿 · \(path)"
         }
+    }
+    private func addSelectionReference(_ selectedRange: NSRange) {
+        let path = descriptor.filePath ?? descriptor.path
+        guard descriptor.filePath != nil, selectedRange.length > 0,
+            let range = Range(selectedRange, in: editor.text ?? "")
+        else { return }
+        let text = editor.text ?? ""
+        let excerpt = String(text[range].prefix(2000))
+        let rendered =
+            ["md", "markdown"].contains((path as NSString).pathExtension.lowercased())
+            && modes.selectedSegmentIndex == 0 && !editingText
+        var reference = MessageAttachment.Reference(path: path)
+        if !rendered {
+            reference.lineStart = text[..<range.lowerBound].filter { $0 == "\n" }.count + 1
+            reference.lineEnd = text[..<range.upperBound].filter { $0 == "\n" }.count + 1
+        }
+        let baseName = (path as NSString).lastPathComponent
+        let name =
+            reference.lineStart.map {
+                "\(baseName):\($0)\(reference.lineEnd != $0 ? "-\(reference.lineEnd ?? $0)" : "")"
+            } ?? "\(baseName) 摘录"
+        addReference(
+            MessageAttachment(name: name, mimeType: "text/plain", data: Data(excerpt.utf8), reference: reference))
+        editor.selectedRange = NSRange(location: selectedRange.location, length: 0)
+        info.text = "已添加引用到对话 · \(name)"
+    }
+    func textView(
+        _ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]
+    ) -> UIMenu? {
+        guard textView === editor, descriptor.filePath != nil, range.length > 0 else { return nil }
+        let add = UIAction(title: "添加到对话", image: Theme.icon("text.quote", pointSize: 13)) {
+            [weak self] _ in
+            self?.addSelectionReference(range)
+        }
+        return UIMenu(children: suggestedActions + [add])
     }
     private func discardIfNeeded(_ action: @escaping @MainActor () -> Void) {
         guard !isSaving else {
