@@ -254,7 +254,6 @@ nonisolated struct MessageAttachment: Identifiable, Codable, Sendable, Equatable
         var path: String?
         var lineStart: Int?
         var lineEnd: Int?
-        var note = ""
         var location: String {
             guard let path, !path.isEmpty else { return "" }
             guard let lineStart else { return path }
@@ -271,8 +270,6 @@ nonisolated struct MessageAttachment: Identifiable, Codable, Sendable, Equatable
             var parts = ["[引用: \(location)]"]
             let excerpt = String(decoding: data, as: UTF8.self)
             if !excerpt.isEmpty { parts.append("Content:\n\(excerpt)") }
-            let note = reference.note.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !note.isEmpty { parts.append("批注: \(note)") }
             return ["type": "text", "text": .string(parts.joined(separator: "\n"))]
         }
         return ["type": "text", "text": .string("附件：\(name)\n\(String(decoding: data, as: UTF8.self))")]
