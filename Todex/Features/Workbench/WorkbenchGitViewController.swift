@@ -304,8 +304,9 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
         } else {
             let file = changedFiles[indexPath.row]
             content.text = file["path"].stringValue
-            content.secondaryText = "Git 状态：\(file["status"].stringValue) · 点击引用"
+            content.secondaryText = "Git 状态：\(file["status"].stringValue) · 查看差异"
             content.image = UIImage(systemName: "doc.text")
+            cell.accessoryType = .disclosureIndicator
         }
         cell.contentConfiguration = content
         return cell
@@ -313,10 +314,75 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         guard indexPath.section == 1 else { return }
-        let path = (workspace.path as NSString).appendingPathComponent(
-            changedFiles[indexPath.row]["path"].stringValue)
-        insertReference("@\(path)")
-        operationInfo.text = "已插入文件路径到对话草稿。"
+        showFileDiff(changedFiles[indexPath.row])
+    }
+    /// Per-file diff from the backend, rendered with added/removed line colors.
+    private func showFileDiff(_ file: JSONValue) {
+        let path = file["path"].stringValue
+        operationInfo.text = "正在读取 \(path) 的差异…"
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.http.request(
+                    .get, path: "/v2/git/diff",
+                    query: ["workspacePath": self.workspace.path, "path": path])
+                guard !Task.isCancelled else { return }
+                let diff = result["diff"].stringValue
+                let lines = diff.split(separator: "\n", omittingEmptySubsequences: false)
+                let added = lines.filter { $0.hasPrefix("+") && !$0.hasPrefix("+++") }.count
+                let removed = lines.filter { $0.hasPrefix("-") && !$0.hasPrefix("---") }.count
+                self.operationInfo.text = ""
+                WBUI.textSheet(
+                    on: self.presenter,
+                    title: "\((path as NSString).lastPathComponent)  +\(added) −\(removed)",
+                    text: diff,
+                    attributed: Self.attributedDiff(diff.isEmpty ? "没有可显示的差异（文件可能未更改或为二进制）。" : diff),
+                    actions: [
+                        ("插入文件引用", { [weak self] _ in
+                            guard let self else { return }
+                            self.insertReference(
+                                "@\((self.workspace.path as NSString).appendingPathComponent(path))")
+                            self.operationInfo.text = "已插入文件路径到对话草稿。"
+                        })
+                    ])
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.operationInfo.text = "差异读取失败：\(error.localizedDescription)"
+                WBUI.error(error, on: self.presenter)
+            }
+        }
+    }
+    private static func attributedDiff(_ diff: String) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let mono = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let monoBold = UIFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
+        for line in diff.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            var foreground: UIColor = .label
+            var background: UIColor? = nil
+            var font = mono
+            if text.hasPrefix("+++") || text.hasPrefix("---") {
+                foreground = .secondaryLabel
+                font = monoBold
+            } else if text.hasPrefix("+") {
+                foreground = .systemGreen
+                background = .systemGreen.withAlphaComponent(0.12)
+            } else if text.hasPrefix("-") {
+                foreground = .systemRed
+                background = .systemRed.withAlphaComponent(0.12)
+            } else if text.hasPrefix("@@") {
+                foreground = .systemIndigo
+            } else if text.hasPrefix("diff ") || text.hasPrefix("index ") || text.hasPrefix("Binary") {
+                foreground = .secondaryLabel
+                font = monoBold
+            }
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: font, .foregroundColor: foreground,
+            ]
+            if let background { attributes[.backgroundColor] = background }
+            result.append(NSAttributedString(string: text + "\n", attributes: attributes))
+        }
+        return result
     }
 
     private func showBranch(_ value: JSONValue) {

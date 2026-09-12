@@ -200,6 +200,11 @@ public final class APIClient: Sendable {
         try await queryRequest(path: "/v2/git/pull-request", query: ["workspacePath": workspacePath])
     }
 
+    public func gitDiff(workspacePath: String, path: String) async throws -> JSONValue {
+        try await queryRequest(
+            path: "/v2/git/diff", query: ["workspacePath": workspacePath, "path": path])
+    }
+
     public func browserFetch(url: String) async throws -> JSONValue {
         try await http.request(.post, path: "/v2/browser/fetch", body: ["url": .string(url)])
     }

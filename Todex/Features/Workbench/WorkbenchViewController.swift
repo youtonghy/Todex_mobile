@@ -591,13 +591,18 @@ enum WBUI {
     }
     static func textSheet(
         on host: UIViewController, title: String, text: String, editable: Bool = false,
+        attributed: NSAttributedString? = nil,
         actions: [(String, @MainActor (String) -> Void)] = []
     ) {
         let page = UIViewController()
         page.title = title
         page.view.backgroundColor = .systemBackground
         let editor = UITextView()
-        editor.text = text
+        if let attributed {
+            editor.attributedText = attributed
+        } else {
+            editor.text = text
+        }
         editor.isEditable = editable
         editor.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
         editor.adjustsFontForContentSizeCategory = true

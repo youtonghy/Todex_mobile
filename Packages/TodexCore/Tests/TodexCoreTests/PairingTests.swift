@@ -290,12 +290,12 @@ struct PairingTests {
         let encoded = Array(CryptoEncoding.encode(raw).utf8)
         let checksum = CryptoEncoding.encode(Data(SHA256.hash(data: raw)))
         let total = (encoded.count + 159) / 160
-        return (0..<total).map { index in
-            [
+        return (0..<total).map { index -> JSONValue in
+            let slice = encoded[(index * 160)..<min((index + 1) * 160, encoded.count)]
+            return [
                 "kind": "todex-pairing-chunk", "version": 1, "checksum": .string(checksum),
                 "index": .number(Double(index + 1)), "total": .number(Double(total)),
-                "data": .string(
-                    String(decoding: encoded[(index * 160)..<min((index + 1) * 160, encoded.count)], as: UTF8.self)),
+                "data": .string(String(decoding: slice, as: UTF8.self)),
             ]
         }
     }

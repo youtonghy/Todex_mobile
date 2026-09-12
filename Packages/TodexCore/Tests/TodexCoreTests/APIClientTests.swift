@@ -458,6 +458,10 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
             query: ["workspacePath": workspacePath]
         ) { try await $0.gitPullRequest(workspacePath: workspacePath) },
         .init(
+            name: "gitDiff", method: "GET", path: "/v2/git/diff",
+            query: ["workspacePath": workspacePath, "path": "src/文件 &+?#%.swift"]
+        ) { try await $0.gitDiff(workspacePath: workspacePath, path: "src/文件 &+?#%.swift") },
+        .init(
             name: "browserFetch", method: "POST", path: "/v2/browser/fetch",
             body: ["url": "https://example.test/a?x=1&y=2"]
         ) { try await $0.browserFetch(url: "https://example.test/a?x=1&y=2") },
