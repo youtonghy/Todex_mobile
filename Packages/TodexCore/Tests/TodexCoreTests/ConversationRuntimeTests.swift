@@ -201,6 +201,26 @@ struct ConversationRuntimeTests {
         #expect(runtime.status == "interrupted")
     }
 
+    @Test func narrationSplitsIntoSegmentsAroundSteps() throws {
+        // conversation-runtime.test.cjs: assistant narration splits at steps.
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(try event(2, "message.delta", #"{"turnId":"t","text":"First. "}"#))
+        runtime.ingest(
+            try event(
+                3, "tool.started",
+                #"{"arguments":{"command":"ls"},"block":{"category":"tool","id":"tool-1","turnId":"t","phase":"started"}}"#
+            ))
+        runtime.ingest(try event(4, "message.delta", #"{"turnId":"t","text":"Second."}"#))
+        runtime.ingest(try event(5, "message.delta", #"{"turnId":"t","text":" more"}"#))
+        runtime.ingest(try event(6, "turn.completed", #"{"turnId":"t"}"#))
+        let assistant = runtime.messages.filter { $0.role == "assistant" }
+        #expect(assistant.map(\.text) == ["Second. more", "First. "])
+        #expect(Set(assistant.map(\.id)).count == 2)
+        #expect(runtime.messages.contains { $0.category == "tool" })
+        #expect(runtime.status == "completed")
+    }
+
     @Test func codexCommentaryKeepsItsAdvertisedCategoryAcrossDeltas() throws {
         // codex.rs: item/started supplies phase; item/agentMessage/delta has none.
         var runtime = ConversationRuntime(conversationId: "c")

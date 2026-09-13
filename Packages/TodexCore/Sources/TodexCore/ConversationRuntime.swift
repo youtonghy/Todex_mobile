@@ -73,6 +73,10 @@ public struct ConversationRuntime: Sendable {
     private var pendingEvents: [Int: BufferedEvent] = [:]
     private var pendingBytes = 0
     private var replayComplete = false
+    /// The shared assistant stream splits into a new segment whenever activity
+    /// lands between two chunks, so narration interleaves with folded steps.
+    private var assistantSegment = 0
+    private var assistantInterrupted = false
     private var latestTurnId = ""
     private var startedTurns: Set<String> = []
     private var messageCategories: [String: String] = [:]
@@ -133,6 +137,8 @@ public struct ConversationRuntime: Sendable {
             startedTurns.insert(explicitTurn)
             latestTurnId = explicitTurn
             activeTurnId = explicitTurn
+            assistantSegment = 0
+            assistantInterrupted = false
             status = "running"
             pendingPermissions.removeAll()
             requestedConfig = Self.objectOrNull(payload["requestedPermissions"])
@@ -276,7 +282,7 @@ public struct ConversationRuntime: Sendable {
         let family = category == "assistant_final" || category == "assistant_progress" ? "assistant" : category
         let contentIndex = payload["delta"]["contentIndex"].doubleValue ?? payload["delta"]["content_index"].doubleValue
         let fallback = contentIndex.map { "content-\($0)" } ?? "current"
-        let streamID: String
+        var streamID: String
         if category == "user" {
             streamID = nativeID.isEmpty ? event.eventId : nativeID
         } else if category == "approval" {
@@ -288,6 +294,13 @@ public struct ConversationRuntime: Sendable {
                 .string(contentIndex == nil ? event.eventId : fallback))
         } else {
             streamID = nativeID.isEmpty ? fallback : nativeID
+        }
+        if family == "assistant", nativeID.isEmpty {
+            if assistantInterrupted {
+                assistantSegment += 1
+                assistantInterrupted = false
+            }
+            streamID += "#seg\(assistantSegment)"
         }
         var id = Self.identity([conversationId, turnId, family, streamID])
         var index = messages.firstIndex { $0.id == id }
@@ -343,6 +356,7 @@ public struct ConversationRuntime: Sendable {
             role: category == "user" ? "user" : category == "assistant_final" ? "assistant" : "system",
             category: category, text: nextText, status: messageStatus, detail: detail)
         if let index { messages[index] = entry } else { messages.insert(entry, at: 0) }
+        if family != "assistant", category != "user" { assistantInterrupted = true }
     }
 
     private mutating func projectConfiguration(_ payload: JSONValue, type: String) {
