@@ -135,6 +135,17 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 equalTo: composer.topAnchor, constant: composer.textContainerInset.top),
         ])
         inputStack.addArrangedSubview(composer)
+        let expand = Theme.iconButton("arrow.up.left.and.arrow.down.right", pointSize: 12)
+        expand.accessibilityLabel = "全屏编辑"
+        expand.accessibilityIdentifier = "chat.composer.expand"
+        expand.addAction(
+            UIAction { [weak self] _ in self?.presentFullscreenComposer() }, for: .touchUpInside)
+        glass.contentView.addSubview(expand)
+        expand.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            expand.trailingAnchor.constraint(equalTo: composer.trailingAnchor, constant: -5),
+            expand.topAnchor.constraint(equalTo: composer.topAnchor, constant: 2),
+        ])
         let attach = Theme.iconButton("plus")
         attach.accessibilityLabel = "附件"
         attach.showsMenuAsPrimaryAction = true
@@ -180,6 +191,20 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         timeline.view.setContentHuggingPriority(.defaultLow, for: .vertical)
         observer = session.observe { [weak self] in self?.reload() }
         reload()
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // Keep the first lines clear of the floating expand button.
+        let width = composer.textContainer.size.width
+        composer.textContainer.exclusionPaths =
+            width > 96
+            ? [
+                UIBezierPath(
+                    rect: CGRect(
+                        x: width - 30, y: -composer.textContainerInset.top, width: 38,
+                        height: 36))
+            ]
+            : []
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -481,6 +506,27 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         page.navigationItem.leftBarButtonItem = UIBarButtonItem(
             systemItem: .done, primaryAction: UIAction { [weak nav] _ in nav?.dismiss(animated: true) })
         present(nav, animated: true)
+    }
+    /// Full-screen editor shares the same draft: text edits stream back through
+    /// `onChange`, while attachments and skills stay untouched. `onFinish`
+    /// re-renders the inline composer so reference tokens regain styling.
+    private func presentFullscreenComposer() {
+        hideSuggestions()
+        let page = ComposerEditorViewController(
+            text: draft.text,
+            canSend: { [weak self] in self?.canSend ?? false },
+            onChange: { [weak self] text in
+                guard let self else { return }
+                var value = self.draft
+                value.text = text
+                self.session.drafts[self.conversation.id] = value
+                self.session.saveSoon()
+            },
+            onFinish: { [weak self] in self?.reload() },
+            onSend: { [weak self] in self?.submit() })
+        let nav = UINavigationController(rootViewController: page)
+        nav.modalPresentationStyle = .fullScreen
+        WBUI.presentModal(nav, on: self)
     }
     // MARK: - Inline suggestions (/ commands, @ file mentions, # skills)
     private struct Suggestion {
@@ -1079,5 +1125,95 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         var value = draft
         value.attachments.append(.init(name: name, mimeType: mime, data: data))
         setDraft(value)
+    }
+}
+
+/// Full-screen text editor opened from the corner button on the inline
+/// composer. Edits stream back through `onChange` so the shared draft stays in
+/// sync; `onFinish` runs after dismissal and `onSend` after a successful send.
+final class ComposerEditorViewController: UIViewController, UITextViewDelegate {
+    private let editor = UITextView()
+    private let placeholder = Theme.label("描述你的任务", color: .placeholderText)
+    private let canSend: () -> Bool
+    private let onChange: (String) -> Void
+    private let onFinish: () -> Void
+    private let onSend: () -> Void
+    private var sendItem: UIBarButtonItem?
+
+    init(
+        text: String, canSend: @escaping () -> Bool, onChange: @escaping (String) -> Void,
+        onFinish: @escaping () -> Void, onSend: @escaping () -> Void
+    ) {
+        self.canSend = canSend
+        self.onChange = onChange
+        self.onFinish = onFinish
+        self.onSend = onSend
+        super.init(nibName: nil, bundle: nil)
+        editor.text = text
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "编辑消息"
+        view.backgroundColor = Theme.background
+        editor.font = .preferredFont(forTextStyle: .body)
+        editor.adjustsFontForContentSizeCategory = true
+        editor.backgroundColor = .clear
+        editor.delegate = self
+        editor.alwaysBounceVertical = true
+        editor.accessibilityLabel = "消息输入框"
+        editor.accessibilityIdentifier = "chat.composer.fullscreen"
+        editor.textContainerInset = .init(top: 10, left: 6, bottom: 10, right: 6)
+        let dismiss = UIToolbar()
+        dismiss.items = [
+            .flexibleSpace(),
+            UIBarButtonItem(
+                title: "收起键盘", image: nil,
+                primaryAction: UIAction { [weak editor] _ in editor?.resignFirstResponder() }),
+        ]
+        dismiss.sizeToFit()
+        editor.inputAccessoryView = dismiss
+        placeholder.isUserInteractionEnabled = false
+        editor.addSubview(placeholder)
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            placeholder.leadingAnchor.constraint(
+                equalTo: editor.leadingAnchor,
+                constant: editor.textContainerInset.left + editor.textContainer.lineFragmentPadding),
+            placeholder.topAnchor.constraint(
+                equalTo: editor.topAnchor, constant: editor.textContainerInset.top),
+        ])
+        placeholder.isHidden = !editor.text.isEmpty
+        WBUI.installStack(in: view, views: [editor], keyboard: true)
+        let send = UIBarButtonItem(
+            image: Theme.icon("arrow.up", pointSize: 15), style: .prominent,
+            target: self, action: #selector(sendTapped))
+        send.accessibilityLabel = "发送"
+        send.isEnabled = canSend()
+        sendItem = send
+        navigationItem.rightBarButtonItems = [
+            UIBarButtonItem(
+                systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.finish() }),
+            send,
+        ]
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        editor.becomeFirstResponder()
+    }
+    func textViewDidChange(_ textView: UITextView) {
+        placeholder.isHidden = !textView.text.isEmpty
+        sendItem?.isEnabled = canSend()
+        onChange(textView.text ?? "")
+    }
+    @objc private func sendTapped() {
+        guard canSend() else { return }
+        dismiss(animated: true) { [onFinish, onSend] in
+            onFinish()
+            onSend()
+        }
+    }
+    private func finish() {
+        dismiss(animated: true, completion: onFinish)
     }
 }
