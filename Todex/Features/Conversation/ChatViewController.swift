@@ -4,13 +4,14 @@ import TodexCore
 import UIKit
 import UniformTypeIdentifiers
 
-final class ChatViewController: UIViewController, UITextViewDelegate, UIDocumentPickerDelegate,
-    PHPickerViewControllerDelegate
+final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureRecognizerDelegate,
+    UIDocumentPickerDelegate, PHPickerViewControllerDelegate
 {
     private let session: AppSession
     private let conversation: ConversationManifest
     private let timeline = TimelineViewController()
     private let composer = UITextView()
+    private let placeholder = Theme.label("描述你的任务", color: .placeholderText)
     private let status = Theme.label("正在同步…", style: .caption1, color: .secondaryLabel)
     private let chips = UIStackView()
     private let alerts = UIStackView()
@@ -105,9 +106,32 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         composer.accessibilityIdentifier = "chat.composer"
         composer.textContainerInset = .init(top: 5, left: 6, bottom: 5, right: 6)
         composer.heightAnchor.constraint(equalToConstant: 75).isActive = true
+        // Only claim taps that land on a reference token. If this recognizer
+        // were allowed to recognize ordinary taps it would pre-empt the text
+        // view's own tap handling and the keyboard would never appear.
         let locateTap = UITapGestureRecognizer(target: self, action: #selector(composerTapped(_:)))
         locateTap.cancelsTouchesInView = false
+        locateTap.delegate = self
         composer.addGestureRecognizer(locateTap)
+        let dismiss = UIToolbar()
+        dismiss.items = [
+            .flexibleSpace(),
+            UIBarButtonItem(
+                title: "收起键盘", image: nil,
+                primaryAction: UIAction { [weak composer] _ in composer?.resignFirstResponder() }),
+        ]
+        dismiss.sizeToFit()
+        composer.inputAccessoryView = dismiss
+        placeholder.isUserInteractionEnabled = false
+        composer.addSubview(placeholder)
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            placeholder.leadingAnchor.constraint(
+                equalTo: composer.leadingAnchor,
+                constant: composer.textContainerInset.left + composer.textContainer.lineFragmentPadding),
+            placeholder.topAnchor.constraint(
+                equalTo: composer.topAnchor, constant: composer.textContainerInset.top),
+        ])
         inputStack.addArrangedSubview(composer)
         let attach = Theme.iconButton("plus")
         attach.accessibilityLabel = "附件"
@@ -213,6 +237,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         session.drafts[conversation.id] = value
         renderedDraft = value
         session.saveSoon()
+        placeholder.isHidden = !textView.text.isEmpty
         sendButton.isEnabled = canSend
         updateSuggestions()
     }
@@ -220,20 +245,29 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         resetTypingAttributes()
         updateSuggestions()
     }
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer is UITapGestureRecognizer else { return true }
+        return referenceName(at: gestureRecognizer.location(in: composer)) != nil
+    }
     @objc private func composerTapped(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended,
-              let range = composer.characterRange(at: gesture.location(in: composer))
+              let name = referenceName(at: gesture.location(in: composer))
         else { return }
+        locateReference(named: name)
+    }
+    /// Name inside the `[引用:…]` token under `point` (in composer coordinates), if any.
+    private func referenceName(at point: CGPoint) -> String? {
+        guard let range = composer.characterRange(at: point) else { return nil }
         let location = composer.offset(from: composer.beginningOfDocument, to: range.start)
         let text = draft.text
-        guard let regex = try? NSRegularExpression(pattern: #"\[引用:([^\]\n]+)\]"#) else { return }
+        guard let regex = try? NSRegularExpression(pattern: #"\[引用:([^\]\n]+)\]"#) else { return nil }
         for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
             guard NSLocationInRange(location, match.range),
                   let nameRange = Range(match.range(at: 1), in: text)
             else { continue }
-            locateReference(named: String(text[nameRange]))
-            return
+            return String(text[nameRange])
         }
+        return nil
     }
     private func locateReference(named name: String) {
         guard let reference = draft.attachments
@@ -295,6 +329,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
             composer.attributedText = styledComposerText(draft.text)
             renderedDraft = draft
         }
+        placeholder.isHidden = !draft.text.isEmpty
         composer.accessibilityHint = draft.isEmpty ? "描述你的任务" : nil
         sendButton.configuration?.title = running ? "加入队列" : "发送"
         sendButton.isEnabled = canSend
@@ -382,6 +417,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         updateSuggestions()
     }
     private func submit() {
+        if runClientCommand() { return }
         guard canSend else { return }
         let value = draft
         submitting = true
@@ -407,22 +443,63 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
             } catch { showError(error) }
         }
     }
+    /// Slash commands the client owns instead of forwarding to the agent,
+    /// mirroring the desktop command table for unified conversations.
+    /// Returns true when the draft named such a command and was consumed.
+    private func runClientCommand() -> Bool {
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard draft.attachments.isEmpty, draft.skills.isEmpty, text.hasPrefix("/"),
+            let token = text.split(whereSeparator: \.isWhitespace).first
+        else { return false }
+        switch token.lowercased() {
+        case "/memory", "/memories", "/subagents":
+            openAuxiliary()
+        case "/resume":
+            let supported =
+                session.provider(for: conversation)?.capabilities["controlActions"].arrayValue
+                .compactMap(\.optionalString) ?? []
+            if supported.contains("resume") {
+                performControl("resume")
+            } else {
+                showNotice(
+                    title: "恢复对话", message: "请发送明确的后续消息继续对话；当前 Agent 不支持独立恢复操作。")
+            }
+        case "/compact", "/retry":
+            performControl(String(token.dropFirst()))
+        default:
+            return false
+        }
+        setDraft(ComposerDraft())
+        return true
+    }
+    private func openAuxiliary() {
+        let page = AuxiliaryViewController(session: session, conversation: conversation)
+        let nav = UINavigationController(rootViewController: page)
+        page.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            systemItem: .done, primaryAction: UIAction { [weak nav] _ in nav?.dismiss(animated: true) })
+        present(nav, animated: true)
+    }
     // MARK: - Inline suggestions (/ commands, @ file mentions)
     private struct Suggestion {
         let title: String
         let detail: String
         let apply: () -> Void
     }
+    /// Commands handled locally in `runClientCommand`; provider-advertised
+    /// commands with the same name are shadowed, matching the desktop table.
+    private static let clientCommands: Set<String> = [
+        "/memory", "/memories", "/subagents", "/compact", "/retry", "/resume",
+    ]
     private func updateSuggestions() {
         let text = composer.text ?? ""
         let trimmed = text.drop(while: \.isWhitespace)
         if trimmed.hasPrefix("/") {
             let token = String(trimmed.dropFirst().prefix(while: { !$0.isWhitespace }))
+            if session.commands[conversation.provider + ":" + conversation.workspace] == nil {
+                loadCommands()
+            }
             let items = slashSuggestions(matching: "/" + token)
             if items.isEmpty {
-                if session.commands[conversation.provider + ":" + conversation.workspace] == nil {
-                    loadCommands()
-                }
                 if let trigger = mentionTrigger() {
                     fetchMentionSuggestions(trigger)
                 } else {
@@ -454,17 +531,32 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIDocument
         let supported =
             session.provider(for: conversation)?.capabilities["controlActions"].arrayValue
             .compactMap(\.optionalString) ?? []
-        for (command, action, detail) in [("/compact", "compact", "压缩上下文，保留关键进展"), ("/retry", "retry", "重试上一轮")]
+        for (command, action, detail) in [
+            ("/compact", "compact", "压缩上下文，保留关键进展"), ("/retry", "retry", "重试上一轮"),
+            ("/resume", "resume", "恢复对话"),
+        ]
         where supported.contains(action) && command.hasPrefix(lowered) {
             items.append(
                 Suggestion(title: command, detail: detail) { [weak self] in
                     self?.applyControlCommand(action)
                 })
         }
+        for (command, detail) in [
+            ("/memory", "查看当前对话的 Agent 记忆"), ("/memories", "查看当前对话的 Agent 记忆"),
+            ("/subagents", "查看当前对话的子代理运行"),
+        ] where command.hasPrefix(lowered) {
+            items.append(
+                Suggestion(title: command, detail: detail) { [weak self] in
+                    self?.applyTextSuggestion("")
+                    self?.openAuxiliary()
+                })
+        }
         for item in session.commands[conversation.provider + ":" + conversation.workspace] ?? [] {
             let name = item["name"].stringValue
             let command = "/" + name
-            guard !name.isEmpty, command.lowercased().hasPrefix(lowered), command != "/compact" else { continue }
+            guard !name.isEmpty, command.lowercased().hasPrefix(lowered),
+                !Self.clientCommands.contains(command.lowercased())
+            else { continue }
             let invocation = item["invocation"].optionalString ?? command
             let hint = item["argumentHint"].optionalString.map { " \($0)" } ?? ""
             items.append(

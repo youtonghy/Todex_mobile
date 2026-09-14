@@ -9,6 +9,8 @@ final class AuxiliaryViewController: SettingsListController {
     private let session: AppSession
     private let conversation: ConversationManifest
     private var observer: UUID?
+    private var syncing = false
+    private var syncError: String?
 
     init(session: AppSession, conversation: ConversationManifest) {
         self.session = session
@@ -19,11 +21,45 @@ final class AuxiliaryViewController: SettingsListController {
     override func viewDidLoad() {
         super.viewDidLoad()
         observer = session.observe { [weak self] in self?.render() }
+        let refresh = UIBarButtonItem(
+            image: UIImage(systemName: "arrow.clockwise"),
+            primaryAction: UIAction { [weak self] _ in self?.sync() })
+        refresh.accessibilityIdentifier = "aux.refresh"
+        refresh.accessibilityLabel = "同步记录"
+        navigationItem.rightBarButtonItem = refresh
+        refreshControl = UIRefreshControl()
+        refreshControl?.addAction(UIAction { [weak self] _ in self?.sync() }, for: .valueChanged)
         render()
+        if session.runtimes[conversation.id]?.readyForActions != true { sync() }
     }
 
     isolated deinit {
         if let observer { session.removeObserver(observer) }
+    }
+
+    /// Re-reads the conversation journal so subagent runs and memory entries
+    /// reflect the authoritative backend record, not just events seen live.
+    private func sync() {
+        guard !syncing else { return }
+        guard session.isConnected else {
+            refreshControl?.endRefreshing()
+            syncError = session.lastError ?? "尚未连接后端"
+            render()
+            return
+        }
+        syncing = true
+        syncError = nil
+        render()
+        let id = conversation.id
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                syncing = false
+                refreshControl?.endRefreshing()
+                render()
+            }
+            do { try await session.recover(id) } catch { syncError = error.localizedDescription }
+        }
     }
 
     private static let subagentStatus: [String: String] = [
@@ -37,6 +73,31 @@ final class AuxiliaryViewController: SettingsListController {
     private func render() {
         let runtime = session.runtimes[conversation.id]
         var sections: [SettingsSection] = []
+        var syncRows: [SettingsRow] = []
+        if syncing {
+            syncRows.append(
+                SettingsRow(
+                    title: "正在同步对话记录…", symbol: "arrow.triangle.2.circlepath",
+                    id: "aux.syncing", enabled: false, activity: true))
+        } else if runtime?.readyForActions != true {
+            syncRows.append(
+                SettingsRow(
+                    title: "同步对话记录",
+                    detail: session.isConnected ? "重新读取后端记录" : "尚未连接后端",
+                    symbol: "arrow.triangle.2.circlepath", id: "aux.sync",
+                    enabled: session.isConnected
+                ) { [weak self] in self?.sync() })
+        }
+        if let syncError {
+            syncRows.append(
+                SettingsRow(
+                    title: syncError, detail: "点按重试", symbol: "exclamationmark.triangle",
+                    id: "aux.sync.error", color: .systemRed
+                ) { [weak self] in self?.sync() })
+        }
+        if !syncRows.isEmpty {
+            sections.append(SettingsSection(title: "同步", rows: syncRows))
+        }
         let agents = runtime?.subagents ?? []
         sections.append(
             SettingsSection(
@@ -62,7 +123,8 @@ final class AuxiliaryViewController: SettingsListController {
             SettingsSection(
                 title: "记忆（\(memories.count)）",
                 footer: memories.isEmpty
-                    ? "这里只显示 Agent 已提供的记忆内容，配置开关不代表支持读取内容。" : nil,
+                    ? "这里显示 Agent 写入的记忆内容（memory 事件）。当前没有 Agent 提供过记忆记录；Codex /memories 等记忆配置需经独立的 codex.local 适配器，统一对话尚不支持。"
+                    : nil,
                 rows:
                     memories.isEmpty
                     ? [SettingsRow(title: "当前 Agent 尚未提供可读取的记忆记录", id: "aux.memory.empty", enabled: false)]
