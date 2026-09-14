@@ -155,6 +155,50 @@ public struct ProviderDescriptor: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
+/// The kanban task wire record shared with the desktop and web clients.
+/// Timestamps are Unix milliseconds; `deletedAt` marks a tombstone so task
+/// deletions propagate to other devices instead of resurrecting on merge.
+public struct KanbanTaskRecord: Codable, Sendable, Identifiable, Equatable {
+    public var id: String
+    public var tenantId: String
+    public var workspaceId: String
+    public var title: String
+    public var description: String?
+    public var dueDate: String?
+    public var status: String
+    public var conversationId: String?
+    public var createdAt: Int
+    public var updatedAt: Int
+    public var deletedAt: Int?
+
+    /// The backend replaces tenantId with the authenticated owner when merging.
+    public init(
+        id: String,
+        tenantId: String = "local",
+        workspaceId: String,
+        title: String,
+        description: String? = nil,
+        dueDate: String? = nil,
+        status: String = "planned",
+        conversationId: String? = nil,
+        createdAt: Int,
+        updatedAt: Int,
+        deletedAt: Int? = nil
+    ) {
+        self.id = id
+        self.tenantId = tenantId
+        self.workspaceId = workspaceId
+        self.title = title
+        self.description = description
+        self.dueDate = dueDate
+        self.status = status
+        self.conversationId = conversationId
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
+    }
+}
+
 /// A persisted journal event, distinct from the outer WebSocket event envelope.
 public struct ConversationEvent: Codable, Sendable, Equatable {
     public var schemaVersion: Int

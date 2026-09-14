@@ -182,9 +182,10 @@ extension SessionSnapshot {
     }
 }
 
-/// A local task-plan entry, mirroring the desktop kanban board: tasks live in
-/// the namespaced snapshot, independent of the backend, and may link to a
-/// conversation of the same workspace.
+/// A task-plan entry shared with the desktop and web kanban boards. The local
+/// snapshot already lives in a per-backend namespace, so records carry no
+/// connection tag; `deletedAt` is a tombstone that lets deletions propagate
+/// through sync instead of resurrecting from another device's stale copy.
 nonisolated struct KanbanTask: Identifiable, Codable, Sendable, Equatable {
     enum Status: String, Codable, CaseIterable, Sendable {
         case planned
@@ -209,9 +210,12 @@ nonisolated struct KanbanTask: Identifiable, Codable, Sendable, Equatable {
     var workspaceId: String
     var title: String
     var status: Status
+    var description: String?
+    var dueDate: String?
     var conversationId: String?
     var createdAt: Int
     var updatedAt: Int
+    var deletedAt: Int?
     init(workspaceId: String, title: String) {
         let now = Int(Date().timeIntervalSince1970 * 1_000)
         self.init(
@@ -225,6 +229,23 @@ nonisolated struct KanbanTask: Identifiable, Codable, Sendable, Equatable {
         self.status = status
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+    init(record: KanbanTaskRecord) {
+        self.init(
+            id: record.id, workspaceId: record.workspaceId, title: record.title,
+            status: Status(rawValue: record.status) ?? .planned,
+            createdAt: record.createdAt, updatedAt: record.updatedAt)
+        description = record.description
+        dueDate = record.dueDate
+        conversationId = record.conversationId
+        deletedAt = record.deletedAt
+    }
+    var wireRecord: KanbanTaskRecord {
+        KanbanTaskRecord(
+            id: id, workspaceId: workspaceId, title: title,
+            description: description, dueDate: dueDate, status: status.rawValue,
+            conversationId: conversationId, createdAt: createdAt, updatedAt: updatedAt,
+            deletedAt: deletedAt)
     }
 }
 

@@ -60,6 +60,10 @@ extension RealtimeClient: SessionSocket {}
     private var persistenceTask: Task<Void, Never>?
     private var stateLoadTask: Task<Void, Never>?
     private var changeTask: Task<Void, Never>?
+    private var kanbanPushTask: Task<Void, Never>?
+    // A 404 marks a backend older than the kanban endpoints; stay local-only
+    // until the next refresh re-probes instead of failing every mutation.
+    private var kanbanSyncSupported = true
     private struct Recovery {
         let token: UUID
         let task: Task<Void, any Error>
@@ -420,9 +424,11 @@ extension RealtimeClient: SessionSocket {}
         let current = revision
         let request = UUID()
         refreshRevision = request
+        kanbanSyncSupported = true
         async let workspaceResult = api.workspaces()
         async let conversationResult = api.conversations()
         async let providerResult = api.providers()
+        async let taskResult = remoteKanbanTasks()
         let (workspaces, conversations, providers) = try await (workspaceResult, conversationResult, providerResult)
         try checkRevision(current)
         guard refreshRevision == request else { return }
@@ -431,6 +437,11 @@ extension RealtimeClient: SessionSocket {}
         self.workspaces = workspaces
         self.conversations = conversations
         self.providers = providers
+        if let remoteTasks = await taskResult {
+            mergeRemoteKanbanTasks(remoteTasks)
+            // Local additions and tombstones the backend lacks still go up.
+            scheduleKanbanPush()
+        }
         for conversation in conversations
         where oldScopes[conversation.id] != nil && oldScopes[conversation.id] != conversationScope(conversation) {
             readSequences.removeValue(forKey: conversation.id)
@@ -1035,10 +1046,13 @@ extension RealtimeClient: SessionSocket {}
             persist()
         }
     }
-    // MARK: Task plan (local, per-backend snapshot; mirrors the desktop board)
-    var taskConversationIDs: Set<String> { Set(tasks.compactMap(\.conversationId)) }
+    // MARK: Task plan (synced through the backend; local snapshot is the cache)
+    private static let kanbanTombstoneRetention = 30 * 24 * 60 * 60 * 1_000
+    var taskConversationIDs: Set<String> {
+        Set(tasks.filter { $0.deletedAt == nil }.compactMap(\.conversationId))
+    }
     func tasks(for workspaceId: String) -> [KanbanTask] {
-        tasks.filter { $0.workspaceId == workspaceId }.sorted { left, right in
+        tasks.filter { $0.workspaceId == workspaceId && $0.deletedAt == nil }.sorted { left, right in
             let a = KanbanTask.Status.allCases.firstIndex(of: left.status) ?? 0
             let b = KanbanTask.Status.allCases.firstIndex(of: right.status) ?? 0
             return a == b
@@ -1047,7 +1061,8 @@ extension RealtimeClient: SessionSocket {}
     }
     @discardableResult func addTask(workspaceId: String, title: String) -> KanbanTask? {
         let name = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
-        guard !workspaceId.isEmpty, !name.isEmpty, tasks.count < 500 else { return nil }
+        let activeCount = tasks.filter { $0.deletedAt == nil }.count
+        guard !workspaceId.isEmpty, !name.isEmpty, activeCount < 500 else { return nil }
         let task = KanbanTask(workspaceId: workspaceId, title: name)
         tasks.append(task)
         tasksChanged()
@@ -1064,20 +1079,82 @@ extension RealtimeClient: SessionSocket {}
     func attachTask(_ id: String, conversationId: String?) {
         mutateTask(id) { $0.conversationId = conversationId }
     }
+    /// Deletion writes a tombstone so the remove propagates through sync; the
+    /// record is pruned once the tombstone outlives the retention window.
     func removeTask(_ id: String) {
-        guard tasks.contains(where: { $0.id == id }) else { return }
-        tasks.removeAll { $0.id == id }
-        tasksChanged()
+        mutateTask(id) { task in
+            guard task.deletedAt == nil else { return }
+            task.deletedAt = Int(Date().timeIntervalSince1970 * 1_000)
+        }
     }
     private func mutateTask(_ id: String, _ change: (inout KanbanTask) -> Void) {
-        guard let index = tasks.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = tasks.firstIndex(where: { $0.id == id && $0.deletedAt == nil }) else { return }
         change(&tasks[index])
         tasks[index].updatedAt = Int(Date().timeIntervalSince1970 * 1_000)
         tasksChanged()
     }
     private func tasksChanged() {
+        let cutoff = Int(Date().timeIntervalSince1970 * 1_000) - Self.kanbanTombstoneRetention
+        tasks.removeAll { task in task.deletedAt.map { $0 < cutoff } ?? false }
         saveSoon()
         changed(immediate: true)
+        scheduleKanbanPush()
+    }
+    /// Pull-merge by task id keeping the newest updatedAt; tombstones count as
+    /// ordinary writes so a remote delete beats an older local copy.
+    private func mergeRemoteKanbanTasks(_ remote: [KanbanTaskRecord]) {
+        var changed = false
+        for record in remote {
+            let task = KanbanTask(record: record)
+            guard let index = tasks.firstIndex(where: { $0.id == task.id }) else {
+                tasks.append(task)
+                changed = true
+                continue
+            }
+            if task.updatedAt >= tasks[index].updatedAt, tasks[index] != task {
+                tasks[index] = task
+                changed = true
+            }
+        }
+        if changed { tasksChanged() }
+    }
+    /// Kanban failures stay off the main refresh: a 404 marks the backend as
+    /// pre-sync, anything else just waits for the next refresh or push.
+    private func remoteKanbanTasks() async -> [KanbanTaskRecord]? {
+        guard let api else { return nil }
+        do {
+            return try await api.kanbanTasks()
+        } catch let error as TodexError {
+            if case .server(let code, _) = error, code == "404" {
+                kanbanSyncSupported = false
+            }
+            return nil
+        } catch {
+            return nil
+        }
+    }
+    private func scheduleKanbanPush() {
+        guard kanbanSyncSupported, isConnected, api != nil else { return }
+        kanbanPushTask?.cancel()
+        kanbanPushTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(900)) } catch { return }
+            await self?.pushKanbanTasks()
+        }
+    }
+    private func pushKanbanTasks() async {
+        guard let api, kanbanSyncSupported, isConnected else { return }
+        let current = revision
+        do {
+            let remote = try await api.replaceKanbanTasks(tasks.map(\.wireRecord))
+            // A backend switch mid-flight must not merge stale tasks into the
+            // new connection's namespace.
+            try checkRevision(current)
+            mergeRemoteKanbanTasks(remote)
+        } catch let error as TodexError {
+            if case .server(let code, _) = error, code == "404" {
+                kanbanSyncSupported = false
+            }
+        } catch {}
     }
 
     func persist() {

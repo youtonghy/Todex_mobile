@@ -132,6 +132,23 @@ public final class APIClient: Sendable {
             ])
     }
 
+    /// Kanban board state shared across clients of this backend.
+    public func kanbanTasks() async throws -> [KanbanTaskRecord] {
+        let value = try await http.request(path: "/v2/kanban/tasks")
+        return try value["tasks"].decoded([KanbanTaskRecord].self)
+    }
+
+    /// Tombstones ride along in the payload so deletions propagate; the backend
+    /// merges by (tenant, id) keeping the newest updatedAt.
+    public func replaceKanbanTasks(_ tasks: [KanbanTaskRecord]) async throws -> [KanbanTaskRecord] {
+        let value = try await http.request(
+            .put, path: "/v2/kanban/tasks",
+            body: [
+                "tasks": try JSONValue(encoding: tasks)
+            ])
+        return try value["tasks"].decoded([KanbanTaskRecord].self)
+    }
+
     public func deleteWorkspace(id: String) async throws -> JSONValue {
         try await http.request(.delete, path: "/v2/workspaces/\(HTTPClient.segment(id))")
     }
