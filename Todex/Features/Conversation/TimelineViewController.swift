@@ -46,10 +46,28 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
         web.evaluateJavaScript(
             "document.querySelector('[data-id=\\'\(escaped)\\']')?.scrollIntoView({block:'center',behavior:'smooth'})")
     }
+    /// Display name for a tool call: the provider-reported name when present,
+    /// the command itself for shell executions, otherwise a generic label.
+    private static func toolName(of message: TimelineMessage) -> String {
+        guard message.category == "tool" else { return "" }
+        let detail = message.detail
+        let candidates = [
+            detail["toolName"], detail["tool_name"],
+            detail["toolCall"]["name"], detail["tool_call"]["name"],
+            detail["tool"]["name"], detail["tool"]["title"], detail["tool"],
+            detail["title"], detail["name"],
+            detail["item"]["name"], detail["item"]["toolName"], detail["item"]["tool_name"],
+            detail["command"], detail["item"]["command"],
+        ]
+        return candidates.lazy.compactMap(\.optionalString).first { !$0.isEmpty } ?? "工具调用"
+    }
     private func render() {
         guard loaded else { return }
         let values: [[String: Any]] = messages.reversed().map {
-            ["id": $0.id, "role": $0.role, "category": $0.category, "text": $0.text, "status": $0.status]
+            [
+                "id": $0.id, "role": $0.role, "category": $0.category, "text": $0.text,
+                "status": $0.status, "tool": Self.toolName(of: $0),
+            ]
         }
         Task { [weak self] in
             guard let self else { return }
