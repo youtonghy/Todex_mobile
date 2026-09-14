@@ -15,6 +15,8 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
     public var permissionProfile: String?
     public var approvalsReviewer: String?
     public var serviceTier: String?
+    /// Manual sidebar order shared with the desktop client; nil sorts first.
+    public var sortOrder: Int?
     public var createdAt: Int
     public var updatedAt: Int
 
@@ -34,6 +36,7 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
         permissionProfile: String? = nil,
         approvalsReviewer: String? = nil,
         serviceTier: String? = nil,
+        sortOrder: Int? = nil,
         createdAt: Int = Int(Date().timeIntervalSince1970 * 1_000),
         updatedAt: Int? = nil
     ) {
@@ -50,6 +53,7 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
         self.permissionProfile = permissionProfile
         self.approvalsReviewer = approvalsReviewer
         self.serviceTier = serviceTier
+        self.sortOrder = sortOrder
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
     }
@@ -57,7 +61,7 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, name, path, sessionId, tenantId, threadId, model, reasoningEffort
         case approvalPolicy, sandboxMode, permissionProfile, approvalsReviewer, serviceTier
-        case createdAt, updatedAt
+        case sortOrder, createdAt, updatedAt
     }
 
     public init(from decoder: any Decoder) throws {
@@ -76,6 +80,7 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
         permissionProfile = try c.decodeIfPresent(String.self, forKey: .permissionProfile)
         approvalsReviewer = try c.decodeIfPresent(String.self, forKey: .approvalsReviewer)
         serviceTier = try c.decodeIfPresent(String.self, forKey: .serviceTier)
+        sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
         createdAt = try c.decode(Int.self, forKey: .createdAt)
         updatedAt = try c.decode(Int.self, forKey: .updatedAt)
     }

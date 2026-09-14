@@ -16,6 +16,8 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     private var groups: [(WorkspaceRecord, [HomeRow])] = []
     private var collapsed: Set<String> = []
     private var expanded: Set<String> = []
+    private var reordering = false
+    private var addButton: UIBarButtonItem?
     private let statusLabel = Theme.label("尚未连接", style: .subheadline, color: .secondaryLabel)
 
     init(session: AppSession) {
@@ -47,6 +49,7 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                 },
             ]))
         add.accessibilityLabel = "新建"
+        addButton = add
         navigationItem.leftBarButtonItem = settings
         navigationItem.rightBarButtonItem = add
         filter.selectedSegmentIndex = 0
@@ -120,13 +123,28 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     }
     isolated deinit { if let observer { session.removeObserver(observer) } }
     func updateSearchResults(for searchController: UISearchController) { reload() }
-    private func reload() {
-        let query = (search.searchBar.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let sortedWorkspaces = session.workspaces.sorted { left, right in
+    /// Ordering matches the desktop sidebar: pinned first (local pin order),
+    /// then the synced manual sortOrder, then creation time and id.
+    private func sortedWorkspaces() -> [WorkspaceRecord] {
+        session.workspaces.sorted { left, right in
             let a = session.pinnedWorkspaces.firstIndex(of: left.id) ?? Int.max
             let b = session.pinnedWorkspaces.firstIndex(of: right.id) ?? Int.max
-            return a == b ? left.name.localizedStandardCompare(right.name) == .orderedAscending : a < b
+            if a != b { return a < b }
+            let leftOrder = left.sortOrder ?? 0
+            let rightOrder = right.sortOrder ?? 0
+            if leftOrder != rightOrder { return leftOrder < rightOrder }
+            if left.createdAt != right.createdAt { return left.createdAt < right.createdAt }
+            return left.id < right.id
         }
+    }
+    private func reload() {
+        // A reload must not re-sort while the user is dragging rows.
+        if reordering {
+            table.reloadData()
+            return
+        }
+        let query = (search.searchBar.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let sortedWorkspaces = sortedWorkspaces()
         let showingBoard = filter.selectedSegmentIndex == 1
         table.isHidden = showingBoard
         board.isHidden = !showingBoard
@@ -193,13 +211,17 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         }
         table.reloadData()
     }
-    func numberOfSections(in tableView: UITableView) -> Int { groups.count }
+    func numberOfSections(in tableView: UITableView) -> Int {
+        reordering ? (groups.isEmpty ? 0 : 1) : groups.count
+    }
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        if reordering { return groups.count }
         let (workspace, items) = groups[section]
         if collapsed.contains(workspace.id) { return 0 }
         return min(items.count, expanded.contains(workspace.id) ? Int.max : 5) + 1
     }
     func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+        if reordering { return nil }
         let workspace = groups[section].0
         let name = UIButton(type: .system)
         name.contentHorizontalAlignment = .leading
@@ -218,7 +240,7 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         name.titleLabel?.numberOfLines = 1
         name.addAction(
             UIAction { [weak self] _ in
-                guard let self else { return }
+                guard let self, !reordering else { return }
                 if !collapsed.insert(workspace.id).inserted { collapsed.remove(workspace.id) }
                 reload()
             }, for: .touchUpInside)
@@ -232,16 +254,29 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         let stack = UIStackView(arrangedSubviews: [name, more])
         stack.alignment = .center
         stack.spacing = 8
+        stack.addGestureRecognizer(
+            UILongPressGestureRecognizer(target: self, action: #selector(headerLongPressed(_:))))
         return stack
     }
     func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        max(54, UIFont.preferredFont(forTextStyle: .headline).lineHeight + 20)
+        reordering ? .leastNormalMagnitude : max(54, UIFont.preferredFont(forTextStyle: .headline).lineHeight + 20)
     }
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let (workspace, items) = groups[indexPath.section]
-        let visible = min(items.count, expanded.contains(workspace.id) ? Int.max : 5)
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         var config = cell.defaultContentConfiguration()
+        if reordering {
+            let workspace = groups[indexPath.row].0
+            config.text = Self.displayName(workspace)
+            config.secondaryText = workspace.path
+            config.secondaryTextProperties.color = .secondaryLabel
+            config.image = Theme.icon(session.pinnedWorkspaces.contains(workspace.id) ? "pin.fill" : "folder")
+            cell.contentConfiguration = config
+            cell.backgroundColor = Theme.surface
+            cell.accessibilityIdentifier = "workspace.\(workspace.id)"
+            return cell
+        }
+        let (workspace, items) = groups[indexPath.section]
+        let visible = min(items.count, expanded.contains(workspace.id) ? Int.max : 5)
         if indexPath.row >= visible {
             config.text = visible < items.count ? "显示其余 \(items.count - visible) 个对话" : "新建对话"
             config.image = Theme.icon(visible < items.count ? "chevron.down" : "plus.bubble")
@@ -271,8 +306,23 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         cell.backgroundColor = Theme.surface
         return cell
     }
+    func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
+        reordering
+    }
+    func tableView(_ tableView: UITableView, moveRowAt source: IndexPath, to destination: IndexPath) {
+        groups.insert(groups.remove(at: source.row), at: destination.row)
+    }
+    func tableView(_ tableView: UITableView, editingStyleForRowAt indexPath: IndexPath)
+        -> UITableViewCell.EditingStyle
+    {
+        .none
+    }
+    func tableView(_ tableView: UITableView, shouldIndentWhileEditingRowAt indexPath: IndexPath) -> Bool {
+        false
+    }
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
+        if reordering { return }
         let (workspace, items) = groups[indexPath.section]
         let visible = min(items.count, expanded.contains(workspace.id) ? Int.max : 5)
         if indexPath.row >= visible {
@@ -297,6 +347,7 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     func tableView(
         _ tableView: UITableView, contextMenuConfigurationForRowAt indexPath: IndexPath, point: CGPoint
     ) -> UIContextMenuConfiguration? {
+        if reordering { return nil }
         let group = groups[indexPath.section]
         guard indexPath.row < min(group.1.count, expanded.contains(group.0.id) ? Int.max : 5) else { return nil }
         switch group.1[indexPath.row] {
@@ -307,6 +358,7 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
         -> UISwipeActionsConfiguration?
     {
+        if reordering { return nil }
         let group = groups[indexPath.section]
         guard indexPath.row < min(group.1.count, expanded.contains(group.0.id) ? Int.max : 5) else { return nil }
         switch group.1[indexPath.row] {
@@ -511,6 +563,62 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             })
         WBUI.presentSheet(sheet, on: self)
     }
+    @objc private func headerLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        if gesture.state == .began { setReordering(true) }
+    }
+    /// Workspace ordering mode: the list collapses to one row per workspace
+    /// with drag handles; leaving the mode writes the synced sortOrder values.
+    private func setReordering(_ on: Bool) {
+        guard reordering != on else { return }
+        if on {
+            guard filter.selectedSegmentIndex == 0,
+                (search.searchBar.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                session.workspaces.count > 1
+            else { return }
+            search.isActive = false
+            filter.isEnabled = false
+            reordering = true
+            reload()
+            table.setEditing(true, animated: true)
+            navigationItem.rightBarButtonItem = UIBarButtonItem(
+                systemItem: .done,
+                primaryAction: UIAction { [weak self] _ in self?.setReordering(false) })
+        } else {
+            reordering = false
+            table.setEditing(false, animated: true)
+            filter.isEnabled = true
+            navigationItem.rightBarButtonItem = addButton
+            persistOrder()
+        }
+    }
+    private func persistOrder() {
+        var changed = false
+        let now = Int(Date().timeIntervalSince1970 * 1_000)
+        let updated = groups.map(\.0).enumerated().map { index, workspace in
+            var value = workspace
+            if value.sortOrder != index {
+                value.sortOrder = index
+                value.updatedAt = now
+                changed = true
+            }
+            return value
+        }
+        guard changed else {
+            reload()
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard let api = session.api else { throw TodexError.disconnected }
+                let records = try updated.map { try JSONValue(encoding: $0) }
+                _ = try await api.http.request(
+                    .put, path: "/v2/workspaces", body: ["workspaces": .array(records)])
+                try await session.refresh()
+            } catch { showError(error) }
+            reload()
+        }
+    }
     private func workspaceMenu(_ workspace: WorkspaceRecord) -> UIMenu {
         let pinned = session.pinnedWorkspaces.contains(workspace.id)
         return UIMenu(children: [
@@ -533,6 +641,9 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                     updated.name = name
                     self?.saveWorkspace(updated)
                 }
+            },
+            UIAction(title: "排序工作区", image: Theme.icon("arrow.up.arrow.down")) { [weak self] _ in
+                self?.setReordering(true)
             },
             UIAction(title: "添加其他目录", image: Theme.icon("folder.badge.plus")) { [weak self] _ in self?.addWorkspace() },
             UIAction(title: "工作区信任", image: Theme.icon("checkmark.shield")) { [weak self] _ in self?.trust(workspace) },
@@ -619,7 +730,7 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             return
         }
         let alert = UIAlertController(title: "选择工作区", message: nil, preferredStyle: .actionSheet)
-        for workspace in session.workspaces {
+        for workspace in sortedWorkspaces() {
             alert.addAction(
                 UIAlertAction(title: Self.displayName(workspace), style: .default) { [weak self] _ in
                     self?.createConversation(workspace)
