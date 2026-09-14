@@ -34,6 +34,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     private(set) var isSaving = false
     private var task: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
+    private var highlightTask: Task<Void, Never>?
     private var revision = UUID()
     var hasUnsavedChanges: Bool { editingText && editor.text != originalText }
 
@@ -57,6 +58,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     deinit {
         task?.cancel()
         saveTask?.cancel()
+        highlightTask?.cancel()
     }
 
     override func viewDidLoad() {
@@ -184,6 +186,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     }
     private func loadDirectory() {
         task?.cancel()
+        highlightTask?.cancel()
         revision = UUID()
         let currentRevision = revision
         file = nil
@@ -229,6 +232,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     }
     private func loadFile(_ path: String) {
         task?.cancel()
+        highlightTask?.cancel()
         revision = UUID()
         let currentRevision = revision
         descriptor.filePath = path
@@ -270,6 +274,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     }
     private func renderPreview() {
         guard let file else { return }
+        highlightTask?.cancel()
         editor.isHidden = false
         imageView.isHidden = true
         markdownView?.isHidden = true
@@ -278,6 +283,8 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             if ["md", "markdown"].contains(ext), modes.selectedSegmentIndex == 0 {
                 editor.isHidden = true
                 showMarkdown(text)
+            } else if modes.selectedSegmentIndex == 0 {
+                renderHighlightedSource(text: text, name: file["name"].stringValue)
             } else {
                 editor.attributedText = nil
                 editor.text = text
@@ -293,6 +300,24 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             editor.isHidden = true
         } else {
             editor.text = "此格式没有可用的文本或原生图片预览。后端未提供可编辑文本。"
+        }
+    }
+    /// Preview mode shows plain text first, then swaps in the highlighted
+    /// rendering once JavaScriptCore finishes. Stale results are dropped via
+    /// the revision/mode guards.
+    private func renderHighlightedSource(text: String, name: String) {
+        editor.attributedText = nil
+        editor.text = text
+        editor.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        guard text.utf8.count <= CodeHighlighter.byteLimit else { return }
+        let currentRevision = revision
+        highlightTask = Task { [weak self] in
+            guard let self else { return }
+            let highlighted = await CodeHighlighter.shared.highlight(text, fileName: name)
+            guard let highlighted, !Task.isCancelled, self.revision == currentRevision,
+                !self.editingText, self.modes.selectedSegmentIndex == 0
+            else { return }
+            self.editor.attributedText = highlighted
         }
     }
     /// Markdown preview renders in a bundled WKWebView (markdown-it + KaTeX +
@@ -383,9 +408,11 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     }
     private func beginEditing() {
         guard let originalText, !isSaving else { return }
+        highlightTask?.cancel()
         editingText = true
         modes.selectedSegmentIndex = 1
         markdownView?.isHidden = true
+        editor.isHidden = false
         editor.attributedText = nil
         editor.text = originalText
         editor.isEditable = true

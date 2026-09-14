@@ -28,7 +28,9 @@ final class TaskBoardView: UIView {
         scroll.alwaysBounceHorizontal = true
         columns.axis = .horizontal
         columns.spacing = 12
-        columns.alignment = .top
+        // .fill stretches each column to the board height so the per-column
+        // task list scroll view actually receives space; .top collapsed it.
+        columns.alignment = .fill
         scroll.addSubview(columns)
         addSubview(scroll)
         for view in [scroll, columns] { view.translatesAutoresizingMaskIntoConstraints = false }
