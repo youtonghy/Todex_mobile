@@ -64,7 +64,7 @@ def main():
             elif method == "model/list":
                 send({"id": request_id, "result": {"data": [{
                     "id": "fixture-model", "model": "fixture-model", "displayName": "Fixture Codex",
-                    "isDefault": True, "inputModalities": ["text"], "description": "Local deterministic fixture",
+                    "isDefault": True, "inputModalities": ["text", "image"], "description": "Local deterministic fixture",
                     "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": "Fixture"}],
                     "defaultReasoningEffort": "medium"}], "nextCursor": None}})
             elif method == "turn/start":

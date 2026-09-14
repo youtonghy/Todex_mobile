@@ -80,6 +80,7 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
         shell.autocapitalizationType = .none
         shell.spellCheckingType = .no
         shell.delegate = self
+        shell.accessibilityIdentifier = "workbench.terminal.shell"
         shell.widthAnchor.constraint(equalToConstant: 108).isActive = true
         shell.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
@@ -148,6 +149,9 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
                 guard let self else { return }
                 self.manualStop = true
                 self.operationTask = Task { [weak self] in
+                    // start() guards on operationTask == nil; clear the finished
+                    // stop task so the terminal can be started again.
+                    defer { self?.operationTask = nil }
                     do { try await self?.stop() } catch { if let self { WBUI.error(error, on: self) } }
                 }
             }
