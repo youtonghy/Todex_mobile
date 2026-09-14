@@ -274,8 +274,12 @@ struct RealtimeClientTests {
             connection: connection, http: fixture.client(),
             makeSocket: { request in
                 do {
-                    let clientPublic = try CryptoEncoding.decode(
-                        request.value(forHTTPHeaderField: "x-todex-client-key") ?? "", count: 32)
+                    guard let url = request.url,
+                        let clientKey = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                            .queryItems?.first(where: { $0.name == "client_key" })?.value
+                    else { throw TodexError.invalid("握手缺少 client_key") }
+                    #expect(request.value(forHTTPHeaderField: "x-todex-client-key") == nil)
+                    let clientPublic = try CryptoEncoding.decode(clientKey, count: 32)
                     let secret = try server.sharedSecretFromKeyAgreement(with: .init(rawRepresentation: clientPublic))
                     let key = secret.hkdfDerivedSymmetricKey(
                         using: SHA256.self, salt: server.publicKey.rawRepresentation + clientPublic,

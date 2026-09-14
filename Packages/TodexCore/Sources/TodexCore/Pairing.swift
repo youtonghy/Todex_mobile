@@ -78,13 +78,14 @@ public struct PairingImporter: Sendable {
             }
             key = importedKey
         }
-        if let token = link.authToken, !token.isEmpty { try PairingMaterial.validateToken(token) }
         var result = current
         result.serverURL = server.absoluteString
         result.encryption = selected
         result.publicKey = key
         let sameBackend = (try? current.normalizedURL()) == server
-        result.token = link.authToken.flatMap { $0.isEmpty ? nil : $0 } ?? (sameBackend ? current.token : "")
+        // Pairing links carry transport keys only. The device key is enrolled
+        // through device verification and never travels in a QR.
+        result.deviceSecret = sameBackend ? current.deviceSecret : ""
         return result
     }
 
@@ -108,7 +109,6 @@ public struct PairingImporter: Sendable {
         let kind: String
         let version: Int
         let serverUrl: String
-        let authToken: String?
         let preferredEncryption: String?
         let `protocol`: PublicKey?
         struct PublicKey: Decodable {
@@ -120,7 +120,9 @@ public struct PairingImporter: Sendable {
 
 public enum DevicePairingStatus: Sendable, Equatable {
     case pending, rejected, expired
-    case approved(String)
+    /// Approval delivers the enrolled device ID, which is already bound to the
+    /// local device key — the payload is verified in `unwrap` before delivery.
+    case approved
 }
 
 /// The verification code authenticates this enrollment's ephemeral transcript.
@@ -136,11 +138,11 @@ public actor DevicePairingSession {
     private var material: PairingMaterial?
     private var polling = false
 
-    public static func begin(connection: BackendConnection, deviceName: String) async throws -> DevicePairingSession {
+    public static func begin(connection: BackendConnection, deviceName: String, device: DeviceIdentity) async throws -> DevicePairingSession {
         _ = try connection.normalizedURL()
         let client = HTTPClient(connection: connection)
         return try await begin(
-            deviceName: deviceName, privateKey: .init(),
+            deviceName: deviceName, device: device, privateKey: .init(),
             post: { action, body in
                 try await PairingBootstrap.post(client: client, action: action, body: body)
             })
@@ -149,7 +151,7 @@ public actor DevicePairingSession {
     // Injectable endpoint and clock keep state/race tests independent of a live
     // backend; production always uses the unauthenticated HTTPClient above.
     static func begin(
-        deviceName: String, privateKey: Curve25519.KeyAgreement.PrivateKey, post: @escaping PairingPost,
+        deviceName: String, device: DeviceIdentity, privateKey: Curve25519.KeyAgreement.PrivateKey, post: @escaping PairingPost,
         now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1000 }
     ) async throws -> DevicePairingSession {
         try Task.checkCancellation()
@@ -159,6 +161,7 @@ public actor DevicePairingSession {
             [
                 "clientPublicKey": .string(CryptoEncoding.encode(publicKey)),
                 "deviceName": .string(sanitizedDeviceName(deviceName)),
+                "devicePublicKey": .string(device.publicKeyBase64URL),
             ])
         try Task.checkCancellation()
         guard let id = response["requestId"].optionalString,
@@ -174,7 +177,8 @@ public actor DevicePairingSession {
             throw TodexError.invalid("设备验证申请无效或已过期，请重新申请")
         }
         let serverKey = try CryptoEncoding.decode(encodedServerKey, count: 32)
-        let material = try PairingMaterial(requestID: id, privateKey: privateKey, serverPublicKey: serverKey)
+        let material = try PairingMaterial(
+            requestID: id, privateKey: privateKey, serverPublicKey: serverKey, device: device)
         return Self(
             requestID: id, expiresAt: expires, pollIntervalMilliseconds: Int(interval), material: material, post: post,
             now: now)
@@ -221,7 +225,8 @@ public actor DevicePairingSession {
             return .expired
         case "approved":
             defer { self.material = nil }
-            return .approved(try material.unwrap(result))
+            _ = try material.unwrap(result)
+            return .approved
         default:
             throw TodexError.invalid("设备验证响应状态无效")
         }
@@ -290,21 +295,27 @@ struct PairingMaterial: Sendable {
     let pollProof: SymmetricKey
     let cancelProof: SymmetricKey
     let verificationCode: String
+    let deviceID: String
 
-    init(requestID: String, privateKey: Curve25519.KeyAgreement.PrivateKey, serverPublicKey: Data) throws {
+    init(requestID: String, privateKey: Curve25519.KeyAgreement.PrivateKey, serverPublicKey: Data, device: DeviceIdentity) throws {
         let shared = try CryptoEncoding.sharedSecret(privateKey: privateKey, publicKey: serverPublicKey)
+        // v2 binds the enrolled device key into the verification code and the
+        // wrap key, so a MITM cannot substitute its own device identity.
         let transcript =
-            Data("todex.device-pairing.v1/transcript\0\(requestID)\0".utf8) + privateKey.publicKey.rawRepresentation
-            + serverPublicKey
+            Data("todex.device-pairing.v2/transcript\0\(requestID)\0".utf8) + privateKey.publicKey.rawRepresentation
+            + serverPublicKey + Data([0]) + device.publicKey
         let salt = Data(SHA256.hash(data: transcript))
         self.transcript = transcript
-        wrapKey = CryptoEncoding.derive(ikm: shared, salt: salt, info: "todex.device-pairing.v1/wrap-key")
-        pollProof = CryptoEncoding.derive(ikm: shared, salt: salt, info: "todex.device-pairing.v1/poll-proof")
-        cancelProof = CryptoEncoding.derive(ikm: shared, salt: salt, info: "todex.device-pairing.v1/cancel-proof")
+        deviceID = device.deviceID
+        wrapKey = CryptoEncoding.derive(ikm: shared, salt: salt, info: "todex.device-pairing.v2/wrap-key")
+        pollProof = CryptoEncoding.derive(ikm: shared, salt: salt, info: "todex.device-pairing.v2/poll-proof")
+        cancelProof = CryptoEncoding.derive(ikm: shared, salt: salt, info: "todex.device-pairing.v2/cancel-proof")
         let hex = salt.prefix(5).map { String(format: "%02X", $0) }.joined()
         verificationCode = "\(hex.prefix(5))-\(hex.suffix(5))"
     }
 
+    /// Decrypts the delivered credential and returns the enrolled device ID.
+    /// The backend pins it to this key; the check defends the contract anyway.
     func unwrap(_ response: JSONValue) throws -> String {
         guard let nonceText = response["nonce"].optionalString,
             let ciphertextText = response["ciphertext"].optionalString,
@@ -317,17 +328,14 @@ struct PairingMaterial: Sendable {
         // JSONDecoder accepts alternate text encodings; the protocol requires UTF-8.
         guard String(data: plaintext, encoding: .utf8) != nil else { throw TodexError.invalid("设备验证密文不是 UTF-8") }
         let payload = try JSONDecoder().decode(Credential.self, from: plaintext)
-        try Self.validateToken(payload.authToken)
-        return payload.authToken
+        guard payload.deviceID.range(of: "^dev_[A-Za-z0-9_-]{16}$", options: .regularExpression) != nil,
+            payload.deviceID == deviceID
+        else { throw TodexError.invalid("设备验证结果与本机设备密钥不匹配") }
+        return payload.deviceID
     }
 
-    static func validateToken(_ token: String) throws {
-        // Swift treats CRLF as one grapheme, so Character-based contains("\r")
-        // or contains("\n") misses that pair. Inspect the scalar values instead.
-        guard !token.isEmpty, token.utf16.count <= 4096,
-            !token.unicodeScalars.contains(where: { $0.value == 13 || $0.value == 10 })
-        else { throw TodexError.invalid("设备验证令牌无效") }
+    private struct Credential: Decodable {
+        let deviceId: String
+        var deviceID: String { deviceId }
     }
-
-    private struct Credential: Decodable { let authToken: String }
 }

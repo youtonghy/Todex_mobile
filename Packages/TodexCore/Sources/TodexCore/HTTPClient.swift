@@ -100,21 +100,28 @@ public final class HTTPClient: Sendable {
         guard timeout.isFinite, timeout > 0, timeout <= 3600, maximumBytes > 0 else {
             throw TodexError.invalid("HTTP 请求限制无效")
         }
+        let requestURL = try url(path: path, query: query)
         var request = URLRequest(
-            url: try url(path: path, query: query), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout
+            url: requestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout
         )
         request.httpMethod = method.rawValue
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if authenticated && !connection.token.isEmpty {
-            guard !connection.token.unicodeScalars.contains(where: { $0.value == 10 || $0.value == 13 }) else {
-                throw TodexError.invalid("认证令牌包含换行")
-            }
-            request.setValue("Bearer \(connection.token)", forHTTPHeaderField: "Authorization")
-        }
+        var bodyData = Data()
         if let body {
-            request.httpBody = try JSONEncoder().encode(body)
+            bodyData = try JSONEncoder().encode(body)
+            request.httpBody = bodyData
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        if authenticated, let device = DeviceIdentity(secretKeyBase64URL: connection.deviceSecret) {
+            // Sign the percent-encoded request target exactly as it appears on
+            // the wire; the daemon verifies uri.path() + canonicalized query.
+            let components = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)
+            let target = (components?.percentEncodedPath ?? "/")
+                + (components?.percentEncodedQuery.map { "?\($0)" } ?? "")
+            for (key, value) in try device.authHeaders(method: method.rawValue, pathAndQuery: target, body: bodyData) {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
         }
         let preparedRequest = request
         do {

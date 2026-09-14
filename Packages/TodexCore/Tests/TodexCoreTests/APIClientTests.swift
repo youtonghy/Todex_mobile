@@ -19,8 +19,9 @@ struct APIClientTests {
             #expect(query == endpoint.query)
             #expect(components.fragment == nil)
             #expect(
-                request.value(forHTTPHeaderField: "Authorization")
-                    == (endpoint.authenticated ? "Bearer test-token" : nil))
+                request.value(forHTTPHeaderField: "x-todex-device-id")
+                    == (endpoint.authenticated ? "dev_1-HghL4hOwHlBoUq" : nil))
+            #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
             #expect(
                 request.value(forHTTPHeaderField: "Accept")
                     == (endpoint.name == "health" ? "text/plain" : "application/json"))
@@ -155,8 +156,8 @@ struct APIClientTests {
 
     @Test(arguments: [
         ErrorCase(
-            status: 401, body: ["code": "UNAUTHORIZED", "message": "token rejected"], code: "UNAUTHORIZED",
-            message: "token rejected"),
+            status: 401, body: ["code": "UNAUTHORIZED", "message": "signature rejected"], code: "UNAUTHORIZED",
+            message: "signature rejected"),
         ErrorCase(status: 409, body: ["error": ["message": "file changed"]], code: "409", message: "file changed"),
         ErrorCase(
             status: 501, body: ["code": "UNSUPPORTED", "error": "native operation unavailable"], code: "UNSUPPORTED",
@@ -630,7 +631,7 @@ private struct APIFixture {
         config.urlCache = nil
         session = URLSession(configuration: config)
         api = APIClient(
-            connection: BackendConnection(serverURL: "https://\(host)/v2/", token: "test-token"), session: session)
+            connection: BackendConnection(serverURL: "https://\(host)/v2/", deviceSecret: "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU"), session: session)
     }
 
     func close() {

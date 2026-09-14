@@ -33,7 +33,7 @@ The final assistant message is exactly `TODEX_MOBILE_LIVE_OK`. The WebSocket del
 
 The 24 replay events include one turn start, one turn completion, one final assistant message, and zero tool, subagent, or permission events. The conversation returned to `idle`; the temporary workspace had no non-Git files before or after the request. Provider usage reported 16,207 input tokens (12,160 cache-read), 11 output tokens, and 16,218 total tokens. **Monetary cost is unknown**; token usage is not a billing receipt.
 
-The backend and CLI used temporary home, data, configuration, and workspace directories. Existing ChatGPT authentication was exposed only through the authorized `auth.json` symlink in the temporary owner-only Codex home. The harness did not read or print credential contents, and the symlink was removed afterward. The temporary backend exited with code 0; its port is closed, and no process retains open files in its temporary directory. The generated local backend token was removed from the stopped fixture configuration. The existing fake fixture at `http://127.0.0.1:49933/health` still returns HTTP 200 and `ok`.
+The backend and CLI used temporary home, data, configuration, and workspace directories. Existing ChatGPT authentication was exposed only through the authorized `auth.json` symlink in the temporary owner-only Codex home. The harness did not read or print credential contents, and the symlink was removed afterward. The temporary backend exited with code 0; its port is closed, and no process retains open files in its temporary directory. The stopped fixture configuration retained only the enrolled test device record. The existing fake fixture at `http://127.0.0.1:49933/health` still returns HTTP 200 and `ok`.
 
 Sanitized local artifacts:
 

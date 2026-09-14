@@ -170,7 +170,7 @@ actor FakeSocket: SessionSocket {
     init(_ journal: [ConversationEvent] = [], snapshot: SessionSnapshot? = nil) throws {
         backend = Backend(journal); socket = FakeSocket(backend: backend)
         let host = UUID().uuidString.lowercased() + ".invalid"
-        connection = BackendConnection(id: "test-" + UUID().uuidString, name: "Fixture", serverURL: "https://" + host, token: "")
+        connection = BackendConnection(id: "test-" + UUID().uuidString, name: "Fixture", serverURL: "https://" + host, deviceSecret: "")
         store = try TestEnvironment.store()
         if let snapshot { try store.save(snapshot, key: LocalStore.namespace(connection) + "-state") }
         FixtureProtocol.register(backend, host: host)
@@ -348,7 +348,7 @@ actor FakeSocket: SessionSocket {
     try check(h.session.readSequences["c"] == nil && h.session.runtimes["c"] == nil, "tenant switch reused read/runtime")
     var other = h.connection; other.serverURL = "https://different.invalid"
     try check(LocalStore.namespace(h.connection) != LocalStore.namespace(other), "URL missing from namespace")
-    other = h.connection; other.token = "changed"
+    other = h.connection; other.deviceSecret = "changed"
     try check(LocalStore.namespace(h.connection) != LocalStore.namespace(other), "credential missing from namespace")
     try check(LocalStore.identity(["ab", "c"]) != LocalStore.identity(["a", "bc"]), "namespace collision")
     h.session.disconnect()
@@ -392,7 +392,7 @@ actor FakeSocket: SessionSocket {
     let store = try TestEnvironment.store()
     let session = AppSession(store: store, defaults: TestEnvironment.defaults())
     try check(session.connection?.serverURL == "http://127.0.0.1:18999", "port did not override malformed URL")
-    try check(session.connection?.token == "fixture-token", "fixture token changed")
+    try check(session.connection?.deviceSecret == "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU", "fixture device secret changed")
     #endif
 }
 @MainActor func taskPlanPersistence() async throws {

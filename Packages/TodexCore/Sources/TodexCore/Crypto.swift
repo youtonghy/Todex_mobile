@@ -8,6 +8,10 @@ import Foundation
 /// under the same key. This type deliberately does not conform to Sendable.
 public final class TransportCryptoSession {
     public let handshakeHeaders: [String: String]
+    /// Same material as URL query parameters (`enc`, `client_key`/`ciphertext`).
+    /// The device signature covers the query, binding this handshake to the
+    /// enrolled device identity; the daemon treats query values as authoritative.
+    public let handshakeQuery: String
     private let encryption: EncryptionProtocol
     private let key: SymmetricKey
     private var sendCounter: UInt64
@@ -45,6 +49,16 @@ public final class TransportCryptoSession {
         self.encryption = encryption
         self.key = key
         self.handshakeHeaders = handshakeHeaders
+        self.handshakeQuery = handshakeHeaders
+            .compactMap { name, value -> String? in
+                switch name {
+                case "x-todex-encryption": return "enc=\(HTTPClient.segment(value))"
+                case "x-todex-client-key": return "client_key=\(HTTPClient.segment(value))"
+                case "x-todex-kem-ciphertext": return "ciphertext=\(HTTPClient.segment(value))"
+                default: return nil
+                }
+            }
+            .sorted().joined(separator: "&")
         self.sendCounter = sendCounter
         self.receiveCounter = receiveCounter
     }

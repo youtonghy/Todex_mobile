@@ -25,7 +25,7 @@ def main():
     parsed = urlparse(fixture["url"])
     if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port != fixture["port"]:
         raise ValueError("UI tests require the owned local fixture, not a real backend")
-    token = (root / "token.txt").read_text().strip()
+    device = (root / "device.txt").read_text().strip()
     derived = Path(args.derived_data).resolve()
     repository = Path(__file__).resolve().parents[1]
     env = dict(os.environ)
@@ -48,7 +48,7 @@ def main():
             if value.get("IsUITestBundle") is True:
                 # TestingEnvironmentVariables is reserved for test-loader paths;
                 # Xcode path-normalizes values there (http:// becomes http:/).
-                value.setdefault("EnvironmentVariables", {}).update(TODEX_TEST_PORT=str(fixture["port"]), TODEX_TEST_TOKEN=token)
+                value.setdefault("EnvironmentVariables", {}).update(TODEX_TEST_PORT=str(fixture["port"]), TODEX_TEST_DEVICE_SECRET=device)
                 configured += 1
             for child in value.values():
                 visit(child)

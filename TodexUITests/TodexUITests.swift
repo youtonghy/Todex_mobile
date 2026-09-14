@@ -5,7 +5,7 @@ nonisolated final class TodexUITests: XCTestCase {
     @MainActor private func application() -> XCUIApplication {
         let app = XCUIApplication()
         XCUIDevice.shared.orientation = .portrait
-        for key in ["TODEX_TEST_PORT", "TODEX_TEST_TOKEN"] {
+        for key in ["TODEX_TEST_PORT", "TODEX_TEST_DEVICE_SECRET"] {
             if let value = ProcessInfo.processInfo.environment[key] { app.launchEnvironment[key] = value }
         }
         app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]

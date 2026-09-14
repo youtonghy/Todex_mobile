@@ -6,7 +6,7 @@ import Testing
 
 /// Opt in with TODEX_LIVE_FIXTURE=/absolute/path/to/fixture.json.
 /// Only scripts/backend_fixture.py's isolated loopback fixture is accepted.
-/// Reads the fixture-only token from sibling token.txt without logging it.
+/// Reads the enrolled fixture device seed from sibling device.txt without logging it.
 @Suite(
     .serialized,
     .enabled(
@@ -19,9 +19,9 @@ struct RealtimeLiveTests {
         let policy = try await http.request(path: "/v2/transport-policy", authenticated: false)
         #expect(policy["requiredProtocol"] == "none")
 
-        for invalidToken in ["", "invalid-fixture-token-\(UUID().uuidString)"] {
+        for invalidSecret in ["", "not-a-valid-device-seed"] {
             var connection = fixture.connection
-            connection.token = invalidToken
+            connection.deviceSecret = invalidSecret
             let rejected = RealtimeClient(connection: connection)
             do {
                 try await rejected.connect()
@@ -129,11 +129,11 @@ private struct LiveFixture: Sendable {
         let serverURL = try #require(manifest["url"].optionalString)
         let components = try #require(URLComponents(string: serverURL))
         try #require(components.host == "127.0.0.1" && components.scheme == "http" && components.port != nil)
-        let token = try String(
-            contentsOf: url.deletingLastPathComponent().appendingPathComponent("token.txt"), encoding: .utf8
+        let deviceSecret = try String(
+            contentsOf: url.deletingLastPathComponent().appendingPathComponent("device.txt"), encoding: .utf8
         ).trimmingCharacters(in: .whitespacesAndNewlines)
-        try #require(!token.isEmpty, "Fixture token is empty")
-        connection = BackendConnection(name: "Isolated live test", serverURL: serverURL, token: token)
+        try #require(!deviceSecret.isEmpty, "Fixture device secret is empty")
+        connection = BackendConnection(name: "Isolated live test", serverURL: serverURL, deviceSecret: deviceSecret)
         workspace = try #require(manifest["workspace"].optionalString)
         conversationID = try #require(manifest["conversationId"].optionalString)
     }

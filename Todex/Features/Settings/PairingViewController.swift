@@ -9,6 +9,7 @@ import Vision
 final class PairingViewController: SettingsListController, PHPickerViewControllerDelegate {
     private var connection: BackendConnection
     private let onApply: @MainActor (BackendConnection) throws -> Void
+    private let onApproved: @MainActor () -> Void
     private var importer = PairingImporter()
     private var session: DevicePairingSession?
     private var deviceTask: Task<Void, Never>?
@@ -22,9 +23,14 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
     private var status = "导入后端提供的配对信息，或申请设备验证。"
     private var failure: String?
 
-    init(connection: BackendConnection, onApply: @escaping @MainActor (BackendConnection) throws -> Void) {
+    init(
+        connection: BackendConnection,
+        onApply: @escaping @MainActor (BackendConnection) throws -> Void,
+        onApproved: @escaping @MainActor () -> Void = {}
+    ) {
         self.connection = connection
         self.onApply = onApply
+        self.onApproved = onApproved
         super.init(title: "配对与设备验证")
     }
 
@@ -114,7 +120,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                 })
         }
         sections.append(
-            SettingsSection(title: "设备验证", footer: "申请前需要后端地址。批准后保存此设备的 Token；传输加密公钥仍需从配对信息导入。", rows: deviceRows))
+            SettingsSection(title: "设备验证", footer: "批准后此后端即信任本机设备密钥；传输加密公钥仍需从配对信息导入。", rows: deviceRows))
         redraw()
     }
 
@@ -125,12 +131,17 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
         if let updated {
             try onApply(updated)
             connection = updated
-            status = "配对信息已导入并保存。返回连接设置后可连接。"
+            status = "配对信息已导入并保存。"
         } else {
             status = "已收到分片 \(importer.receivedCount)/\(importer.totalCount)，请继续导入本批次剩余分片。"
         }
         failure = nil
         render()
+        // A fresh import with no enrolled device flows straight into
+        // verification: scan -> verify -> connect needs no extra taps.
+        if updated != nil, DeviceIdentity(secretKeyBase64URL: connection.deviceSecret) == nil {
+            beginDevice()
+        }
         return updated != nil
     }
 
@@ -217,7 +228,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
         let scanner = PairingQRScannerViewController { [weak self] raw in
             guard let self else { throw CancellationError() }
             let complete = try ingest(raw)
-            return (status, complete)
+            return (status, complete, importer.receivedCount, importer.totalCount)
         } onReset: { [weak self] in
             self?.resetFragments()
         }
@@ -231,9 +242,20 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
             render()
             return
         }
+        var source = connection
+        if DeviceIdentity(secretKeyBase64URL: source.deviceSecret) == nil {
+            do {
+                source.deviceSecret = DeviceIdentity().secretKeyBase64URL
+                try onApply(source)
+                connection = source
+            } catch {
+                failure = error.localizedDescription
+                render()
+                return
+            }
+        }
         generation += 1
         let current = generation
-        let source = connection
         waiting = true
         failure = nil
         verificationCode = nil
@@ -241,7 +263,8 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
         render()
         deviceTask = Task { [weak self] in
             do {
-                let session = try await DevicePairingSession.begin(connection: source, deviceName: "TodeX iOS")
+                let session = try await DevicePairingSession.begin(
+                    connection: source, deviceName: "TodeX iOS", device: DeviceIdentity(secretKeyBase64URL: source.deviceSecret)!)
                 guard let self, !Task.isCancelled, generation == current, connection == source else {
                     try? await session.cancel()
                     return
@@ -266,13 +289,11 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                     }
                     switch result {
                     case .pending: continue
-                    case .approved(let token):
-                        guard !token.isEmpty else { throw TodexError.invalid("批准结果缺少 Token") }
-                        var updated = source
-                        updated.token = token
-                        try onApply(updated)
-                        connection = updated
-                        finishDevice("设备已批准，Token 已保存。返回连接设置后可连接。", cancel: false)
+                    case .approved:
+                        // The device key was already persisted before the
+                        // request; approval only activates it on the backend.
+                        finishDevice("设备已批准，正在连接…", cancel: false)
+                        onApproved()
                         return
                     case .rejected:
                         finishDevice("后端已拒绝申请，请核对后重新申请。", cancel: false)

@@ -41,19 +41,24 @@ struct HTTPClientTests {
     @Test func requestUsesSharedEncodingAndExplicitAuthenticationOnly() async throws {
         let fixture = NetworkHTTPFixture { _ in .json(["ok": true]) }
         defer { fixture.close() }
-        let client = fixture.client(token: "secret")
+        let client = fixture.client(deviceSecret: "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU")
         _ = try await client.request(.post, path: "/v2/example", query: ["q": "a+b"], body: ["value": "text"])
         _ = try await client.request(path: "/v2/transport-policy", authenticated: false)
         let calls = fixture.requests
         #expect(calls.count == 2)
         #expect(calls[0].url?.query == "q=a%2Bb")
-        #expect(calls[0].value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+        #expect(calls[0].value(forHTTPHeaderField: "x-todex-device-id") == "dev_1-HghL4hOwHlBoUq")
+        #expect(calls[0].value(forHTTPHeaderField: "x-todex-auth-sig") != nil)
+        #expect(calls[0].value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(calls[1].value(forHTTPHeaderField: "x-todex-device-id") == nil)
         #expect(calls[1].value(forHTTPHeaderField: "Authorization") == nil)
         #expect(calls.allSatisfy { !$0.httpShouldHandleCookies && $0.cachePolicy == .reloadIgnoringLocalCacheData })
         #expect(calls[0].value(forHTTPHeaderField: "Content-Type") == "application/json")
-        let bad = fixture.client(token: "bad\r\nheader")
-        await #expect(throws: (any Error).self) { try await bad.request(path: "/v2/version") }
-        #expect(fixture.requests.count == 2)
+        // A malformed stored seed is treated as "not enrolled": the request
+        // goes unsigned instead of sending a corrupted credential.
+        let bad = fixture.client(deviceSecret: "bad-seed")
+        _ = try await bad.request(path: "/v2/version")
+        #expect(fixture.requests.last?.value(forHTTPHeaderField: "x-todex-device-id") == nil)
     }
 
     @Test func connectionTenantDefaultsToLocalAndSurvivesWire() throws {
@@ -64,9 +69,9 @@ struct HTTPClientTests {
         #expect(legacy.tenantId == "local")
         let encoded = try JSONDecoder().decode(
             [String: JSONValue].self,
-            from: JSONEncoder().encode(BackendConnection(token: "secret", tenantId: "team-b")))
+            from: JSONEncoder().encode(BackendConnection(deviceSecret: "secret", tenantId: "team-b")))
         #expect(encoded["tenantId"] == "team-b")
-        #expect(encoded["token"] == nil)
+        #expect(encoded["deviceSecret"] == nil)
     }
 
     @Test func policyUsesActualStatusAndCannotSilentlyDowngrade() throws {
@@ -180,8 +185,8 @@ final class NetworkHTTPFixture: Sendable {
         }
     }
     var requests: [URLRequest] { calls.withLock { $0 } }
-    func client(token: String = "") -> HTTPClient {
-        HTTPClient(connection: .init(serverURL: "https://\(host)", token: token), session: session)
+    func client(deviceSecret: String = "") -> HTTPClient {
+        HTTPClient(connection: .init(serverURL: "https://\(host)", deviceSecret: deviceSecret), session: session)
     }
     func close() {
         session.invalidateAndCancel()

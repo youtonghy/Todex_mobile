@@ -4,9 +4,15 @@ import UIKit
 
 @MainActor
 final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
-    private let onScan: @MainActor (String) throws -> (message: String, complete: Bool)
+    private let onScan: @MainActor (String) throws -> (message: String, complete: Bool, received: Int, total: Int)
     private let onReset: @MainActor () -> Void
     private let message = UILabel()
+    private let progressLabel = UILabel()
+    private let progressBar = UIProgressView(progressViewStyle: .bar)
+    private let highlight = CAShapeLayer()
+    private let checkmark = UIImageView(
+        image: UIImage(systemName: "checkmark.circle.fill")?
+            .withConfiguration(UIImage.SymbolConfiguration(pointSize: 72, weight: .regular)))
     private var preview: AVCaptureVideoPreviewLayer?
     private var cameraTask: Task<Void, Never>?
     private var seen: Set<String> = []
@@ -22,7 +28,7 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
     }
 
     init(
-        onScan: @escaping @MainActor (String) throws -> (message: String, complete: Bool),
+        onScan: @escaping @MainActor (String) throws -> (message: String, complete: Bool, received: Int, total: Int),
         onReset: @escaping @MainActor () -> Void
     ) {
         self.onScan = onScan
@@ -41,6 +47,18 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
         preview.videoGravity = .resizeAspectFill
         view.layer.addSublayer(preview)
         self.preview = preview
+        addViewfinder()
+        // Highlight the most recently recognized code position.
+        highlight.fillColor = UIColor.systemGreen.withAlphaComponent(0.18).cgColor
+        highlight.strokeColor = UIColor.systemGreen.cgColor
+        highlight.lineWidth = 3
+        highlight.lineJoin = .round
+        highlight.isHidden = true
+        view.layer.addSublayer(highlight)
+        checkmark.tintColor = .systemGreen
+        checkmark.isHidden = true
+        checkmark.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(checkmark)
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
         navigationItem.leftBarButtonItem?.accessibilityIdentifier = "pairing.scanner.close"
@@ -50,6 +68,7 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
                 guard let self else { return }
                 seen.removeAll()
                 onReset()
+                showProgress(received: 0, total: 0)
                 message.text = "已清空分片，请扫描同一批次二维码。"
             })
         navigationItem.rightBarButtonItem?.accessibilityIdentifier = "pairing.scanner.reset"
@@ -66,7 +85,17 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
         }
         settings.accessibilityIdentifier = "pairing.scanner.permissions"
-        let controls = UIStackView(arrangedSubviews: [message, retry, settings])
+        progressLabel.font = .preferredFont(forTextStyle: .subheadline)
+        progressLabel.textColor = .white
+        progressLabel.textAlignment = .center
+        progressLabel.accessibilityIdentifier = "pairing.scanner.progress"
+        progressBar.isHidden = true
+        progressLabel.isHidden = true
+        progressBar.accessibilityIdentifier = "pairing.scanner.progressBar"
+        let progressRow = UIStackView(arrangedSubviews: [progressBar, progressLabel])
+        progressRow.axis = .vertical
+        progressRow.spacing = 6
+        let controls = UIStackView(arrangedSubviews: [message, progressRow, retry, settings])
         controls.axis = .vertical
         controls.spacing = 12
         controls.isLayoutMarginsRelativeArrangement = true
@@ -79,6 +108,10 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
             controls.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
             controls.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             controls.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+            checkmark.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            checkmark.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -40),
+            checkmark.widthAnchor.constraint(equalToConstant: 72),
+            checkmark.heightAnchor.constraint(equalToConstant: 72),
             retry.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
             settings.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
         ])
@@ -106,6 +139,7 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         preview?.frame = view.bounds
+        drawViewfinder()
         let angle: CGFloat
         switch view.window?.windowScene?.effectiveGeometry.interfaceOrientation {
         case .landscapeLeft: angle = 0
@@ -160,16 +194,41 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
         }
     }
 
+    // Metadata objects are immutable snapshots; the box just tells the
+    // compiler they may cross to the main actor for preview-layer conversion.
     nonisolated func metadataOutput(
         _ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject],
         from connection: AVCaptureConnection
     ) {
-        let values = metadataObjects.compactMap { ($0 as? AVMetadataMachineReadableCodeObject)?.stringValue }
-        Task { @MainActor [weak self] in self?.receive(values) }
+        let box = ScannerCodeBox(codes: metadataObjects.compactMap {
+            guard let code = $0 as? AVMetadataMachineReadableCodeObject, !code.corners.isEmpty else { return nil }
+            return code
+        })
+        Task { @MainActor [weak self] in self?.receive(box) }
     }
 
-    private func receive(_ values: [String]) {
+    private func receive(_ box: ScannerCodeBox) {
         guard visible, !finished else { return }
+        // Highlight the first recognizable code's position on the preview.
+        var values: [String] = []
+        var shown = false
+        for code in box.codes {
+            guard let preview,
+                let transformed = preview.transformedMetadataObject(for: code) as? AVMetadataMachineReadableCodeObject,
+                !transformed.corners.isEmpty
+            else { continue }
+            if !shown {
+                let path = UIBezierPath()
+                path.move(to: transformed.corners[0])
+                for corner in transformed.corners.dropFirst() { path.addLine(to: corner) }
+                path.close()
+                highlight.path = path.cgPath
+                highlight.isHidden = false
+                shown = true
+            }
+            if let value = code.stringValue { values.append(value) }
+        }
+        if !shown { highlight.isHidden = true }
         for raw in values {
             // Bound storage and reject oversized camera payloads before retaining them.
             guard raw.utf8.count <= 65_536, !seen.contains(raw) else { continue }
@@ -179,12 +238,18 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
                 let feedback = try onScan(raw)
                 message.text = feedback.message
                 message.textColor = .white
+                showProgress(received: feedback.received, total: feedback.total)
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 UIAccessibility.post(notification: .announcement, argument: feedback.message)
                 if feedback.complete {
                     finished = true
                     capture.stop()
-                    dismiss(animated: true)
+                    checkmark.isHidden = false
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    UIAccessibility.post(notification: .announcement, argument: "扫描完成")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                        self?.dismiss(animated: true)
+                    }
                     return
                 }
             } catch {
@@ -193,6 +258,79 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
             }
         }
     }
+
+    private func showProgress(received: Int, total: Int) {
+        let visible = total > 1
+        progressBar.isHidden = !visible
+        progressLabel.isHidden = !visible
+        guard visible else { return }
+        progressBar.progress = Float(received) / Float(total)
+        progressLabel.text = "已收到 \(received)/\(total) 分片"
+    }
+
+    /// Dimmed overlay with a transparent center square and corner brackets,
+    /// framing the scan area without blocking the preview.
+    private func addViewfinder() {
+        let overlay = UIView()
+        overlay.isUserInteractionEnabled = false
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(overlay)
+        NSLayoutConstraint.activate([
+            overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            overlay.topAnchor.constraint(equalTo: view.topAnchor),
+            overlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        overlay.layoutIfNeeded()
+        let layer = CAShapeLayer()
+        overlay.layer.addSublayer(layer)
+        // Drawn lazily in layout so it tracks rotation.
+        viewfinderLayer = layer
+    }
+    private var viewfinderLayer: CAShapeLayer?
+
+    private func drawViewfinder() {
+        guard let layer = viewfinderLayer else { return }
+        let side = min(view.bounds.width, view.bounds.height) * 0.62
+        let frame = CGRect(
+            x: view.bounds.midX - side / 2,
+            y: view.bounds.midY - side / 2 - 20,
+            width: side, height: side)
+        // Even-odd dimmed mask with a clear window.
+        let dim = UIBezierPath(rect: view.bounds)
+        dim.append(UIBezierPath(roundedRect: frame, cornerRadius: 18))
+        dim.usesEvenOddFillRule = true
+        layer.path = dim.cgPath
+        layer.fillRule = .evenOdd
+        layer.fillColor = UIColor.black.withAlphaComponent(0.45).cgColor
+        // Four corner brackets.
+        let bracket = CAShapeLayer()
+        let arm: CGFloat = 26
+        var corners = UIBezierPath()
+        for (origin, direction) in [
+            (frame.origin, CGPoint(x: 1, y: 1)),
+            (CGPoint(x: frame.maxX, y: frame.minY), CGPoint(x: -1, y: 1)),
+            (CGPoint(x: frame.maxX, y: frame.maxY), CGPoint(x: -1, y: -1)),
+            (CGPoint(x: frame.minX, y: frame.maxY), CGPoint(x: 1, y: -1)),
+        ] as [(CGPoint, CGPoint)] {
+            corners.move(to: CGPoint(x: origin.x + direction.x * arm, y: origin.y))
+            corners.addLine(to: origin)
+            corners.addLine(to: CGPoint(x: origin.x, y: origin.y + direction.y * arm))
+        }
+        bracket.path = corners.cgPath
+        bracket.strokeColor = UIColor.white.cgColor
+        bracket.lineWidth = 4
+        bracket.lineCap = .round
+        bracket.fillColor = nil
+        if let old = layer.sublayers?.first { old.removeFromSuperlayer() }
+        layer.addSublayer(bracket)
+    }
+}
+
+/// AVMetadataMachineReadableCodeObject snapshots are immutable after delivery;
+/// the box marks them sendable for the capture-queue -> main-actor hop.
+private nonisolated struct ScannerCodeBox: @unchecked Sendable {
+    let codes: [AVMetadataMachineReadableCodeObject]
 }
 
 /// AVFoundation requires blocking start/stop calls off the main thread. All mutable session

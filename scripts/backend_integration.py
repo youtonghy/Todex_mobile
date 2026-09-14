@@ -24,28 +24,140 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+# --- todex.device-auth.v1 -------------------------------------------------
+# Pure-Python Ed25519 (RFC 8032 reference algorithm): no third-party
+# dependencies are available in the fixture environment.
+_Q = 2**255 - 19
+_L = 2**252 + 27742317777372353535851937790883648493
+_D = (-121665 * pow(121666, _Q - 2, _Q)) % _Q
+_I = pow(2, (_Q - 1) // 4, _Q)
+
+
+def _edwards(p, q):
+    x1, y1 = p
+    x2, y2 = q
+    factor = _D * x1 * x2 * y1 * y2
+    x3 = (x1 * y2 + x2 * y1) * pow(1 + factor, _Q - 2, _Q)
+    y3 = (y1 * y2 + x1 * x2) * pow(1 - factor, _Q - 2, _Q)
+    return x3 % _Q, y3 % _Q
+
+
+def _scalarmult(point, e):
+    if e == 0:
+        return (0, 1)
+    half = _scalarmult(point, e // 2)
+    result = _edwards(half, half)
+    if e & 1:
+        result = _edwards(result, point)
+    return result
+
+
+_By = 4 * pow(5, _Q - 2, _Q) % _Q
+_Bx = (lambda x: (x * _I) % _Q if (x * x - (((_By * _By - 1) * pow(_D * _By * _By + 1, _Q - 2, _Q)) % _Q)) % _Q else x)(
+    pow(((_By * _By - 1) * pow(_D * _By * _By + 1, _Q - 2, _Q)) % _Q, (_Q + 3) // 8, _Q))
+_Bx = _Bx if _Bx % 2 == 0 else _Q - _Bx
+_B = (_Bx, _By)
+
+
+def _encode_point(point):
+    x, y = point
+    bits = [(y >> i) & 1 for i in range(255)] + [x & 1]
+    return bytes(sum(bits[i * 8 + j] << j for j in range(8)) for i in range(32))
+
+
+def _hint(message):
+    return int.from_bytes(hashlib.sha512(message).digest(), "little")
+
+
+def _public_key(seed):
+    h = hashlib.sha512(seed).digest()
+    a = 2 ** 254 + sum(2 ** i * ((h[i // 8] >> (i % 8)) & 1) for i in range(3, 254))
+    return _encode_point(_scalarmult(_B, a)), a
+
+
+def ed25519_sign(seed, message):
+    public, a = _public_key(seed)
+    r = _hint(hashlib.sha512(seed).digest()[32:] + message) % _L
+    encoded_r = _encode_point(_scalarmult(_B, r))
+    s_value = (r + _hint(encoded_r + public + message) * a) % _L
+    return encoded_r + s_value.to_bytes(32, "little")
+
+
+def _b64url(data):
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def _b64url_decode(text):
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _canonical_query(query):
+    if not query:
+        return ""
+    pairs = []
+    for pair in query.split("&"):
+        key, _, value = pair.partition("=")
+        decoded_key = urllib.parse.unquote_plus(key)
+        if decoded_key in ("device_id", "auth_ts", "auth_nonce", "auth_sig"):
+            continue
+        pairs.append((urllib.parse.quote(decoded_key, safe="-._~"),
+                      urllib.parse.quote(urllib.parse.unquote_plus(value), safe="-._~")))
+    return "&".join(k + "=" + v for k, v in sorted(pairs))
+
+
+class DeviceAuth:
+    """Signs requests as the fixture-enrolled device from device.txt."""
+
+    def __init__(self, seed_b64url):
+        self.seed = _b64url_decode(seed_b64url)
+        self.public, _ = _public_key(self.seed)
+        fingerprint = hashlib.sha256(self.public).digest()
+        self.device_id = "dev_" + _b64url(fingerprint[:12])
+
+    def headers(self, method, path, raw_query="", body=b""):
+        timestamp = str(int(time.time()))
+        nonce = _b64url(os.urandom(16))
+        payload = "\0".join([
+            "todex.device-auth.v1", self.device_id, method, path,
+            _canonical_query(raw_query), timestamp, nonce,
+            _b64url(hashlib.sha256(body).digest()),
+        ]).encode()
+        return {
+            "x-todex-device-id": self.device_id,
+            "x-todex-auth-ts": timestamp,
+            "x-todex-auth-nonce": nonce,
+            "x-todex-auth-sig": _b64url(ed25519_sign(self.seed, payload)),
+        }
+
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
 
 
 class HTTP:
-    def __init__(self, url, token):
+    def __init__(self, url, device_seed):
         parsed = urllib.parse.urlsplit(url)
         require(parsed.scheme == "http" and parsed.hostname == "127.0.0.1" and parsed.port, "Fixture must use loopback HTTP")
-        self.url, self.token = url, token
+        self.url, self.device = url, DeviceAuth(device_seed)
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         self.calls = []
 
-    def request(self, method, path, body=None, query=None, token=True, status=200):
-        if query:
-            path += "?" + urllib.parse.urlencode(query)
+    def request(self, method, path, body=None, query=None, signed=True, status=200):
+        raw_query = urllib.parse.urlencode(query) if query else ""
+        if raw_query:
+            path += "?" + raw_query
         headers = {"Accept": "application/json"}
-        if token:
-            headers["Authorization"] = "Bearer " + (self.token if token is True else token)
-        if body is not None:
+        data = None if body is None else json.dumps(body).encode()
+        if signed:
+            # `signed` may carry a different seed to exercise rejection of an
+            # unenrolled device; True uses the fixture device.
+            signer = self.device if signed is True else DeviceAuth(signed)
+            headers.update(signer.headers(method, path.split("?", 1)[0], raw_query, data or b""))
+        if data is not None:
             headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(self.url + path, data=None if body is None else json.dumps(body).encode(), headers=headers, method=method)
+        request = urllib.request.Request(self.url + path, data=data, headers=headers, method=method)
         try:
             response = self.opener.open(request, timeout=20)
         except urllib.error.HTTPError as error:
@@ -63,16 +175,26 @@ class HTTP:
 
 
 class WebSocket:
-    def __init__(self, url, token, expected_status=101):
+    def __init__(self, url, device_seed, expected_status=101):
         parsed = urllib.parse.urlsplit(url)
         self.sock = socket.create_connection((parsed.hostname, parsed.port), timeout=10)
         self.buffer = bytearray()
         self.inbox, self.history = [], []
         key = base64.b64encode(os.urandom(16)).decode()
-        headers = ["GET /v2/ws HTTP/1.1", f"Host: {parsed.netloc}", "Upgrade: websocket", "Connection: Upgrade",
+        # The handshake signature rides in the query so it can cover the
+        # transport-crypto parameters too (none in this fixture).
+        query = ""
+        if device_seed is not None:
+            device = DeviceAuth(device_seed)
+            signed = device.headers("GET", "/v2/ws")
+            query = "?" + urllib.parse.urlencode({
+                "device_id": device.device_id,
+                "auth_ts": signed["x-todex-auth-ts"],
+                "auth_nonce": signed["x-todex-auth-nonce"],
+                "auth_sig": signed["x-todex-auth-sig"],
+            })
+        headers = ["GET /v2/ws" + query + " HTTP/1.1", f"Host: {parsed.netloc}", "Upgrade: websocket", "Connection: Upgrade",
                    "Sec-WebSocket-Version: 13", "Sec-WebSocket-Key: " + key]
-        if token:
-            headers.append("Authorization: Bearer " + token)
         self.sock.sendall(("\r\n".join(headers) + "\r\n\r\n").encode())
         while b"\r\n\r\n" not in self.buffer:
             data = self.sock.recv(4096)
@@ -182,8 +304,8 @@ class WebSocket:
 
 
 def verify(root, manifest):
-    token = Path(manifest["tokenPath"]).read_text().strip()
-    http = HTTP(manifest["url"], token)
+    device_seed = Path(manifest["deviceSecretPath"]).read_text().strip()
+    http = HTTP(manifest["url"], device_seed)
     report = {"fixture": str(root), "backendSHA256": manifest["backendSHA256"], "url": manifest["url"],
               "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "checks": [],
               "scope": "Real Rust backend, real HTTP/WS/PTY/Git; deterministic fake Codex and Claude CLI; no external AI services."}
@@ -215,13 +337,14 @@ def verify(root, manifest):
                             require(time.monotonic() < deadline, "Previous synthetic hold turn did not cancel")
                             time.sleep(0.1)
         version = check("health-version-policy", lambda: (
-            require(http.request("GET", "/health", token=False) == "ok", "Health wire"),
-            http.request("GET", "/v2/version", token=False),
-            require(http.request("GET", "/v2/transport-policy", token=False)["requiredProtocol"] == "none", "Transport policy")
+            require(http.request("GET", "/health", signed=False) == "ok", "Health wire"),
+            http.request("GET", "/v2/version", signed=False),
+            require(http.request("GET", "/v2/transport-policy", signed=False)["requiredProtocol"] == "none", "Transport policy")
         )[1])
         require(version["data_dir"] == manifest["dataDir"], "Unexpected backend data directory")
-        check("HTTP-auth-missing-and-wrong", lambda: [http.request("GET", "/v2/providers", token=t, status=401)["code"] for t in (False, "wrong-fixture-token")])
-        check("WS-auth-missing-and-wrong", lambda: [WebSocket(manifest["url"], t, expected_status=401) and "rejected" for t in (None, "wrong-fixture-token")])
+        wrong_seed = _b64url(os.urandom(32))
+        check("HTTP-auth-missing-and-wrong", lambda: [http.request("GET", "/v2/providers", signed=t, status=401)["code"] for t in (False, wrong_seed)])
+        check("WS-auth-missing-and-wrong", lambda: [WebSocket(manifest["url"], t, expected_status=401) and "rejected" for t in (None, wrong_seed)])
         providers = check("provider-catalog", lambda: http.request("GET", "/v2/providers"))["providers"]
         require(all(any(p["id"] == kind and p["available"] for p in providers) for kind in ("codex", "claude-code")), "Fixture providers unavailable")
 
@@ -272,7 +395,7 @@ def verify(root, manifest):
             return "Local repository scan/status/workspace, create branch and commit; no push or PR"
         check("git-local-operations", git)
 
-        ws = WebSocket(manifest["url"], token)
+        ws = WebSocket(manifest["url"], device_seed)
         sockets.append(ws)
         check("WS-ping", lambda: require(ws.command("server.ping", {})["pong"], "Missing pong"))
 
@@ -321,7 +444,7 @@ def verify(root, manifest):
                 after = page["nextSequence"]
             require([e["sequence"] for e in events] == list(range(1, len(events) + 1)), "Replay sequence gap or duplicate")
             require(len({e["eventId"] for e in events}) == len(events), "Duplicate event ids")
-            reconnect = WebSocket(manifest["url"], token)
+            reconnect = WebSocket(manifest["url"], device_seed)
             sockets.append(reconnect)
             cursor = max(0, events[-1]["sequence"] - 2)
             result = reconnect.command("conversation.subscribe", {"conversationId": cid, "afterSequence": cursor, "limit": 1})

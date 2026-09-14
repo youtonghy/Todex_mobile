@@ -47,8 +47,13 @@ public final class APIClient: Sendable {
         var request = URLRequest(url: encodedURL)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if !http.connection.token.isEmpty {
-            request.setValue("Bearer \(http.connection.token)", forHTTPHeaderField: "Authorization")
+        if let device = DeviceIdentity(secretKeyBase64URL: http.connection.deviceSecret) {
+            let components = URLComponents(url: encodedURL, resolvingAgainstBaseURL: false)
+            let target = (components?.percentEncodedPath ?? "/")
+                + (components?.percentEncodedQuery.map { "?\($0)" } ?? "")
+            for (key, value) in try device.authHeaders(method: "GET", pathAndQuery: target) {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
         }
         return try await receiveGET(request)
     }

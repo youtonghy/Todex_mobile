@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import secrets
 import shlex
 import shutil
 import subprocess
@@ -47,10 +46,26 @@ def start(binary):
     root = Path(tempfile.mkdtemp(prefix="todex-mobile-fixture-", dir="/tmp")).resolve()
     for directory in ("home/.codex", "home/.claude", "home/.config", "home/.local/share", "home/.cache", "tmp", "runtime", "bin", "logs", "data", "workspaces/project"):
         (root / directory).mkdir(parents=True, exist_ok=True)
-    token = "fixture_" + secrets.token_urlsafe(32)
-    token_path = root / "token.txt"
-    token_path.write_text(token + "\n")
-    token_path.chmod(0o600)
+    # Enroll the fixed cross-language test device (tests/fixtures/
+    # device-auth-v1.json) so live tests exercise the real signature path.
+    device_seed = "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU"
+    device_path = root / "device.txt"
+    device_path.write_text(device_seed + "\n")
+    device_path.chmod(0o600)
+    devices = {
+        "version": 1,
+        "devices": {
+            "dev_1-HghL4hOwHlBoUq": {
+                "deviceId": "dev_1-HghL4hOwHlBoUq",
+                "name": "TodeX mobile fixture",
+                "publicKey": "1UIH2hlJd9z0atv-wrwudbUtWopCGE_t_cAAJPDj6No",
+                "pairedAt": 1700000000000,
+            }
+        },
+    }
+    devices_path = root / "data/devices.json"
+    devices_path.write_text(json.dumps(devices, indent=2) + "\n")
+    devices_path.chmod(0o600)
     shutil.copy2(Path(__file__).with_name("fake_provider.py"), root / "bin/fake_provider.py")
     for provider in ("codex", "claude"):
         launcher = root / "bin" / provider
@@ -73,7 +88,7 @@ def start(binary):
         'claude_bin = ' + quote(str(root / "bin/claude")),
         'pi_bin = ' + quote(str(root / "bin/unavailable-pi")),
         'grok_bin = ' + quote(str(root / "bin/unavailable-grok")),
-        '[security]', 'enable_auth = true', 'enable_tls = false', 'auth_token = ' + quote(token), ''
+        '[security]', 'enable_auth = true', 'enable_tls = false', ''
     ])
     config_path = root / "data/config.toml"
     config_path.write_text(config)
@@ -83,7 +98,7 @@ def start(binary):
         "backendSHA256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "home": str(home), "dataDir": str(root / "data"), "configPath": str(config_path),
         "workspaceRoot": str(root / "workspaces"), "workspace": str(workspace),
-        "tokenPath": str(token_path), "logPath": str(root / "logs/backend.log"),
+        "deviceSecretPath": str(device_path), "logPath": str(root / "logs/backend.log"),
         "providerWireLog": str(root / "logs/provider-wire.jsonl"),
         "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
@@ -115,7 +130,7 @@ def start(binary):
         raise
     manifest["webSocketURL"] = manifest["url"].replace("http:", "ws:") + "/v2/ws"
     (root / "fixture.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    connection = {"name": "TodeX isolated fixture", "serverURL": manifest["url"], "token": token, "encryption": "none", "publicKey": ""}
+    connection = {"name": "TodeX isolated fixture", "serverURL": manifest["url"], "deviceSecret": device_seed, "encryption": "none", "publicKey": ""}
     (root / "simulator-connection.json").write_text(json.dumps(connection, indent=2) + "\n")
     (root / "simulator-connection.json").chmod(0o600)
     return manifest

@@ -14,8 +14,8 @@ struct PairingTests {
         #expect(encoded(material.wrapKey) == v["wrapKey"].stringValue)
         #expect(encoded(material.pollProof) == v["pollProof"].stringValue)
         #expect(encoded(material.cancelProof) == v["cancelProof"].stringValue)
-        #expect(try material.unwrap(v) == v["authToken"].stringValue)
-        let plaintext = Data(#"{"authToken":"synthetic-device-pairing-token"}"#.utf8)
+        #expect(try material.unwrap(v) == v["deviceId"].stringValue)
+        let plaintext = Data(#"{"deviceId":"dev_1-HghL4hOwHlBoUq"}"#.utf8)
         #expect(
             try CryptoEncoding.encode(
                 XChaChaAEAD.seal(
@@ -33,20 +33,25 @@ struct PairingTests {
         #expect(throws: (any Error).self) { try original.unwrap(damaged) }
         let wrongID = try PairingMaterial(
             requestID: "21111111-2222-4333-8444-555555555555", privateKey: fixturePrivateKey(),
-            serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue))
+            serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue), device: fixtureDevice())
         #expect(wrongID.verificationCode != original.verificationCode)
         #expect(throws: (any Error).self) { try wrongID.unwrap(v) }
         let wrongClient = try PairingMaterial(
             requestID: v["requestId"].stringValue, privateKey: .init(),
-            serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue))
+            serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue), device: fixtureDevice())
         #expect(throws: (any Error).self) { try wrongClient.unwrap(v) }
+        // A credential addressed to a different device key must not unwrap here.
+        let otherDevice = try PairingMaterial(
+            requestID: v["requestId"].stringValue, privateKey: fixturePrivateKey(),
+            serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue), device: DeviceIdentity())
+        #expect(throws: (any Error).self) { try otherDevice.unwrap(v) }
         for nonce in ["AA", v["nonce"].stringValue + "=", String(repeating: "A", count: 32)] {
             damaged = v
             damaged["nonce"] = .string(nonce)
             #expect(throws: (any Error).self) { try original.unwrap(damaged) }
         }
-        for token: JSONValue in ["", "bad\r\nheader", .string(String(repeating: "a", count: 4097)), 42, nil] {
-            let payload: JSONValue = ["authToken": token]
+        for deviceId: JSONValue in ["", "dev_wrong0000000000", .string(String(repeating: "a", count: 4097)), 42, nil] {
+            let payload: JSONValue = ["deviceId": deviceId]
             damaged = try approval(plaintext: JSONEncoder().encode(payload))
             #expect(throws: (any Error).self) { try original.unwrap(damaged) }
         }
@@ -57,26 +62,28 @@ struct PairingTests {
     @Test func importsPreserveOnlyCredentialsForTheSameBackend() throws {
         var importer = PairingImporter()
         let current = BackendConnection(
-            id: "stable", name: "保留名称", serverURL: "HTTP://EXAMPLE.COM:7345/v2/", token: "enrolled", color: "purple")
+            id: "stable", name: "保留名称", serverURL: "HTTP://EXAMPLE.COM:7345/v2/", deviceSecret: "enrolled", color: "purple")
         let imported = try importer.ingest(link().prettyPrinted, current: current)
         let same = try #require(imported)
-        #expect(same.token == "enrolled")
+        #expect(same.deviceSecret == "enrolled")
         #expect(same.serverURL == "http://example.com:7345")
         #expect(same.id == current.id && same.name == current.name && same.color == current.color)
         #expect(same.encryption == .x25519)
         var other = try link()
         other["serverUrl"] = "https://elsewhere.example"
-        #expect(try importer.ingest(other.prettyPrinted, current: current)?.token == "")
-        other["authToken"] = "new-token"
-        #expect(try importer.ingest(other.prettyPrinted, current: current)?.token == "new-token")
+        #expect(try importer.ingest(other.prettyPrinted, current: current)?.deviceSecret == "")
+        // Device credentials never travel in a pairing link: an authToken
+        // field from an older backend is ignored, not imported.
+        other["authToken"] = "stale-token"
+        #expect(try importer.ingest(other.prettyPrinted, current: current)?.deviceSecret == "")
         var noEncryption = try link()
         noEncryption["preferredEncryption"] = "none"
         noEncryption["protocol"] = nil
         let importedNone = try importer.ingest(noEncryption.prettyPrinted, current: same)
         let none = try #require(importedNone)
-        #expect(none.encryption == .none && none.publicKey.isEmpty && none.token == "enrolled")
+        #expect(none.encryption == .none && none.publicKey.isEmpty && none.deviceSecret == "enrolled")
         noEncryption["authToken"] = ""
-        #expect(try importer.ingest(noEncryption.prettyPrinted, current: same)?.token == "enrolled")
+        #expect(try importer.ingest(noEncryption.prettyPrinted, current: same)?.deviceSecret == "enrolled")
     }
 
     @Test func mlkemQRFragmentsSupportUnorderedRepeatedScans() throws {
@@ -135,7 +142,7 @@ struct PairingTests {
         for (field, value): (String, JSONValue) in [
             ("kind", "other"), ("version", 2), ("serverUrl", "file:///tmp"),
             ("serverUrl", "https://user:pass@example.com"), ("serverUrl", "https://example.com?token=leak"),
-            ("serverUrl", "https://example.com/v1"), ("preferredEncryption", "unknown"), ("authToken", "bad\nheader"),
+            ("serverUrl", "https://example.com/v1"), ("preferredEncryption", "unknown"),
             ("protocol", nil), ("protocol", ["id": "ml-kem-768", "publicKey": "AA"]),
         ] {
             var bad = original
@@ -153,17 +160,18 @@ struct PairingTests {
     @Test func enrollmentUsesCorrectProofsAndDeliversCredentialOnce() async throws {
         let endpoint = try PairingEndpoint(results: [["status": "pending"], approvedFixture()])
         let session = try await begin(endpoint, name: "  Mac\u{0000}\u{202E}测试  ")
-        #expect(session.verificationCode == "254BE-020DC")
+        #expect(session.verificationCode == "4C62C-4C83F")
         #expect(session.expiresAt == 2_000_000_300_000)
         #expect(session.pollIntervalMilliseconds == 1000)
         #expect(try await session.poll() == .pending)
-        #expect(try await session.poll() == .approved("synthetic-device-pairing-token"))
+        #expect(try await session.poll() == .approved)
         #expect(try await session.poll() == .expired)
         try await session.cancel()
         let calls = await endpoint.calls
         #expect(calls.map(\.action) == ["create", "poll", "poll"])
         #expect(calls[0].body["deviceName"] == "Mac测试")
         #expect(calls[0].body["clientPublicKey"] == (try fixture())["clientPublicKey"])
+        #expect(calls[0].body["devicePublicKey"] == (try fixture())["devicePublicKey"])
         #expect(calls[1].body["proof"] == (try fixture())["pollProof"])
         #expect(calls[1].body.objectValue.count == 2)
     }
@@ -304,7 +312,7 @@ struct PairingTests {
         _ endpoint: PairingEndpoint, name: String = "Swift client", clock: PairingTestClock = .init(1_900_000_000_000)
     ) async throws -> DevicePairingSession {
         try await DevicePairingSession.begin(
-            deviceName: name, privateKey: fixturePrivateKey(),
+            deviceName: name, device: fixtureDevice(), privateKey: fixturePrivateKey(),
             post: { action, body in try await endpoint.post(action, body) }, now: { clock.now })
     }
 }
@@ -318,7 +326,10 @@ private func fixturePrivateKey() throws -> Curve25519.KeyAgreement.PrivateKey {
 private func fixtureMaterial() throws -> PairingMaterial {
     try PairingMaterial(
         requestID: fixture()["requestId"].stringValue, privateKey: fixturePrivateKey(),
-        serverPublicKey: CryptoEncoding.decode(fixture()["serverPublicKey"].stringValue))
+        serverPublicKey: CryptoEncoding.decode(fixture()["serverPublicKey"].stringValue), device: fixtureDevice())
+}
+private func fixtureDevice() throws -> DeviceIdentity {
+    try #require(DeviceIdentity(secretKeyBase64URL: fixture()["deviceSecret"].stringValue))
 }
 private func encoded(_ key: SymmetricKey) -> String { key.withUnsafeBytes { CryptoEncoding.encode(Data($0)) } }
 private func createFixture() throws -> JSONValue {
@@ -410,7 +421,7 @@ private final class PairingURLProtocol: URLProtocol, @unchecked Sendable {
         config.urlCache = nil
         config.httpCookieStorage = nil
         return HTTPClient(
-            connection: .init(serverURL: "https://\(host)", token: "must-not-be-sent"),
+            connection: .init(serverURL: "https://\(host)", deviceSecret: "must-not-be-sent"),
             session: URLSession(configuration: config))
     }
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -433,23 +444,25 @@ private final class PairingURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
-// Verbatim backend tests/fixtures/device-pairing-v1.json. Only synthetic keys
+// Verbatim backend tests/fixtures/device-pairing-v2.json. Only synthetic keys
 // and credentials, asserted byte-for-byte by backend device_pairing.rs tests.
 private let devicePairingFixtureJSON = #"""
     {
-      "requestId": "11111111-2222-4333-8444-555555555555",
-      "expiresAt": 2000000300000,
-      "clientSecret": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
-      "serverSecret": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
-      "clientPublicKey": "E75P6uryBMf9M1j8nAByGIHRdCeBKCJ-xnTzf3_pe20",
-      "serverPublicKey": "V9tLNZ8jrl4Ubk4lEgVnBHIlBjSMFQwUdT0Mkz0E1CE",
-      "transcript": "dG9kZXguZGV2aWNlLXBhaXJpbmcudjEvdHJhbnNjcmlwdAAxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUAE75P6uryBMf9M1j8nAByGIHRdCeBKCJ-xnTzf3_pe21X20s1nyOuXhRuTiUSBWcEciUGNIwVDBR1PQyTPQTUIQ",
-      "verificationCode": "254BE-020DC",
-      "wrapKey": "uP92FjLJ_vfM8zw--x4j6kXG7OvXEls_aOhFSQfEOiI",
-      "pollProof": "fY8bZQ51Yf0x0CQS6uvZiZy5oxBOMFiwHKom7sMsDwk",
-      "cancelProof": "S4C76skr7KGcP8rIPyEoPX47HQnFx0jGHbBYg4yRNbk",
-      "nonce": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL",
-      "authToken": "synthetic-device-pairing-token",
-      "ciphertext": "-Rlk4G9hSYSwJsNUrWbyPyAjeYgSoK6K38UULgs3P14WbNjQJ8-0Vo2LOzNYoqpWfz7PhiQkBhOvDhkJSrU"
+        "requestId": "11111111-2222-4333-8444-555555555555",
+        "expiresAt": 2000000300000,
+        "clientSecret": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+        "serverSecret": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+        "deviceSecret": "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU",
+        "clientPublicKey": "E75P6uryBMf9M1j8nAByGIHRdCeBKCJ-xnTzf3_pe20",
+        "serverPublicKey": "V9tLNZ8jrl4Ubk4lEgVnBHIlBjSMFQwUdT0Mkz0E1CE",
+        "devicePublicKey": "1UIH2hlJd9z0atv-wrwudbUtWopCGE_t_cAAJPDj6No",
+        "deviceId": "dev_1-HghL4hOwHlBoUq",
+        "transcript": "dG9kZXguZGV2aWNlLXBhaXJpbmcudjIvdHJhbnNjcmlwdAAxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUAE75P6uryBMf9M1j8nAByGIHRdCeBKCJ-xnTzf3_pe21X20s1nyOuXhRuTiUSBWcEciUGNIwVDBR1PQyTPQTUIQDVQgfaGUl33PRq2_7CvC51tS1aikIYT-39wAAk8OPo2g",
+        "verificationCode": "4C62C-4C83F",
+        "wrapKey": "BEw73pJCmVWDrRwkM4agWrV4qustwqLCEShnyF9pM78",
+        "pollProof": "NfpnayjZHSBwdA1WmkGpUxxj4AH7gsoxZan0DOw-LvY",
+        "cancelProof": "cCqtcPGH1Y77iBS1DtHlF3eXRtu2RlTKv-cRC4PmjHw",
+        "nonce": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL",
+        "ciphertext": "pg9ke2BjSCm11hjADR1t20TwxwL03iXd2Em21PmbCxpvtYPrJh94ZfDTBjr3pNg8v6_2"
     }
     """#

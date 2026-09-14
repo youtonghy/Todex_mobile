@@ -91,9 +91,10 @@ final class SettingsViewController: SettingsListController {
                     }
                 },
                 field("后端地址", value: connection.serverURL, key: "serverURL", connection: connection),
-                field(
-                    "Auth token", value: connection.token.isEmpty ? "未设置" : "••••••••（已设置）", key: "token",
-                    connection: connection),
+                SettingsRow(
+                    title: "本机设备",
+                    detail: DeviceIdentity(secretKeyBase64URL: connection.deviceSecret)?.deviceID ?? "未验证",
+                    symbol: "iphone.gen3", id: "settings.backend.device"),
                 field("Tenant", value: connection.tenantId, key: "tenantId", connection: connection),
                 SettingsRow(title: "传输加密", detail: connection.encryption.rawValue, id: "settings.backend.encryption") {
                     [weak self] in
@@ -262,28 +263,29 @@ final class SettingsViewController: SettingsListController {
         let value =
             switch field {
             case "name": connection.name
-            case "token": connection.token
             case "tenantId": connection.tenantId
             default: connection.serverURL
             }
         let title =
             switch field {
             case "name": "名称"
-            case "token": "Auth token"
             case "tenantId": "Tenant"
             default: "后端地址"
             }
         editField(
-            title: title, value: value, id: "settings.backend.\(field).input", secure: field == "token",
+            title: title, value: value, id: "settings.backend.\(field).input", secure: false,
             keyboard: field == "serverURL" ? .URL : .default
         ) { [weak self] text in
             self?.update(connection.id) {
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 switch field {
                 case "name": $0.name = trimmed
-                case "token": $0.token = trimmed
                 case "tenantId": $0.tenantId = trimmed.isEmpty ? "local" : trimmed
-                default: $0.serverURL = trimmed
+                default:
+                    $0.serverURL = trimmed
+                    if (try? BackendConnection.normalize(trimmed)) != (try? BackendConnection.normalize(connection.serverURL)) {
+                        $0.deviceSecret = ""
+                    }
                 }
             }
         }
@@ -314,6 +316,8 @@ final class SettingsViewController: SettingsListController {
             else { throw TodexError.invalid("后端配置已改变，请重新打开配对页面") }
             update(connection.id) { $0 = updated }
             expectedURL = updated.serverURL
+        } onApproved: { [weak self] in
+            self?.connect(connection.id)
         }
         navigationController?.pushViewController(pairing, animated: true)
     }

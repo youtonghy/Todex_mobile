@@ -2,7 +2,7 @@
 
 `backend_fixture.py` starts the existing Rust `todex-agentd` executable on `127.0.0.1` with port `0` (the OS allocates a free port). It uses `daemon-run`, which skips the release updater. The host executable, backend repository, user configuration, login credentials and main app files are not modified.
 
-All generated state lives in a new owner-private `/tmp/todex-mobile-fixture-*` directory: child-process HOME/CODEX_HOME/Claude and XDG directories, config, token, logs, temporary files, a trusted workspace and a local Git repository. The launcher passes a small explicit child environment; it does not change the invoking shell's environment. Provider executables are absolute paths to temporary fake CLI launchers; Pi/Grok paths intentionally do not exist.
+All generated state lives in a new owner-private `/tmp/todex-mobile-fixture-*` directory: child-process HOME/CODEX_HOME/Claude and XDG directories, config, device key, logs, temporary files, a trusted workspace and a local Git repository. The launcher passes a small explicit child environment; it does not change the invoking shell's environment. Provider executables are absolute paths to temporary fake CLI launchers; Pi/Grok paths intentionally do not exist.
 
 ## Run
 
@@ -24,14 +24,14 @@ The server stays running after verification. `stop` targets only the daemon reco
 | File | Contents |
 | --- | --- |
 | `fixture.json` | HTTP/WS URL, PID, executable hash, temporary HOME/config/workspace paths, and IDs created during verification |
-| `token.txt` | Random fixture-only Bearer token; owner-readable |
-| `simulator-connection.json` | `serverURL`, `token`, `encryption: none`, and `publicKey` for manual connection entry/integration harnesses; not a promised app import format |
+| `device.txt` | Base64url Ed25519 seed of the fixture device pre-enrolled in `data/devices.json`; owner-readable |
+| `simulator-connection.json` | `serverURL`, `deviceSecret`, `encryption: none`, and `publicKey` for integration harnesses; not a promised app import format |
 | `integration-report.json` | Pass/fail per check and observed HTTP status codes |
 | `conversation-events.json` | Persisted Codex events returned by actual paginated REST replay |
 | `logs/backend.log` | Rust daemon log |
 | `logs/provider-wire.jsonl` | Synthetic backend-to-fake-CLI frames, including actual approval and interrupt responses |
 
-Use the HTTP URL from `fixture.json` with the token from `token.txt`. An iOS simulator on this Mac can reach the loopback listener. A physical device cannot use this loopback URL. Keep `encryption` set to `none` for this fixture. The app's actual connection UI and Swift runtime have not been driven by the Python verifier.
+Use the HTTP URL from `fixture.json`; requests are signed with the device seed from `device.txt`. An iOS simulator on this Mac can reach the loopback listener. A physical device cannot use this loopback URL. Keep `encryption` set to `none` for this fixture. The app's actual connection UI and Swift runtime have not been driven by the Python verifier.
 
 ## What is verified
 
@@ -68,7 +68,7 @@ The HTTP version check does not invoke `/v2/providers/versions`: that endpoint a
 - Codex model discovery returns `fixture-model`. Its schema export advertises no experimental live controls or queue support.
 - The fixture understands native initialization, thread start/resume/fork, prompt, interrupt and simple compaction frames. The integration run verifies only the operations listed above.
 
-Observed wire details: plain `.txt` files currently receive `application/octet-stream` from the backend's preview classifier, so the editable test fixture uses `.md`; Codex deltas are strings while Claude deltas contain `{type, text}`; native `turn/started` is consumed by the adapter instead of forwarded as a raw event. These are not Swift API decoding failures.
+Observed wire details: extension-less and unlisted file names receive `application/octet-stream` from the backend's preview classifier while still returning UTF-8 `text`, so the editable test fixture uses `.md`; Codex deltas are strings while Claude deltas contain `{type, text}`; native `turn/started` is consumed by the adapter instead of forwarded as a raw event. These are not Swift API decoding failures.
 
 ## Swift and simulator checks
 
@@ -86,7 +86,7 @@ python3 scripts/run_simulator_tests.py \
   --device SIMULATOR-UDID
 ```
 
-Use `xcrun simctl list devices available` to choose an installed iPhone or iPad. `--fixture` takes the fixture **directory**. The runner builds with the selected Xcode, injects only the fixture port/token through an owner-private `.xctestrun`, deletes that temporary run configuration, and leaves an `.xcresult` inside the fixture directory. `--skip-build` reuses the latest build; use it only when the app and test sources have not changed.
+Use `xcrun simctl list devices available` to choose an installed iPhone or iPad. `--fixture` takes the fixture **directory**. The runner builds with the selected Xcode, injects only the fixture port/device seed through an owner-private `.xctestrun`, deletes that temporary run configuration, and leaves an `.xcresult` inside the fixture directory. `--skip-build` reuses the latest build; use it only when the app and test sources have not changed.
 
 `TODEX_LIVE_FIXTURE` for Swift's optional WebSocket tests takes the **fixture.json file**. To select a single UI case, pass e.g. `--only-testing TodexUITests/TodexUITests/testDarkAppearanceAndLargeText`.
 

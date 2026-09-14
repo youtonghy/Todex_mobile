@@ -24,22 +24,24 @@ enum CredentialStore {
                 .appendingPathComponent("credentials", isDirectory: false)
                 .appendingPathExtension("json")
         }
-        private static func fallbackTokens() -> [String: String] {
+        private static func fallbackSecrets() -> [String: String] {
             (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: fallbackURL))) ?? [:]
         }
-        private static func setFallback(_ token: String, for id: String) throws {
-            var tokens = fallbackTokens()
-            if token.isEmpty { tokens[id] = nil } else { tokens[id] = token }
-            let data = try JSONEncoder().encode(tokens)
+        private static func setFallback(_ secret: String, for id: String) throws {
+            var secrets = fallbackSecrets()
+            if secret.isEmpty { secrets[id] = nil } else { secrets[id] = secret }
+            let data = try JSONEncoder().encode(secrets)
             try FileManager.default.createDirectory(
                 at: fallbackURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: fallbackURL, options: [.atomic, .completeFileProtection])
         }
     #endif
 
-    static func token(for id: String) -> String {
+    /// Returns the base64url-encoded Ed25519 device seed for this backend
+    /// profile, or "" when the device is not enrolled on it.
+    static func deviceSecret(for id: String) -> String {
         #if targetEnvironment(simulator)
-            if keychainUnavailable { return fallbackTokens()[id] ?? "" }
+            if keychainUnavailable { return fallbackSecrets()[id] ?? "" }
         #endif
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.todex.mobile.backend",
@@ -51,10 +53,10 @@ enum CredentialStore {
         }
         return String(decoding: data, as: UTF8.self)
     }
-    static func save(_ token: String, for id: String) throws {
+    static func save(_ secret: String, for id: String) throws {
         #if targetEnvironment(simulator)
             if keychainUnavailable {
-                try setFallback(token, for: id)
+                try setFallback(secret, for: id)
                 return
             }
         #endif
@@ -62,22 +64,22 @@ enum CredentialStore {
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.todex.mobile.backend",
             kSecAttrAccount as String: id,
         ]
-        if token.isEmpty {
+        if secret.isEmpty {
             let result = SecItemDelete(query as CFDictionary)
-            guard result == errSecSuccess || result == errSecItemNotFound else { throw TodexError.invalid("无法删除访问令牌") }
+            guard result == errSecSuccess || result == errSecItemNotFound else { throw TodexError.invalid("无法删除设备密钥") }
             return
         }
         let values: [String: Any] = [
-            kSecValueData as String: Data(token.utf8),
+            kSecValueData as String: Data(secret.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
         let updated = SecItemUpdate(query as CFDictionary, values as CFDictionary)
         if updated == errSecItemNotFound {
             guard SecItemAdd(query.merging(values) { _, rhs in rhs } as CFDictionary, nil) == errSecSuccess else {
-                throw TodexError.invalid("无法安全保存访问令牌")
+                throw TodexError.invalid("无法安全保存设备密钥")
             }
         } else if updated != errSecSuccess {
-            throw TodexError.invalid("无法更新访问令牌")
+            throw TodexError.invalid("无法更新设备密钥")
         }
     }
 }
@@ -100,13 +102,13 @@ nonisolated struct LocalStore: Sendable {
     static func namespace(_ connection: BackendConnection?) -> String {
         guard let connection else { return "unconnected-v2" }
         let endpoint = (try? connection.normalizedURL().absoluteString) ?? connection.serverURL
-        // The protocol has no stable authenticated-account endpoint. A credential
-        // change may select a different tenant, so it must use a separate cache.
-        return identity(["session-v2", connection.id, endpoint, connection.token])
+        // The protocol has no stable authenticated-account endpoint. A device
+        // change may select different permissions, so it uses a separate cache.
+        return identity(["session-v2", connection.id, endpoint, connection.deviceSecret])
     }
 
     func url(_ key: String) -> URL {
-        // The global connection catalog already uses this name; it has no tokens.
+        // The global connection catalog already uses this name; it has no keys.
         root.appendingPathComponent(key == "connections" ? "connections" : Self.identity([key]))
             .appendingPathExtension("json")
     }

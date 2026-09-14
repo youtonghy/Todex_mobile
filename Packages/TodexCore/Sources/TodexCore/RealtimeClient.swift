@@ -58,16 +58,17 @@ public actor RealtimeClient {
             var components = URLComponents(url: try connection.normalizedURL(), resolvingAgainstBaseURL: false)!
             components.scheme = components.scheme == "https" ? "wss" : "ws"
             components.path = "/v2/ws"
+            // Transport-crypto material travels as query parameters so the
+            // device signature binds the handshake to this enrolled device.
+            var query = crypto?.handshakeQuery ?? ""
+            if let device = DeviceIdentity(secretKeyBase64URL: connection.deviceSecret) {
+                let auth = try device.authQuery(pathAndQuery: "/v2/ws\(query.isEmpty ? "" : "?\(query)")")
+                query = query.isEmpty ? auth : "\(query)&\(auth)"
+            }
+            components.percentEncodedQuery = query.isEmpty ? nil : query
             guard let url = components.url else { throw TodexError.invalid("WebSocket 地址无效") }
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
             request.httpShouldHandleCookies = false
-            if !connection.token.isEmpty {
-                guard !connection.token.unicodeScalars.contains(where: { $0.value == 10 || $0.value == 13 }) else {
-                    throw TodexError.invalid("认证令牌包含换行")
-                }
-                request.setValue("Bearer \(connection.token)", forHTTPHeaderField: "Authorization")
-            }
-            for (key, value) in crypto?.handshakeHeaders ?? [:] { request.setValue(value, forHTTPHeaderField: key) }
             let socket = makeSocket(request)
             self.socket = socket
             receiver = Task { [weak self] in await self?.receive(revision: revision, socket: socket) }

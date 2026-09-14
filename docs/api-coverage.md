@@ -12,7 +12,7 @@
 
 [APIClientTests.swift](../Packages/TodexCore/Tests/TodexCoreTests/APIClientTests.swift) 在 Swift 6.3.3、macOS 的临时包副本中通过：11 个 Swift Testing 测试函数，其中 `endpointWire` 包含 45 个参数用例，`httpErrors` 包含 4 个参数用例，其余 9 个函数分别验证模型、默认值、分页、错误和协议。依赖使用本机已缓存的 swift-sodium 0.11.0；包副本的 Package.swift 与工作区原文件一致。
 
-这里的通过是 **URLProtocol 拦截 URLSession 实际构造请求后的本地契约测试**：逐项检查 HTTP method、编码后的 path、按后端规则解码的 query、Bearer 头、Accept/Content-Type、JSON body、返回值。fixture 使用独立的 .invalid 主机和 session；所有请求都被拦截。上述 URLProtocol 阶段没有启动或访问真实 backend，也没有调用真实 provider、Git、PTY、MCP、配对批准、升级或云任务。该阶段 WS 只验证编码、解码与源码支持状态；后续真实协议集成结果见文末。表中“已封装”不代表真实服务实测通过。
+这里的通过是 **URLProtocol 拦截 URLSession 实际构造请求后的本地契约测试**：逐项检查 HTTP method、编码后的 path、按后端规则解码的 query、设备签名头（x-todex-device-id/auth-ts/auth-nonce/auth-sig）、Accept/Content-Type、JSON body、返回值。fixture 使用独立的 .invalid 主机和 session；所有请求都被拦截。上述 URLProtocol 阶段没有启动或访问真实 backend，也没有调用真实 provider、Git、PTY、MCP、配对批准、升级或云任务。该阶段 WS 只验证编码、解码与源码支持状态；后续真实协议集成结果见文末。表中“已封装”不代表真实服务实测通过。
 
 复现命令（在允许产生构建文件的包副本中执行）：
 
@@ -88,7 +88,7 @@ swift test --package-path /path/to/TodexCore-copy \
 - 回放使用 `afterSequence` 和 `limit`（默认 200），返回完整 replay JSON，保留 nextSequence/hasMore。不会将缺失的列表字段悄悄当作空列表。
 - 文件保存必需 `expectedText`。Git operation 的 wire 为 `{ "workspacePath": "…", "operation": { "action": "create-branch", "branchName": "…" } }`。权限回复 wire 为 `{ "outcome": "allow_once", "optionId": "…" }` 等后端决策结构。
 - 复用现有 JSONValue、BackendConnection、HTTPClient，包括 URL 规范化、路径 segment 编码和 JSON 请求/错误处理。只在 APIClient 内处理两个例外：/health 的纯文本，以及查询值含字面量 + 的 GET。后者将 URLQueryItem 留下的 + 改为 %2B，避免被 Axum 的表单查询解析器变为空格；% 字符不重复解码。这两个分支使用同一个 session，并保留大小上限与 HTTP 错误语义，共同文件未修改。
-- 默认 session 禁用重定向、缓存和 cookie；公开探测/配对方法不附带 Bearer。额外的 `init(connection:session:)` 允许 URLProtocol 注入，调用方负责注入 session 的策略。
+- 默认 session 禁用重定向、缓存和 cookie；公开探测/配对方法不附带设备签名。额外的 `init(connection:session:)` 允许 URLProtocol 注入，调用方负责注入 session 的策略。
 - 非 GET 网络失败沿用 HTTPClient 的 unknownOutcome；不重试写操作。401/409/501/302、无效 JSON、缺失必需字段、204 空响应及传输超时均有本地用例。配对封装只发送公钥/设备名或 proof；poll proof 与 cancel proof 的派生域不同，密码学过程不属于本文件封装。
 
 ## WebSocket 协议
@@ -168,7 +168,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | 实际集成范围 | 结果与边界 |
 | --- | --- |
 | /health、/v2/version、transport-policy | 实际监听、纯文本/JSON 返回通过；未运行包含外部版本查询的 providers/versions |
-| HTTP/WS 认证 | 缺少和错误 Bearer 均被拒绝；有效 token 建连成功 |
+| HTTP/WS 认证 | 缺少签名与未注册设备签名均被拒绝；已注册设备签名建连成功 |
 | workspaces、trust、providers/models | 保存后端规范化记录，确认归属/信任并发现 fake Codex 模型 |
 | workspace/file、entries、directories | Unicode、空格及 + 路径通过；保存后读回一致，旧 expectedText 得到 409 且不覆盖文件 |
 | git/scan、status、workspace、operation、run | 临时仓库真实扫描、分支创建和提交通过；无 push/PR |
@@ -178,7 +178,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | terminal.start/input/resize/stop | 真实 /bin/sh PTY，输出验证避免命令回显误判；测试终端已停止 |
 | 错误边界 | 非法 id=400，不存在的合法 UUID=404，工作区外文件=403，未知 patch 字段=422 |
 
-最终保留的本机 fixture：`http://127.0.0.1:49933`，根目录 `/private/tmp/todex-mobile-fixture-ke6n6g8s`。该目录的 `fixture.json` 保存 PID、配置/工作区和会话 ID；`token.txt` 与 `simulator-connection.json` 保存测试连接凭据；`integration-report.json`、`conversation-events.json` 和 `logs/provider-wire.jsonl` 保存证据。token 未写入仓库。旧调试 fixture 已关闭，最终服务继续运行供同机 iOS Simulator 连接。
+最终保留的本机 fixture：`http://127.0.0.1:49933`，根目录 `/private/tmp/todex-mobile-fixture-ke6n6g8s`。该目录的 `fixture.json` 保存 PID、配置/工作区和会话 ID；`device.txt` 与 `simulator-connection.json` 保存测试设备凭据；`integration-report.json`、`conversation-events.json` 和 `logs/provider-wire.jsonl` 保存证据。设备密钥未写入仓库。旧调试 fixture 已关闭，最终服务继续运行供同机 iOS Simulator 连接。
 
 实际模拟器 UI、Swift APIClient 直连、加密 WS、真实 AI/MCP/云任务、CLI 升级、配对密码学均未在此阶段验证。已完成的 Python 集成不能代替这些检查。启动/停止方法和假 CLI 提示指令见 scripts/README.md。
 

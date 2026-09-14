@@ -71,6 +71,6 @@ session_build() {
 session_build --product SessionRaceTests
 session_bin=$(session_build --show-bin-path)
 # A malformed URL reproduces Xcode's launch-environment normalization. The
-# DEBUG fixture must prefer the port and retain the fixture-only token.
+# DEBUG fixture must prefer the port and retain the fixture device seed.
 TODEX_TEST_PORT=18999 TODEX_TEST_URL=http:/normalized.invalid \
-    TODEX_TEST_TOKEN=fixture-token "$session_bin/SessionRaceTests"
+    TODEX_TEST_DEVICE_SECRET=FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU "$session_bin/SessionRaceTests"

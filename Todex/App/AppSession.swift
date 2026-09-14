@@ -150,7 +150,7 @@ extension RealtimeClient: SessionSocket {}
                 startupError = error
             }
             for index in connections.indices {
-                connections[index].token = CredentialStore.token(for: connections[index].id)
+                connections[index].deviceSecret = CredentialStore.deviceSecret(for: connections[index].id)
             }
         }
         selectedID = defaults.string(forKey: "selectedBackend")
@@ -164,7 +164,7 @@ extension RealtimeClient: SessionSocket {}
             if initial == nil, let url = fixtureURL {
                 let fixture = BackendConnection(
                     id: "simulator-fixture", name: "测试后端", serverURL: url,
-                    token: environment["TODEX_TEST_TOKEN"] ?? "")
+                    deviceSecret: environment["TODEX_TEST_DEVICE_SECRET"] ?? "")
                 connections.removeAll { $0.id == fixture.id }
                 connections.append(fixture)
                 selectedID = fixture.id
@@ -222,7 +222,7 @@ extension RealtimeClient: SessionSocket {}
             // discard the whole connection list. The environment fixture is a
             // launch-time convenience and never enters the on-disk catalog.
             try store.save(values.filter { $0.id != fixtureConnectionID }, key: "connections")
-            for value in values { try saveCredential(value.token, value.id) }
+            for value in values { try saveCredential(value.deviceSecret, value.id) }
             for old in removed { try saveCredential("", old.id) }
         } catch {
             reportStorageError(error, namespace: stateNamespace, version: saveVersion)
@@ -263,7 +263,7 @@ extension RealtimeClient: SessionSocket {}
             // when no Settings save preceded it, or it would vanish on relaunch.
             do {
                 try store.save(connections.filter { $0.id != fixtureConnectionID }, key: "connections")
-                try saveCredential(next.token, next.id)
+                try saveCredential(next.deviceSecret, next.id)
             } catch {
                 reportStorageError(error, namespace: stateNamespace, version: saveVersion)
             }
@@ -464,7 +464,7 @@ extension RealtimeClient: SessionSocket {}
         let rhsURL =
             (try? rhs.normalizedURL().absoluteString) ?? rhs.serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
         return lhs.id == rhs.id && lhsURL == rhsURL
-            && lhs.token == rhs.token && lhs.encryption == rhs.encryption && lhs.publicKey == rhs.publicKey
+            && lhs.deviceSecret == rhs.deviceSecret && lhs.encryption == rhs.encryption && lhs.publicKey == rhs.publicKey
     }
 
     func refresh() async throws {
