@@ -5,6 +5,7 @@ import UserNotifications
 /// the system authorization is requested lazily when the user enables it.
 enum CompletionNotifications {
     static let defaultsKey = "completionNotifications"
+    static let conversationIdKey = "conversationId"
 
     static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: defaultsKey)
@@ -21,7 +22,7 @@ enum CompletionNotifications {
         content.title = title
         content.body = body
         content.sound = .default
-        content.userInfo = ["conversationId": conversationId]
+        content.userInfo = [conversationIdKey: conversationId]
         let request = UNNotificationRequest(
             identifier: "turn-completed-\(conversationId)-\(UUID().uuidString)",
             content: content, trigger: nil)

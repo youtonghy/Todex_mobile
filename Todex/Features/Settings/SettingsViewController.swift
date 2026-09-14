@@ -55,7 +55,10 @@ final class SettingsViewController: SettingsListController {
         var backends = connections.map { connection in
             SettingsRow(
                 title: connection.name.isEmpty ? "未命名后端" : connection.name,
-                detail: connection.serverURL.isEmpty ? "请填写后端地址" : connection.serverURL,
+                detail: connection.serverURL.isEmpty
+                    ? "请填写后端地址"
+                    : connection.tenantId.isEmpty
+                        ? connection.serverURL : "\(connection.serverURL) · \(connection.tenantId)",
                 symbol: "circle.fill", id: "settings.backend.\(connection.id)",
                 color: Self.labelColor(connection.color), checked: connection.id == selectedID
             ) { [weak self] in
@@ -91,6 +94,7 @@ final class SettingsViewController: SettingsListController {
                 field(
                     "Auth token", value: connection.token.isEmpty ? "未设置" : "••••••••（已设置）", key: "token",
                     connection: connection),
+                field("Tenant", value: connection.tenantId, key: "tenantId", connection: connection),
                 SettingsRow(title: "传输加密", detail: connection.encryption.rawValue, id: "settings.backend.encryption") {
                     [weak self] in
                     self?.choose(
@@ -133,6 +137,13 @@ final class SettingsViewController: SettingsListController {
                     let records = session.runtimes.values.flatMap(\.usageRecords)
                     self.navigationController?.pushViewController(
                         UsageViewController(records: records), animated: true)
+                })
+            rows.append(
+                SettingsRow(title: "关于", detail: "应用与后端版本", symbol: "info.circle", id: "settings.about") {
+                    [weak self] in
+                    guard let self else { return }
+                    self.navigationController?.pushViewController(
+                        AboutViewController(session: self.session, connection: connection), animated: true)
                 })
             rows.append(
                 SettingsRow(title: "删除此后端", symbol: "trash", id: "settings.backend.delete", color: .systemRed) {
@@ -248,17 +259,31 @@ final class SettingsViewController: SettingsListController {
             navigationController?.pushViewController(editor, animated: true)
             return
         }
-        let value = field == "name" ? connection.name : field == "token" ? connection.token : connection.serverURL
-        let title = field == "name" ? "名称" : field == "token" ? "Auth token" : "后端地址"
+        let value =
+            switch field {
+            case "name": connection.name
+            case "token": connection.token
+            case "tenantId": connection.tenantId
+            default: connection.serverURL
+            }
+        let title =
+            switch field {
+            case "name": "名称"
+            case "token": "Auth token"
+            case "tenantId": "Tenant"
+            default: "后端地址"
+            }
         editField(
             title: title, value: value, id: "settings.backend.\(field).input", secure: field == "token",
             keyboard: field == "serverURL" ? .URL : .default
         ) { [weak self] text in
             self?.update(connection.id) {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 switch field {
-                case "name": $0.name = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                case "token": $0.token = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                default: $0.serverURL = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                case "name": $0.name = trimmed
+                case "token": $0.token = trimmed
+                case "tenantId": $0.tenantId = trimmed.isEmpty ? "local" : trimmed
+                default: $0.serverURL = trimmed
                 }
             }
         }

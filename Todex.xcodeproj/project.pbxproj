@@ -22,6 +22,7 @@
 		5EA5115C50E4546B218113C7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6132B4A0F2562217F85EC8F3 /* Assets.xcassets */; };
 		6B7A7D7F0B3BB9A0CA92ED3F /* ConversationContainerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA55EE3C9574508B34FF25E6 /* ConversationContainerController.swift */; };
 		6F4586857B6DB936801ABA79 /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F221C4394429D796D00CBB9F /* LocalStore.swift */; };
+		7A61C87DEEA2D93B7356EBCB /* CodeHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E94641F64C898CE786F92167 /* CodeHighlighter.swift */; };
 		80CFEA452D2B24F25FA5DE4D /* WorkbenchGitViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E97168BC2449D0FD45B2BCC7 /* WorkbenchGitViewController.swift */; };
 		86C38986A674B9CDE0CEBFDC /* TimelineViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D967855CE742B8058D64D347 /* TimelineViewController.swift */; };
 		89B1CFAADFE78FB74B0A21DA /* UsageViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93278CF3C223560572013664 /* UsageViewController.swift */; };
@@ -35,6 +36,7 @@
 		D77BB42F7E3FA641974BA2DC /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D9D444CCD78823FE4D9E2E1 /* AppDelegate.swift */; };
 		E8612533DA5CE3F28E6E0B42 /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E702E6310573847EA39CF87 /* AppSession.swift */; };
 		E88E3E80DC4D3353CA37DB3B /* SettingsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49F509EC6CE7C518DB26A93C /* SettingsViewController.swift */; };
+		EF61661475F4CD89A8655828 /* AboutViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0C3871008BC1CDD5EC6A6BF /* AboutViewController.swift */; };
 		FC32E2AAC7CE825C824DD6D5 /* TaskBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0464BB12B759F5C01CC3F279 /* TaskBoardView.swift */; };
 		FDF662274A0BFA50B67CF129 /* AuxiliaryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4116C9C6F9FF556816D80D04 /* AuxiliaryViewController.swift */; };
 /* End PBXBuildFile section */
@@ -71,6 +73,7 @@
 		970A6A4B975E9B39FD48B86C /* TodexCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TodexCore; path = Packages/TodexCore; sourceTree = SOURCE_ROOT; };
 		9D9D444CCD78823FE4D9E2E1 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A1D53C9CFD11BD6B0243D37B /* WorkbenchBrowserViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchBrowserViewController.swift; sourceTree = "<group>"; };
+		B0C3871008BC1CDD5EC6A6BF /* AboutViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutViewController.swift; sourceTree = "<group>"; };
 		B951730B7E00F06BEF941170 /* CompletionNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionNotifications.swift; sourceTree = "<group>"; };
 		C63AE09ECFA35413A032814D /* CLIViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIViewController.swift; sourceTree = "<group>"; };
 		CD4992CC1CD7B78D9050C05A /* CatalogViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogViewController.swift; sourceTree = "<group>"; };
@@ -79,6 +82,7 @@
 		DF87381D01A89298CC562143 /* Todex.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Todex.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0817D5BCA31F65AABAE304D /* TodexUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodexUITests.swift; sourceTree = "<group>"; };
 		E45D1797EEA72BE5FF1B4AFC /* Chat */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Chat; path = Todex/Resources/Chat; sourceTree = SOURCE_ROOT; };
+		E94641F64C898CE786F92167 /* CodeHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeHighlighter.swift; sourceTree = "<group>"; };
 		E97168BC2449D0FD45B2BCC7 /* WorkbenchGitViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchGitViewController.swift; sourceTree = "<group>"; };
 		F221C4394429D796D00CBB9F /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
 		FA55EE3C9574508B34FF25E6 /* ConversationContainerController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationContainerController.swift; sourceTree = "<group>"; };
@@ -181,6 +185,7 @@
 		B05918357D9205409ACD58A5 /* Workbench */ = {
 			isa = PBXGroup;
 			children = (
+				E94641F64C898CE786F92167 /* CodeHighlighter.swift */,
 				A1D53C9CFD11BD6B0243D37B /* WorkbenchBrowserViewController.swift */,
 				7D9683C59EB937E7F975E784 /* WorkbenchFilesViewController.swift */,
 				E97168BC2449D0FD45B2BCC7 /* WorkbenchGitViewController.swift */,
@@ -210,6 +215,7 @@
 		D0F134CDA243E94DC783C7A7 /* Settings */ = {
 			isa = PBXGroup;
 			children = (
+				B0C3871008BC1CDD5EC6A6BF /* AboutViewController.swift */,
 				CD4992CC1CD7B78D9050C05A /* CatalogViewController.swift */,
 				C63AE09ECFA35413A032814D /* CLIViewController.swift */,
 				38CBAFAA70C87108D4EB0D31 /* PairingQRScannerViewController.swift */,
@@ -342,12 +348,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EF61661475F4CD89A8655828 /* AboutViewController.swift in Sources */,
 				D77BB42F7E3FA641974BA2DC /* AppDelegate.swift in Sources */,
 				E8612533DA5CE3F28E6E0B42 /* AppSession.swift in Sources */,
 				FDF662274A0BFA50B67CF129 /* AuxiliaryViewController.swift in Sources */,
 				43733A3F42F6FECF5BB0CC14 /* CLIViewController.swift in Sources */,
 				5DE7147A79524C28EAF3913C /* CatalogViewController.swift in Sources */,
 				D4165326DFF78EA6B06888AF /* ChatViewController.swift in Sources */,
+				7A61C87DEEA2D93B7356EBCB /* CodeHighlighter.swift in Sources */,
 				243EB93539E5223C217ADBF4 /* CompletionNotifications.swift in Sources */,
 				6B7A7D7F0B3BB9A0CA92ED3F /* ConversationContainerController.swift in Sources */,
 				1535BEA99563C1726839C68C /* DirectoryPicker.swift in Sources */,

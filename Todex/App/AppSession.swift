@@ -1,5 +1,8 @@
 import Foundation
 import TodexCore
+#if canImport(UIKit)
+    import UIKit
+#endif
 
 /// The sole transport seam needed for deterministic recovery/send race tests.
 nonisolated protocol SessionSocket: Sendable {
@@ -44,6 +47,7 @@ extension RealtimeClient: SessionSocket {}
     var pinnedWorkspaces: [String] = []
     var pinnedConversations: [String] = []
     var readSequences: [String: Int] = [:]
+    private(set) var sentAttachments: [SentAttachmentRecord] = []
     private(set) var api: APIClient?
     private var socket: (any SessionSocket)?
     private let store: LocalStore
@@ -86,6 +90,12 @@ extension RealtimeClient: SessionSocket {}
     private var reconnectAttempt = 0
     private var foreground = true
     private var wantsConnection = false
+    // Periodic /health probe (desktop parity): latency for the status line and a
+    // reachability hint that never overrides the authoritative socket state.
+    private(set) var healthLatencyMs: Int?
+    private(set) var healthFailed = false
+    private var healthTask: Task<Void, Never>?
+    private var healthProbeSeq = 0
     // This identity is frozen until old state has been captured for persistence.
     private var stateNamespace = "unconnected-v2"
     private var stateGeneration = UUID()
@@ -303,6 +313,7 @@ extension RealtimeClient: SessionSocket {}
             isConnecting = false
             isConnected = true
             connectionStatus = "已连接"
+            startHealthChecks()
             try await refresh()
             try checkRevision(current)
             if !legacyCursors.isEmpty {
@@ -343,6 +354,10 @@ extension RealtimeClient: SessionSocket {}
         reconnectTask = nil
         frameTask?.cancel()
         frameTask = nil
+        healthTask?.cancel()
+        healthTask = nil
+        healthLatencyMs = nil
+        healthFailed = false
         for flight in recoveryTasks.values { flight.task.cancel() }
         recoveryTasks.removeAll()
         queueDispatches.removeAll()
@@ -372,7 +387,11 @@ extension RealtimeClient: SessionSocket {}
             persist()
             reconnectTask?.cancel()
             reconnectTask = nil
-        } else if wantsConnection || connectTask != nil {
+            healthTask?.cancel()
+            healthTask = nil
+        } else {
+            if isConnected { startHealthChecks() }
+            guard wantsConnection || connectTask != nil else { return }
             let current = revision
             Task { [weak self] in
                 guard let self, current == revision else { return }
@@ -405,6 +424,35 @@ extension RealtimeClient: SessionSocket {}
             reconnectTask = nil
             await connect()
         }
+    }
+    /// Foreground-only probe loop; iOS suspends the socket in the background so
+    /// polling stops instead of draining battery on a dead connection.
+    private func startHealthChecks() {
+        guard healthTask == nil else { return }
+        healthTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.probeHealth()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+    }
+    private func probeHealth() async {
+        guard foreground, isConnected, let api else { return }
+        healthProbeSeq += 1
+        let probe = healthProbeSeq
+        let started = Date()
+        do {
+            _ = try await api.health()
+            guard probe == healthProbeSeq, isConnected else { return }
+            healthLatencyMs = max(0, Int(Date().timeIntervalSince(started) * 1000))
+            healthFailed = false
+        } catch {
+            guard probe == healthProbeSeq, isConnected, !Task.isCancelled else { return }
+            healthLatencyMs = nil
+            healthFailed = true
+        }
+        changed()
     }
     private func checkRevision(_ current: UUID) throws {
         guard current == revision, !Task.isCancelled else { throw CancellationError() }
@@ -717,6 +765,13 @@ extension RealtimeClient: SessionSocket {}
         if !pref.model.isEmpty { payload["model"] = .string(pref.model) }
         if !pref.reasoningEffort.isEmpty { payload["reasoningEffort"] = .string(pref.reasoningEffort) }
         let requestID = UUID().uuidString
+        if !draft.attachments.isEmpty {
+            sentAttachments.append(
+                SentAttachmentRecord(
+                    conversationId: id, requestId: requestID, text: draft.text,
+                    attachments: Self.prepareSentAttachments(draft.attachments)))
+            pruneSentAttachments()
+        }
         pendingSends[id] = PendingSend(requestId: requestID, draft: draft, afterSequence: runtime.appliedSequence)
         sending[id] = SendOperation(requestID: requestID, afterSequence: runtime.appliedSequence)
         if let queued { queues[id]?.removeAll { $0.id == queued.id } }
@@ -753,6 +808,7 @@ extension RealtimeClient: SessionSocket {}
             if pendingSends[id]?.requestId == requestID {
                 if !submitted || Self.knownRejection(error) {
                     pendingSends.removeValue(forKey: id)
+                    sentAttachments.removeAll { $0.conversationId == id && $0.requestId == requestID }
                     if let queued {
                         if queues[id]?.contains(where: { $0.id == queued.id }) != true {
                             queues[id, default: []].insert(queued, at: 0)
@@ -774,6 +830,55 @@ extension RealtimeClient: SessionSocket {}
         switch error {
         case TodexError.server, TodexError.invalid, TodexError.disconnected: true
         default: false
+        }
+    }
+    /// Receipts for one conversation, oldest first, for the timeline to join
+    /// against user entries via payload.clientRequestId.
+    func sentAttachments(for conversationId: String) -> [SentAttachmentRecord] {
+        sentAttachments.filter { $0.conversationId == conversationId }
+    }
+    private static func imagePreview(_ data: Data) -> String? {
+        // The macOS session-test package has no UIKit; receipts keep metadata only.
+        #if canImport(UIKit)
+            guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0
+            else { return nil }
+            for edge in [640.0, 480, 320, 160] {
+                let scale = min(1, edge / max(image.size.width, image.size.height))
+                let size = CGSize(
+                    width: max(1, (image.size.width * scale).rounded()),
+                    height: max(1, (image.size.height * scale).rounded()))
+                let rendered = UIGraphicsImageRenderer(size: size).image { _ in
+                    image.draw(in: CGRect(origin: .zero, size: size))
+                }
+                guard let jpeg = rendered.jpegData(compressionQuality: 0.75), jpeg.count <= 100 * 1024
+                else { continue }
+                return "data:image/jpeg;base64," + jpeg.base64EncodedString()
+            }
+        #endif
+        return nil
+    }
+    /// A broken image still leaves a receipt row; only the thumbnail is dropped.
+    private static func prepareSentAttachments(_ attachments: [MessageAttachment]) -> [SentAttachment] {
+        attachments.map { item in
+            SentAttachment(
+                id: item.id, kind: item.isImage ? "image" : "file", name: item.name,
+                mimeType: item.mimeType, sizeBytes: item.data.count,
+                preview: item.isImage ? imagePreview(item.data) : nil)
+        }
+    }
+    /// Recent 150 records; previews are evicted oldest-first past a 2 MB budget.
+    private func pruneSentAttachments() {
+        if sentAttachments.count > 150 { sentAttachments.removeFirst(sentAttachments.count - 150) }
+        var remaining = 2 * 1024 * 1024
+        for index in sentAttachments.indices.reversed() {
+            for attachment in sentAttachments[index].attachments.indices {
+                let bytes = sentAttachments[index].attachments[attachment].preview?.utf8.count ?? 0
+                if bytes > remaining {
+                    sentAttachments[index].attachments[attachment].preview = nil
+                } else {
+                    remaining -= bytes
+                }
+            }
         }
     }
     func reconcile(_ id: String) async throws {
@@ -1187,7 +1292,8 @@ extension RealtimeClient: SessionSocket {}
             lastPreferencesByProvider: lastPreferencesByProvider, lastAgent: lastAgent,
             queues: queues, pendingSends: pendingSends, legacyCursors: legacyCursors, readSequences: reads,
             pinnedWorkspaces: pinnedWorkspaces, pinnedConversations: pinnedConversations,
-            pausedQueues: pausedQueues, activeConversationID: activeConversationID, tasks: tasks)
+            pausedQueues: pausedQueues, activeConversationID: activeConversationID, tasks: tasks,
+            sentAttachments: sentAttachments)
         let checkpoint = Checkpoint(version: saveVersion, snapshot: snapshot)
         unsavedSnapshots[stateNamespace] = checkpoint
         return checkpoint
@@ -1324,6 +1430,7 @@ extension RealtimeClient: SessionSocket {}
                     }, uniquingKeysWith: max)
                 tasks = (snapshot.tasks + tasks).reduce(into: [String: KanbanTask]()) { $0[$1.id] = $1 }
                     .values.sorted { $0.createdAt < $1.createdAt || ($0.createdAt == $1.createdAt && $0.id < $1.id) }
+                sentAttachments = snapshot.sentAttachments
                 pausedQueues = Set(queues.keys)  // Restarts never automatically drain a persisted queue.
                 activeConversationID = activeConversationID ?? snapshot.activeConversationID
                 stateLoaded = true

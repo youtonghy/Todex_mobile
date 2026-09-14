@@ -555,6 +555,14 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
                 conversationId: id, permissionId: id,
                 decision: ["outcome": "allow_once", "optionId": "opt", "data": ["answer": "yes"]])
         },
+        .init(
+            name: "kanbanTasks", method: "GET", path: "/v2/kanban/tasks",
+            response: ["tasks": .array([])], expectedResult: .array([])
+        ) { try JSONValue(encoding: await $0.kanbanTasks()) },
+        .init(
+            name: "replaceKanbanTasks", method: "PUT", path: "/v2/kanban/tasks",
+            body: ["tasks": .array([])], response: ["tasks": .array([])], expectedResult: .array([])
+        ) { try JSONValue(encoding: await $0.replaceKanbanTasks([])) },
     ]
 }
 

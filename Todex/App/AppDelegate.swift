@@ -1,4 +1,5 @@
 import UIKit
+import UserNotifications
 
 @main final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(
@@ -15,7 +16,7 @@ import UIKit
     }
 }
 
-final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate, UNUserNotificationCenterDelegate {
     var window: UIWindow?
     private let session = AppSession()
     func scene(
@@ -29,7 +30,32 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         self.window = window
         Theme.applyAppearance(to: window)
         window.makeKeyAndVisible()
+        UNUserNotificationCenter.current().delegate = self
         if self.session.connection != nil { Task { await self.session.connect() } }
+        if let response = connectionOptions.notificationResponse {
+            routeNotificationResponse(response)
+        }
+    }
+    /// Completion notifications only fire while the app is backgrounded; when a
+    /// tap brings the scene back, open the conversation they refer to.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        routeNotificationResponse(response)
+        completionHandler()
+    }
+    private func routeNotificationResponse(_ response: UNNotificationResponse) {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+            let id = response.notification.request.content
+                .userInfo[CompletionNotifications.conversationIdKey] as? String,
+            !id.isEmpty,
+            let navigation = window?.rootViewController as? UINavigationController,
+            let home = navigation.viewControllers.first as? HomeViewController
+        else { return }
+        navigation.dismiss(animated: false)
+        navigation.popToRootViewController(animated: false)
+        home.openConversation(id: id)
     }
     func sceneDidBecomeActive(_ scene: UIScene) {
         session.setForeground(true)

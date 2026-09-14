@@ -53,6 +53,21 @@ function renderBody(body,text){
  body.querySelectorAll('pre code').forEach(code=>{if(code.textContent.length<32000){try{hljs.highlightElement(code);}catch{}}});
  body.querySelectorAll('pre').forEach(pre=>{const copy=document.createElement('button');copy.className='copy';copy.textContent='复制';copy.setAttribute('aria-label','复制代码');copy.onclick=()=>bridge({action:'copy',text:pre.textContent});pre.prepend(copy);});
 }
+function formatSize(bytes){if(!bytes)return'';if(bytes<1024)return bytes+' B';if(bytes<1048576)return Math.round(bytes/1024)+' KB';return (bytes/1048576).toFixed(1)+' MB';}
+// Receipts of what an outgoing message carried; backend events do not echo
+// attachments, so the client joins them by request id. Images get a local
+// thumbnail data URL; files and references show name and size.
+function renderAttachments(list){
+ const box=document.createElement('div');box.className='attachments';
+ for(const a of list){
+  const item=document.createElement('span');item.className='attachment';
+  if(a.preview){const img=document.createElement('img');img.src=a.preview;img.alt=a.name||'附件';item.append(img);}
+  const label=document.createElement('span');label.className='attachment-name';
+  label.textContent=(a.name||'附件')+(a.sizeBytes?' · '+formatSize(a.sizeBytes):'');
+  item.append(label);box.append(item);
+ }
+ return box;
+}
 // Consecutive activity events collapse into one group: while the turn runs the
 // summary reads 正在工作, afterwards only a single folded row remains so the
 // final output is what the timeline shows.
@@ -84,6 +99,7 @@ window.renderTimeline=function(messages,provider,fontSize){
   const meta=document.createElement('div');meta.className='meta';const who=document.createElement('span');who.className='brand';who.textContent=message.role==='user'?'你':provider;meta.append(who);
   if(runningStatus(message)){const status=document.createElement('span');status.textContent='正在生成…';meta.append(status);}article.append(meta);
   const body=document.createElement('div');body.className='body';renderBody(body,message.text);article.append(body);
+  if(Array.isArray(message.attachments)&&message.attachments.length)article.append(renderAttachments(message.attachments));
   article.oncontextmenu=e=>{if(getSelection()?.toString())return;e.preventDefault();bridge({action:'message',id:message.id,text:message.text});};
   root.append(article);
  }existing.forEach(e=>e.remove());

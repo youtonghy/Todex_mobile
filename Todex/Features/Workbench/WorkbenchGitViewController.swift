@@ -4,6 +4,7 @@ import UIKit
 @MainActor
 final class WorkbenchGitViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
     private let http: HTTPClient
+    private let connection: BackendConnection
     private let workspace: WorkspaceRecord
     private let conversationId: String
     private let command: WorkbenchCommand
@@ -43,11 +44,17 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
         command: @escaping WorkbenchCommand, insertReference: @escaping @MainActor (String) -> Void
     ) {
         http = HTTPClient(connection: connection)
+        self.connection = connection
         self.workspace = workspace
         self.conversationId = conversationId
         self.command = command
         self.insertReference = insertReference
         super.init(nibName: nil, bundle: nil)
+    }
+    /// Workspace records carry the backend-assigned tenant; an empty one falls
+    /// back to the connection's configured tenant, matching desktop behavior.
+    private var tenantId: String {
+        workspace.tenantId.isEmpty ? connection.tenantId : workspace.tenantId
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit {
@@ -609,7 +616,7 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
             do {
                 let record = WorkspaceRecord(
                     name: (path as NSString).lastPathComponent, path: path,
-                    tenantId: self.workspace.tenantId)
+                    tenantId: self.tenantId)
                 _ = try await self.http.request(
                     .put, path: "/v2/workspaces",
                     body: ["workspaces": .array([try JSONValue(encoding: record)])])
@@ -728,7 +735,7 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
                     "codex.local.request",
                     [
                         "codexSessionId": .string(self.workspace.sessionId),
-                        "tenantId": .string(self.workspace.tenantId), "method": "gitDiffToRemote",
+                        "tenantId": .string(self.tenantId), "method": "gitDiffToRemote",
                         "params": ["cwd": .string(self.workspace.path)],
                     ], 20)
                 var result = WBEvent.data(response)

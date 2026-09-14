@@ -26,6 +26,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private let suggestionBox = UIView()
     private let suggestionList = UIStackView()
     private var mentionTask: Task<Void, Never>?
+    private var skillCatalog: [JSONValue]?
+    private var skillCatalogTask: Task<Void, Never>?
     private var draft: ComposerDraft { session.drafts[conversation.id] ?? ComposerDraft() }
     private var submitting = false
     var openFile: ((String) -> Void)?
@@ -323,7 +325,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         status.text =
             "\(conversation.provider) · \(session.isConnected ? runtime?.readyForActions == true ? (running ? "正在进行" : "已同步") : "正在补齐记录" : session.status)"
         timeline.update(
-            runtime?.messages ?? [], provider: session.provider(for: conversation)?.displayName ?? conversation.provider
+            runtime?.messages ?? [], provider: session.provider(for: conversation)?.displayName ?? conversation.provider,
+            sentAttachments: session.sentAttachments(for: conversation.id)
         )
         if renderedDraft != draft {
             composer.attributedText = styledComposerText(draft.text)
@@ -479,7 +482,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             systemItem: .done, primaryAction: UIAction { [weak nav] _ in nav?.dismiss(animated: true) })
         present(nav, animated: true)
     }
-    // MARK: - Inline suggestions (/ commands, @ file mentions)
+    // MARK: - Inline suggestions (/ commands, @ file mentions, # skills)
     private struct Suggestion {
         let title: String
         let detail: String
@@ -502,6 +505,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             if items.isEmpty {
                 if let trigger = mentionTrigger() {
                     fetchMentionSuggestions(trigger)
+                } else if let trigger = skillTrigger() {
+                    fetchSkillSuggestions(trigger)
                 } else {
                     mentionTask?.cancel()
                     hideSuggestions()
@@ -514,6 +519,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         }
         if let trigger = mentionTrigger() {
             fetchMentionSuggestions(trigger)
+        } else if let trigger = skillTrigger() {
+            fetchSkillSuggestions(trigger)
         } else {
             mentionTask?.cancel()
             hideSuggestions()
@@ -647,6 +654,77 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         session.saveSoon()
         sendButton.isEnabled = canSend
         hideSuggestions()
+    }
+    /// `#` offers attachable skills from the backend catalog; picking one drops
+    /// the token and adds the same chip the catalog attach flow produces.
+    private func skillTrigger() -> (range: NSRange, query: String)? {
+        let text = composer.text ?? ""
+        let ns = text as NSString
+        let end = max(0, min(composer.selectedRange.location, ns.length))
+        let before = ns.substring(to: end)
+        let found = (before as NSString).range(of: "#", options: .backwards)
+        guard found.location != NSNotFound else { return nil }
+        guard found.location == 0
+            || CharacterSet.whitespacesAndNewlines.contains(
+                UnicodeScalar((before as NSString).character(at: found.location - 1)) ?? " ")
+        else { return nil }
+        let query = (before as NSString).substring(from: found.location + 1)
+        guard
+            query.rangeOfCharacter(
+                from: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "@#"))) == nil
+        else { return nil }
+        return (NSRange(location: found.location, length: end - found.location), query)
+    }
+    private func loadSkillCatalog() {
+        guard skillCatalogTask == nil else { return }
+        skillCatalogTask = Task { [weak self] in
+            defer { self?.skillCatalogTask = nil }
+            guard let self, let api = session.api else { return }
+            do {
+                let value = try await api.skills(
+                    provider: conversation.provider, workspace: conversation.workspace)
+                guard !Task.isCancelled else { return }
+                skillCatalog = value["skills"].arrayValue
+                updateSuggestions()
+            } catch { /* catalog stays nil; the next trigger retries */ }
+        }
+    }
+    private func fetchSkillSuggestions(_ trigger: (range: NSRange, query: String)) {
+        mentionTask?.cancel()
+        let range = trigger.range
+        let query = trigger.query.lowercased()
+        guard let catalog = skillCatalog else {
+            showSuggestions(
+                [Suggestion(title: "正在读取 Skill 目录…", detail: "", apply: {})], interactive: false)
+            loadSkillCatalog()
+            return
+        }
+        let matched = catalog.filter { item in
+            guard item["valid"].boolValue, !(item["resourceId"].optionalString ?? "").isEmpty
+            else { return false }
+            let name = item["name"].optionalString ?? ""
+            return query.isEmpty || name.lowercased().contains(query)
+        }.prefix(8)
+        guard !matched.isEmpty else {
+            showSuggestions(
+                [Suggestion(title: "没有匹配的 Skill", detail: "", apply: {})], interactive: false)
+            return
+        }
+        showSuggestions(
+            matched.map { item in
+                let id = item["resourceId"].stringValue
+                let name = item["name"].optionalString ?? "未命名"
+                return Suggestion(
+                    title: "#\(name)",
+                    detail: item["description"].optionalString ?? item["source"].stringValue
+                ) { [weak self] in
+                    self?.applySkillMention(range: range, id: id, name: name)
+                }
+            })
+    }
+    private func applySkillMention(range: NSRange, id: String, name: String) {
+        applyMention(range: range, text: "")
+        insertSkill(id, name: name)
     }
     private func showSuggestions(_ items: [Suggestion], interactive: Bool = true) {
         suggestionList.arrangedSubviews.forEach { $0.removeFromSuperview() }

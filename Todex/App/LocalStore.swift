@@ -156,6 +156,7 @@ nonisolated struct SessionSnapshot: Codable, Sendable {
     var pausedQueues: Set<String> = []
     var activeConversationID: String?
     var tasks: [KanbanTask] = []
+    var sentAttachments: [SentAttachmentRecord] = []
 }
 
 /// Every field decodes with decodeIfPresent so a snapshot written by an older
@@ -179,6 +180,7 @@ extension SessionSnapshot {
         pausedQueues = try c.decodeIfPresent(Set<String>.self, forKey: .pausedQueues) ?? []
         activeConversationID = try c.decodeIfPresent(String.self, forKey: .activeConversationID)
         tasks = try c.decodeIfPresent([KanbanTask].self, forKey: .tasks) ?? []
+        sentAttachments = try c.decodeIfPresent([SentAttachmentRecord].self, forKey: .sentAttachments) ?? []
     }
 }
 
@@ -338,4 +340,23 @@ nonisolated struct PendingSend: Codable, Sendable {
     var draft: ComposerDraft
     var afterSequence: Int
     var unknown = true
+}
+
+/// Local receipt of what an outgoing message carried. Backend events do not
+/// echo attachments, so the timeline joins these by clientRequestId; `preview`
+/// is a small JPEG data URL kept under a total budget, mirroring the desktop
+/// WebP receipts.
+nonisolated struct SentAttachment: Codable, Sendable, Equatable {
+    var id: String
+    var kind: String
+    var name: String
+    var mimeType: String
+    var sizeBytes: Int?
+    var preview: String?
+}
+nonisolated struct SentAttachmentRecord: Codable, Sendable, Equatable {
+    var conversationId: String
+    var requestId: String
+    var text: String
+    var attachments: [SentAttachment]
 }

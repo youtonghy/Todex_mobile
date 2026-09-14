@@ -6,11 +6,11 @@
 - WS 分派及 wire：[websocket.rs](../../TodeX_backend/src/server/websocket.rs)、[protocol.rs](../../TodeX_backend/src/server/protocol.rs)。
 - 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。旧客户端 [v2.ts](../../TodeX_app/src/lib/v2.ts) 仅作交叉参考。
 
-**43/43 个普通 HTTP method + path 已封装，56/56 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 43 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
+**45/45 个普通 HTTP method + path 已封装，56/56 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 45 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
 ## 验证范围
 
-[APIClientTests.swift](../Packages/TodexCore/Tests/TodexCoreTests/APIClientTests.swift) 在 Swift 6.3.3、macOS 的临时包副本中通过：11 个 Swift Testing 测试函数，其中 `endpointWire` 包含 43 个参数用例，`httpErrors` 包含 4 个参数用例，其余 9 个函数分别验证模型、默认值、分页、错误和协议。依赖使用本机已缓存的 swift-sodium 0.11.0；包副本的 Package.swift 与工作区原文件一致。
+[APIClientTests.swift](../Packages/TodexCore/Tests/TodexCoreTests/APIClientTests.swift) 在 Swift 6.3.3、macOS 的临时包副本中通过：11 个 Swift Testing 测试函数，其中 `endpointWire` 包含 45 个参数用例，`httpErrors` 包含 4 个参数用例，其余 9 个函数分别验证模型、默认值、分页、错误和协议。依赖使用本机已缓存的 swift-sodium 0.11.0；包副本的 Package.swift 与工作区原文件一致。
 
 这里的通过是 **URLProtocol 拦截 URLSession 实际构造请求后的本地契约测试**：逐项检查 HTTP method、编码后的 path、按后端规则解码的 query、Bearer 头、Accept/Content-Type、JSON body、返回值。fixture 使用独立的 .invalid 主机和 session；所有请求都被拦截。上述 URLProtocol 阶段没有启动或访问真实 backend，也没有调用真实 provider、Git、PTY、MCP、配对批准、升级或云任务。该阶段 WS 只验证编码、解码与源码支持状态；后续真实协议集成结果见文末。表中“已封装”不代表真实服务实测通过。
 
@@ -75,6 +75,8 @@ swift test --package-path /path/to/TodexCore-copy \
 | POST | `/v2/conversations/{conversation_id}/cancel` | `cancelConversation(id:)` | 已封装；认证 | `endpointWire(cancelConversation)` |
 | POST | `/v2/conversations/{conversation_id}/interrupt` | `interruptConversation(id:)` | 已封装；认证；后端与 cancel 共用处理器 | `endpointWire(interruptConversation)` |
 | POST | `/v2/conversations/{conversation_id}/permissions/{permission_id}` | `respondPermission(conversationId:permissionId:decision:)` | 已封装；认证；JSONValue 原样发送 | `endpointWire(respondPermission)` |
+| GET | `/v2/kanban/tasks` | `kanbanTasks()` | 已封装；认证；解包 tasks | `endpointWire(kanbanTasks)` |
+| PUT | `/v2/kanban/tasks` | `replaceKanbanTasks(_:)` | 已封装；认证；墓碑合并语义由后端负责 | `endpointWire(replaceKanbanTasks)` |
 
 ## Wire 与兼容细节
 

@@ -291,7 +291,8 @@ final class WorkbenchViewController: UIViewController {
         let child: UIViewController
         switch tab.kind {
         case .terminal:
-            child = WorkbenchTerminalViewController(tab: tab, workspace: workspace, command: command, update: update)
+            child = WorkbenchTerminalViewController(
+                tab: tab, connection: connection, workspace: workspace, command: command, update: update)
         case .files:
             child = WorkbenchFilesViewController(
                 tab: tab, connection: connection, workspacePath: workspace.path,

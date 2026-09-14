@@ -56,6 +56,19 @@ struct HTTPClientTests {
         #expect(fixture.requests.count == 2)
     }
 
+    @Test func connectionTenantDefaultsToLocalAndSurvivesWire() throws {
+        #expect(BackendConnection().tenantId == "local")
+        let legacy = try JSONDecoder().decode(
+            BackendConnection.self,
+            from: Data(#"{"id":"a","name":"n","serverURL":"https://x.invalid"}"#.utf8))
+        #expect(legacy.tenantId == "local")
+        let encoded = try JSONDecoder().decode(
+            [String: JSONValue].self,
+            from: JSONEncoder().encode(BackendConnection(token: "secret", tenantId: "team-b")))
+        #expect(encoded["tenantId"] == "team-b")
+        #expect(encoded["token"] == nil)
+    }
+
     @Test func policyUsesActualStatusAndCannotSilentlyDowngrade() throws {
         let none = BackendConnection()
         try RealtimeClient.validatePolicy(result(404, "not JSON"), connection: none)

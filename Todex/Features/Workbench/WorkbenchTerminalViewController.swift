@@ -8,6 +8,7 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
 {
     private enum State { case idle, checking, starting, running, stopping, exited, unknown }
     private var descriptor: WorkbenchTab
+    private let connection: BackendConnection
     private let workspace: WorkspaceRecord
     private let command: WorkbenchCommand
     private let update: @MainActor (WorkbenchTab) -> Void
@@ -15,6 +16,7 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
     private let statusLabel = UILabel()
     private let gapLabel = UILabel()
     private let directory = UITextField()
+    private let shell = UITextField()
     private var state: State = .idle
     private var cols = 80
     private var rows = 24
@@ -33,10 +35,12 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
     private var terminalId: String { descriptor.terminalId ?? "" }
 
     init(
-        tab descriptor: WorkbenchTab, workspace: WorkspaceRecord, command: @escaping WorkbenchCommand,
+        tab descriptor: WorkbenchTab, connection: BackendConnection, workspace: WorkspaceRecord,
+        command: @escaping WorkbenchCommand,
         update: @escaping @MainActor (WorkbenchTab) -> Void
     ) {
         self.descriptor = descriptor
+        self.connection = connection
         self.workspace = workspace
         self.command = command
         self.update = update
@@ -69,6 +73,15 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
         directory.returnKeyType = .go
         directory.delegate = self
         directory.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
+        shell.placeholder = "Shell（默认）"
+        shell.borderStyle = .roundedRect
+        shell.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        shell.autocorrectionType = .no
+        shell.autocapitalizationType = .none
+        shell.spellCheckingType = .no
+        shell.delegate = self
+        shell.widthAnchor.constraint(equalToConstant: 108).isActive = true
+        shell.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
             (self: WorkbenchTerminalViewController, _: UITraitCollection) in
             self.terminal.superview?.layer.borderColor = UIColor.separator.cgColor
@@ -99,8 +112,11 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
             UIAction(title: "连接已有 PTY", image: Theme.icon("link", pointSize: 13)) {
                 [weak self] _ in self?.chooseExistingTerminal()
             },
+            UIAction(title: "清屏", image: Theme.icon("xmark.circle", pointSize: 13)) {
+                [weak self] _ in self?.clearOutput()
+            },
         ])
-        let top = UIStackView(arrangedSubviews: [directory, statusLabel, actionButton, options])
+        let top = UIStackView(arrangedSubviews: [directory, shell, statusLabel, actionButton, options])
         top.axis = .horizontal
         top.spacing = 6
         top.alignment = .center
@@ -141,6 +157,7 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
     }
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
         textField.resignFirstResponder()
+        guard textField === directory else { return true }
         let cwd = (textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cwd.isEmpty else { return true }
         descriptor.path = cwd
@@ -152,7 +169,12 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
     }
 
     private var identity: [String: JSONValue] {
-        ["terminalId": .string(terminalId), "tenantId": .string(workspace.tenantId)]
+        ["terminalId": .string(terminalId), "tenantId": .string(tenantId)]
+    }
+    /// Backend-assigned workspace tenant wins; an empty one falls back to the
+    /// connection's configured tenant, matching the desktop client.
+    private var tenantId: String {
+        workspace.tenantId.isEmpty ? connection.tenantId : workspace.tenantId
     }
     private func renderState(_ text: String) {
         statusLabel.text = text
@@ -210,13 +232,13 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
             do {
                 let result = try await self.command(
                     "terminal.status",
-                    ["tenantId": .string(self.workspace.tenantId), "workspaceId": .string(self.workspace.id)], 15)
+                    ["tenantId": .string(self.tenantId), "workspaceId": .string(self.workspace.id)], 15)
                 let data = WBEvent.data(result)
                 guard case .array(let records) = data["terminals"] else {
                     throw TodexError.invalid("未收到终端列表；请确认宿主返回 terminal.status 实际结果")
                 }
                 let candidates = records.filter {
-                    $0["tenantId"].stringValue == self.workspace.tenantId
+                    $0["tenantId"].stringValue == self.tenantId
                         && $0["workspaceId"].stringValue == self.workspace.id
                 }
                 guard !candidates.isEmpty else {
@@ -244,11 +266,20 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
             } catch { WBUI.error(error, on: self) }
         }
     }
+    /// Local view reset only; the remote PTY keeps running and nothing is sent.
+    private func clearOutput() {
+        terminal.getTerminal().resetToInitialState()
+    }
     private func start() {
         guard hasCheckedStatus, [.idle, .exited].contains(state), operationTask == nil else { return }
         let cwd = (directory.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard cwd.hasPrefix("/") else {
             WBUI.message(on: self, title: "目录无效", text: "请输入后端绝对路径。")
+            return
+        }
+        let shellPath = (shell.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard shellPath.isEmpty || shellPath.hasPrefix("/") else {
+            WBUI.message(on: self, title: "Shell 无效", text: "请填写 Shell 的绝对路径，或留空使用后端默认。")
             return
         }
         state = .starting
@@ -260,6 +291,7 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
         var payload = identity
         payload["workspaceId"] = .string(workspace.id)
         payload["cwd"] = .string(cwd)
+        if !shellPath.isEmpty { payload["shell"] = .string(shellPath) }
         payload["cols"] = .number(Double(cols))
         payload["rows"] = .number(Double(rows))
         operationTask = Task { [weak self] in
@@ -311,7 +343,7 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
         }
     }
     private func applyStatus(_ data: JSONValue) {
-        if let tenant = data["tenantId"].optionalString, tenant != workspace.tenantId { return }
+        if let tenant = data["tenantId"].optionalString, tenant != tenantId { return }
         guard case .array = data["terminals"] else {
             state = .unknown
             renderState("终端状态响应缺少列表，无法确认 PTY 状态。")
@@ -323,7 +355,7 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
         else { return }
         hasCheckedStatus = true
         if let running = data["terminals"].arrayValue.first(where: { $0["terminalId"].stringValue == terminalId }) {
-            guard running["tenantId"].optionalString == nil || running["tenantId"].stringValue == workspace.tenantId
+            guard running["tenantId"].optionalString == nil || running["tenantId"].stringValue == tenantId
             else { return }
             guard running["workspaceId"].optionalString == nil || running["workspaceId"].stringValue == workspace.id
             else {
@@ -338,11 +370,12 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
                 descriptor.path = cwd
                 update(descriptor)
             }
+            if let value = running["shell"].optionalString, !value.isEmpty { shell.text = value }
             scheduleResize()
         } else {
             state = .idle
             let siblings = data["terminals"].arrayValue.filter {
-                $0["tenantId"].stringValue == self.workspace.tenantId
+                $0["tenantId"].stringValue == self.tenantId
                     && $0["workspaceId"].stringValue == self.workspace.id
             }
             if siblings.isEmpty {
@@ -362,7 +395,7 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
         let type = event["type"].stringValue
         guard type.hasPrefix("terminal."), type != "terminal.audit" else { return }
         let data = WBEvent.data(event)
-        if let tenant = data["tenantId"].optionalString, tenant != workspace.tenantId { return }
+        if let tenant = data["tenantId"].optionalString, tenant != tenantId { return }
         if let workspaceId = data["workspaceId"].optionalString ?? event["workspace_id"].optionalString,
             workspaceId != workspace.id
         {
@@ -385,6 +418,7 @@ final class WorkbenchTerminalViewController: UIViewController, @preconcurrency T
             state = .running
             hasCheckedStatus = true
             renderState("运行中 · PID \(data["pid"].intValue)")
+            if let value = data["shell"].optionalString, !value.isEmpty { shell.text = value }
             scheduleResize()
         case "terminal.stopping":
             state = .stopping

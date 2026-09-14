@@ -177,7 +177,14 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                     ? nil : (workspace, records.map(HomeRow.conversation))
             }
         }
-        statusLabel.text = [session.connection?.name, session.status].compactMap { $0 }.joined(separator: " · ")
+        var statusParts = [session.connection?.name, session.status].compactMap { $0 }
+        if session.isConnected {
+            if let ms = session.healthLatencyMs {
+                statusParts.append(ms < 1000 ? "\(ms)ms" : String(format: "%.1fs", Double(ms) / 1000))
+            }
+            if session.healthFailed { statusParts.append("不可达") }
+        }
+        statusLabel.text = statusParts.joined(separator: " · ")
         statusLabel.textColor = session.isConnected ? Theme.accent : .secondaryLabel
         if showingBoard ? sortedWorkspaces.isEmpty : groups.isEmpty {
             var config = UIContentUnavailableConfiguration.empty()
@@ -343,6 +350,24 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         session.select(conversation)
         navigationController?.pushViewController(
             ConversationContainerController(session: session, conversation: conversation), animated: true)
+    }
+    /// Notification taps arrive before the catalog has loaded; refresh once
+    /// before deciding the conversation is gone (deleted or another backend).
+    func openConversation(id: String) {
+        if let item = session.conversations.first(where: { $0.id == id }) {
+            open(item)
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            if !session.isConnected { await session.connect() }
+            try? await session.refresh()
+            if let item = session.conversations.first(where: { $0.id == id }) {
+                open(item)
+            } else {
+                showNotice(title: "对话不可用", message: "这条对话可能已删除，或属于其他后端。")
+            }
+        }
     }
     func tableView(
         _ tableView: UITableView, contextMenuConfigurationForRowAt indexPath: IndexPath, point: CGPoint

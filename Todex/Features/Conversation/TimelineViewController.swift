@@ -8,6 +8,7 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
     private var loaded = false
     private var messages: [TimelineMessage] = []
     private var provider = "TodeX"
+    private var sentAttachments: [SentAttachmentRecord] = []
     var insertText: ((String) -> Void)?
     var openFile: ((String) -> Void)?
     var addReference: ((MessageAttachment) -> Void)?
@@ -32,10 +33,16 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
             (self: TimelineViewController, _: UITraitCollection) in self.render()
         }
     }
-    func update(_ messages: [TimelineMessage], provider: String) {
-        guard self.messages != messages || self.provider != provider else { return }
+    func update(
+        _ messages: [TimelineMessage], provider: String,
+        sentAttachments: [SentAttachmentRecord] = []
+    ) {
+        guard self.messages != messages || self.provider != provider
+            || self.sentAttachments != sentAttachments
+        else { return }
         self.messages = messages
         self.provider = provider
+        self.sentAttachments = sentAttachments
         render()
     }
     /// Scroll the timeline so the source message of a reference is visible.
@@ -63,11 +70,27 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
     }
     private func render() {
         guard loaded else { return }
-        let values: [[String: Any]] = messages.reversed().map {
-            [
-                "id": $0.id, "role": $0.role, "category": $0.category, "text": $0.text,
-                "status": $0.status, "tool": Self.toolName(of: $0),
+        let receipts = Dictionary(
+            sentAttachments.map { ($0.requestId, $0) }, uniquingKeysWith: { _, last in last })
+        let values: [[String: Any]] = messages.reversed().map { message in
+            var value: [String: Any] = [
+                "id": message.id, "role": message.role, "category": message.category,
+                "text": message.text, "status": message.status, "tool": Self.toolName(of: message),
             ]
+            if message.role == "user",
+                let requestId = message.detail["clientRequestId"].optionalString
+                    ?? message.detail["requestId"].optionalString,
+                let record = receipts[requestId]
+            {
+                value["attachments"] = record.attachments.map { attachment in
+                    [
+                        "id": attachment.id, "kind": attachment.kind, "name": attachment.name,
+                        "mimeType": attachment.mimeType, "sizeBytes": attachment.sizeBytes ?? 0,
+                        "preview": attachment.preview ?? "",
+                    ] as [String: Any]
+                }
+            }
+            return value
         }
         Task { [weak self] in
             guard let self else { return }

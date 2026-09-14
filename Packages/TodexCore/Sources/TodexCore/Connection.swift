@@ -10,29 +10,33 @@ public struct BackendConnection: Identifiable, Codable, Sendable, Equatable {
     public var name: String
     public var serverURL: String
     public var token: String
+    public var tenantId: String
     public var encryption: EncryptionProtocol
     public var publicKey: String
     public var color: String
     public init(
         id: String = UUID().uuidString, name: String = "我的后端", serverURL: String = "http://127.0.0.1:7345",
-        token: String = "", encryption: EncryptionProtocol = .none, publicKey: String = "", color: String = "teal"
+        token: String = "", tenantId: String = "local", encryption: EncryptionProtocol = .none,
+        publicKey: String = "", color: String = "teal"
     ) {
         self.id = id
         self.name = name
         self.serverURL = serverURL
         self.token = token
+        self.tenantId = tenantId
         self.encryption = encryption
         self.publicKey = publicKey
         self.color = color
     }
     // Authentication credentials live in Keychain only.
-    enum CodingKeys: String, CodingKey { case id, name, serverURL, encryption, publicKey, color }
+    enum CodingKeys: String, CodingKey { case id, name, serverURL, tenantId, encryption, publicKey, color }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
         serverURL = try c.decode(String.self, forKey: .serverURL)
         token = ""
+        tenantId = try c.decodeIfPresent(String.self, forKey: .tenantId) ?? "local"
         encryption = try c.decodeIfPresent(EncryptionProtocol.self, forKey: .encryption) ?? .none
         publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey) ?? ""
         color = try c.decodeIfPresent(String.self, forKey: .color) ?? "teal"
