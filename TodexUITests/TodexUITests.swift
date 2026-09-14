@@ -242,8 +242,9 @@ nonisolated final class TodexUITests: XCTestCase {
         let fileLink = app.webViews.links["打开 README"].firstMatch
         XCTAssertTrue(fileLink.waitForExistence(timeout: 5))
         fileLink.tap()
+        let markdown = app.webViews["workbench.file.markdown"]
+        XCTAssertTrue(markdown.waitForExistence(timeout: 10))
         let editor = app.textViews["workbench.file.editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
         let fileStatus = app.staticTexts["workbench.file.status"]
         expectation(
             for: NSPredicate(format: "label CONTAINS %@", "bytes"), evaluatedWith: fileStatus)

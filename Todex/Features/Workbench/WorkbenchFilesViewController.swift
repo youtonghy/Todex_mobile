@@ -1,9 +1,11 @@
+import SafariServices
 import TodexCore
 import UIKit
+import WebKit
 
 @MainActor
 final class WorkbenchFilesViewController: UIViewController, UITableViewDataSource, UITableViewDelegate,
-    UISearchBarDelegate, UITextViewDelegate
+    UISearchBarDelegate, UITextViewDelegate, WKScriptMessageHandler, WKNavigationDelegate
 {
     private var descriptor: WorkbenchTab
     private let http: HTTPClient
@@ -18,6 +20,9 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     private let preview = UIView()
     private let editor = UITextView()
     private let imageView = UIImageView()
+    private var markdownView: WKWebView?
+    private var markdownLoaded = false
+    private var markdownPending: String?
     private let modes = UISegmentedControl(items: ["预览", "源码"])
     private var searchActive = false
     private var entries: [JSONValue] = []
@@ -109,6 +114,11 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             views: [header, search, modes, table, preview])
         showFileUI(false)
         if let path = descriptor.filePath { loadFile(path) } else { loadDirectory() }
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
+            (self: WorkbenchFilesViewController, _: UITraitCollection) in
+            guard let text = self.originalText, self.markdownView?.isHidden == false else { return }
+            self.renderMarkdown(text)
+        }
     }
     private func showFileUI(_ visible: Bool) {
         table.isHidden = visible
@@ -182,6 +192,8 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         descriptor.filePath = nil
         editor.text = ""
         imageView.image = nil
+        markdownView?.isHidden = true
+        markdownPending = nil
         editor.isEditable = false
         entries = []
         table.reloadData()
@@ -229,6 +241,8 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         editor.isEditable = false
         imageView.image = nil
         imageView.isHidden = true
+        markdownView?.isHidden = true
+        markdownPending = nil
         editor.isHidden = false
         showFileUI(true)
         info.text = "正在读取 \(path)…"
@@ -258,15 +272,12 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         guard let file else { return }
         editor.isHidden = false
         imageView.isHidden = true
+        markdownView?.isHidden = true
         if let text = originalText {
             let ext = (file["name"].stringValue as NSString).pathExtension.lowercased()
             if ["md", "markdown"].contains(ext), modes.selectedSegmentIndex == 0 {
-                do {
-                    editor.attributedText = try renderedMarkdown(text)
-                } catch {
-                    editor.text = text
-                    info.text = "Markdown 渲染失败，显示源码：\(error.localizedDescription)"
-                }
+                editor.isHidden = true
+                showMarkdown(text)
             } else {
                 editor.attributedText = nil
                 editor.text = text
@@ -284,63 +295,87 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             editor.text = "此格式没有可用的文本或原生图片预览。后端未提供可编辑文本。"
         }
     }
-    private func renderedMarkdown(_ text: String) throws -> NSAttributedString {
-        let parsed = try AttributedString(markdown: text, options: .init(interpretedSyntax: .full))
-        let output = NSMutableAttributedString(string: "")
-        var previousBlock: Int?
-        var previousTableRow: Int?
-        for run in parsed.runs {
-            let components = run.presentationIntent?.components ?? []
-            let block = components.first?.identity
-            var heading: Int?
-            var listOrdinal: Int?
-            var ordered = false
-            var quote = false
-            var code = false
-            var tableRow: Int?
-            for component in components {
-                switch component.kind {
-                case .header(let level): heading = level
-                case .listItem(let ordinal): listOrdinal = ordinal
-                case .orderedList: ordered = true
-                case .blockQuote: quote = true
-                case .codeBlock: code = true
-                case .tableRow, .tableHeaderRow: tableRow = component.identity
-                default: break
-                }
+    /// Markdown preview renders in a bundled WKWebView (markdown-it + KaTeX +
+    /// highlight.js, same resources as the conversation timeline) so code blocks
+    /// scroll horizontally instead of wrapping, tables and math render, and the
+    /// result matches the desktop document preview.
+    private func showMarkdown(_ text: String) {
+        if markdownView == nil {
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = .nonPersistent()
+            config.userContentController.add(WeakMarkdownHandler(self), name: "chat")
+            let web = WKWebView(frame: .zero, configuration: config)
+            web.isOpaque = false
+            web.backgroundColor = Theme.background
+            web.scrollView.backgroundColor = Theme.background
+            web.navigationDelegate = self
+            web.accessibilityIdentifier = "workbench.file.markdown"
+            preview.addSubview(web)
+            WBUI.pin(web, to: preview)
+            if let url = Bundle.main.url(forResource: "preview", withExtension: "html", subdirectory: "Chat") {
+                web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
             }
-            if block != previousBlock {
-                if output.length > 0 {
-                    let separator =
-                        tableRow != nil && tableRow == previousTableRow ? "\t" : (listOrdinal == nil ? "\n\n" : "\n")
-                    output.append(NSAttributedString(string: separator))
-                }
-                if let listOrdinal { output.append(NSAttributedString(string: ordered ? "\(listOrdinal). " : "• ")) }
-                if quote { output.append(NSAttributedString(string: "▎ ")) }
-                previousBlock = block
-                previousTableRow = tableRow
-            }
-            let intent = run.inlinePresentationIntent ?? []
-            let base = UIFont.preferredFont(forTextStyle: .body)
-            var font =
-                code || intent.contains(.code)
-                ? UIFont.monospacedSystemFont(ofSize: base.pointSize, weight: .regular) : base
-            if let heading { font = .systemFont(ofSize: max(base.pointSize, 30 - CGFloat(heading) * 2), weight: .bold) }
-            var traits = font.fontDescriptor.symbolicTraits
-            if intent.contains(.stronglyEmphasized) { traits.insert(.traitBold) }
-            if intent.contains(.emphasized) { traits.insert(.traitItalic) }
-            if let descriptor = font.fontDescriptor.withSymbolicTraits(traits) {
-                font = UIFont(descriptor: descriptor, size: font.pointSize)
-            }
-            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.label]
-            if code || intent.contains(.code) { attributes[.backgroundColor] = UIColor.secondarySystemBackground }
-            if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-            if let link = run.link, ["https", "http"].contains(link.scheme?.lowercased() ?? "") {
-                attributes[.link] = link
-            }
-            output.append(NSAttributedString(string: String(parsed[run.range].characters), attributes: attributes))
+            markdownView = web
         }
-        return output
+        markdownView?.isHidden = false
+        guard markdownLoaded else {
+            markdownPending = text
+            return
+        }
+        renderMarkdown(text)
+    }
+    private func renderMarkdown(_ text: String) {
+        Task { [weak self] in
+            guard let self, let web = self.markdownView else { return }
+            _ = try? await web.callAsyncJavaScript(
+                "window.renderDocument(text, fontSize)",
+                arguments: [
+                    "text": text,
+                    "fontSize": UIFont.preferredFont(forTextStyle: .body).pointSize,
+                ], in: nil, contentWorld: .page)
+        }
+    }
+    /// Relative markdown links resolve against the current file's directory and
+    /// open as a workbench file tab; http(s) links open in Safari.
+    private func openMarkdownLink(_ raw: String) {
+        let cleaned = raw.replacingOccurrences(of: "#.*$", with: "", options: .regularExpression)
+        guard !cleaned.isEmpty else { return }
+        if let scheme = URL(string: cleaned)?.scheme?.lowercased(), scheme != "file" {
+            if ["http", "https"].contains(scheme), let url = URL(string: cleaned) {
+                present(SFSafariViewController(url: url), animated: true)
+            }
+            return
+        }
+        guard let current = descriptor.filePath else { return }
+        let decoded = cleaned.removingPercentEncoding ?? cleaned
+        let base = (current as NSString).deletingLastPathComponent
+        let resolved =
+            decoded.hasPrefix("/")
+            ? (decoded as NSString).standardizingPath
+            : ((base as NSString).appendingPathComponent(decoded) as NSString).standardizingPath
+        openFileTab(resolved)
+    }
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame, let body = message.body as? [String: String] else { return }
+        switch body["action"] {
+        case "ready":
+            markdownLoaded = true
+            if let pending = markdownPending {
+                markdownPending = nil
+                renderMarkdown(pending)
+            }
+        case "copy":
+            UIPasteboard.general.string = body["text"]
+            UIAccessibility.post(notification: .announcement, argument: "已复制")
+        case "link":
+            openMarkdownLink(body["url"] ?? "")
+        default: break
+        }
+    }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async
+        -> WKNavigationActionPolicy
+    {
+        navigationAction.request.url?.isFileURL == true ? .allow : .cancel
     }
     @objc private func modeChanged() {
         guard !editingText else { return }
@@ -350,6 +385,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         guard let originalText, !isSaving else { return }
         editingText = true
         modes.selectedSegmentIndex = 1
+        markdownView?.isHidden = true
         editor.attributedText = nil
         editor.text = originalText
         editor.isEditable = true
@@ -587,5 +623,13 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             }
             return UIMenu(children: actions)
         })
+    }
+}
+
+private final class WeakMarkdownHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WorkbenchFilesViewController?
+    init(_ target: WorkbenchFilesViewController) { self.target = target }
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(userContentController, didReceive: message)
     }
 }
