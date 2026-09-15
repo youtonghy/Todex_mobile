@@ -6,6 +6,8 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
 {
     let session: AppSession
     private var observer: UUID?
+    // Alerts once per mismatched backend version instead of on every reload.
+    private var alertedBackendVersion: String?
     private let search = UISearchController(searchResultsController: nil)
     private let filter = UISegmentedControl(items: ["工作区", "任务", "归档"])
     private let table = UITableView(frame: .zero, style: .insetGrouped)
@@ -183,9 +185,21 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                 statusParts.append(ms < 1000 ? "\(ms)ms" : String(format: "%.1fs", Double(ms) / 1000))
             }
             if session.healthFailed { statusParts.append("不可达") }
+            if session.versionMismatch != nil { statusParts.append("版本不一致") }
         }
         statusLabel.text = statusParts.joined(separator: " · ")
-        statusLabel.textColor = session.isConnected ? Theme.accent : .secondaryLabel
+        statusLabel.textColor =
+            session.isConnected ? (session.versionMismatch == nil ? Theme.accent : .systemOrange) : .secondaryLabel
+        if let mismatch = session.versionMismatch {
+            if alertedBackendVersion != mismatch.backend {
+                alertedBackendVersion = mismatch.backend
+                WBUI.message(
+                    on: self, title: "版本不一致",
+                    text: "后端 \(mismatch.backend) 与本应用 \(mismatch.app) 版本不一致，请升级以避免不兼容。")
+            }
+        } else {
+            alertedBackendVersion = nil
+        }
         if showingBoard ? sortedWorkspaces.isEmpty : groups.isEmpty {
             var config = UIContentUnavailableConfiguration.empty()
             config.image = Theme.icon(

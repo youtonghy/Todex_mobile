@@ -48,6 +48,14 @@ final class AboutViewController: SettingsListController {
             info("后端", backendName.isEmpty ? "未加载" : backendName),
             info("后端地址", connection?.serverURL ?? "未配置"),
         ]
+        if let backendVersion = backendInfo?["version"].optionalString {
+            let app = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            rows.append(
+                info(
+                    "版本检查",
+                    VersionCheck.mismatch(app: app, backend: backendVersion)
+                        ? "应用 \(app ?? "未知") 与后端 \(backendVersion) 不一致，请升级" : "一致"))
+        }
         if let tenant = connection?.tenantId, !tenant.isEmpty {
             rows.append(info("Tenant", tenant))
         }

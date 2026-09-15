@@ -96,6 +96,10 @@ extension RealtimeClient: SessionSocket {}
     private(set) var healthFailed = false
     private var healthTask: Task<Void, Never>?
     private var healthProbeSeq = 0
+    // Release versions ship in lockstep across backend and clients; a non-dev
+    // mismatch surfaces as an upgrade warning. Dev builds (DEV0.0.0) skip it.
+    private(set) var versionMismatch: (app: String, backend: String)?
+    private var versionProbeSeq = 0
     // This identity is frozen until old state has been captured for persistence.
     private var stateNamespace = "unconnected-v2"
     private var stateGeneration = UUID()
@@ -314,6 +318,7 @@ extension RealtimeClient: SessionSocket {}
             isConnected = true
             connectionStatus = "已连接"
             startHealthChecks()
+            checkBackendVersion(api)
             try await refresh()
             try checkRevision(current)
             if !legacyCursors.isEmpty {
@@ -358,6 +363,8 @@ extension RealtimeClient: SessionSocket {}
         healthTask = nil
         healthLatencyMs = nil
         healthFailed = false
+        versionMismatch = nil
+        versionProbeSeq += 1
         for flight in recoveryTasks.values { flight.task.cancel() }
         recoveryTasks.removeAll()
         queueDispatches.removeAll()
@@ -453,6 +460,21 @@ extension RealtimeClient: SessionSocket {}
             healthFailed = true
         }
         changed()
+    }
+    /// Best-effort /v2/version probe after connect; failures stay silent and a
+    /// stale probe cannot overwrite a newer transport's result.
+    private func checkBackendVersion(_ api: APIClient) {
+        versionProbeSeq += 1
+        let probe = versionProbeSeq
+        Task { [weak self] in
+            guard let info = try? await api.version(),
+                let backend = info["version"].optionalString
+            else { return }
+            guard let self, self.versionProbeSeq == probe, self.isConnected else { return }
+            let app = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            self.versionMismatch = VersionCheck.mismatch(app: app, backend: backend) ? (app ?? "未知", backend) : nil
+            self.changed()
+        }
     }
     private func checkRevision(_ current: UUID) throws {
         guard current == revision, !Task.isCancelled else { throw CancellationError() }
