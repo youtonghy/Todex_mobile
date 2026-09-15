@@ -12,6 +12,8 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
     var insertText: ((String) -> Void)?
     var openFile: ((String) -> Void)?
     var addReference: ((MessageAttachment) -> Void)?
+    /// Fetch full process details for a folded group: (group key, fromSequence, toSequence).
+    var loadActivity: ((String, Int, Int) -> Void)?
     override func viewDidLoad() {
         super.viewDidLoad()
         let config = WKWebViewConfiguration()
@@ -53,6 +55,13 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
         web.evaluateJavaScript(
             "document.querySelector('[data-id=\\'\(escaped)\\']')?.scrollIntoView({block:'center',behavior:'smooth'})")
     }
+    /// Tell the web view a lazy process-detail load failed so it can offer a retry.
+    func activityLoadFailed(_ key: String) {
+        let escaped = key
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        web.evaluateJavaScript("window.activityLoadFailed?.('\(escaped)')")
+    }
     /// Display name for a tool call: the provider-reported name when present,
     /// the command itself for shell executions, otherwise a generic label.
     private static func toolName(of message: TimelineMessage) -> String {
@@ -76,6 +85,7 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
             var value: [String: Any] = [
                 "id": message.id, "role": message.role, "category": message.category,
                 "text": message.text, "status": message.status, "tool": Self.toolName(of: message),
+                "stub": message.detail["detailStub"].boolValue, "sequence": message.sequence,
             ]
             if message.role == "user",
                 let requestId = message.detail["clientRequestId"].optionalString
@@ -108,6 +118,11 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
         case "ready":
             loaded = true
             render()
+        case "loadActivity":
+            guard let key = body["key"], !key.isEmpty,
+                let from = Int(body["from"] ?? ""), let to = Int(body["to"] ?? ""), to >= from
+            else { return }
+            loadActivity?(key, from, to)
         case "copy":
             UIPasteboard.general.string = body["text"]
             UIAccessibility.post(notification: .announcement, argument: "已复制")

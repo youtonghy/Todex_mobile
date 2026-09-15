@@ -706,4 +706,56 @@ struct ConversationRuntimeTests {
         #expect(copy.lastProgressAt == runtime.lastProgressAt)
         #expect(runtime.appliedSequence == 2)
     }
+
+    @Test func summaryStubsKeepFoldedEntriesAndHydrateFillsContentByID() throws {
+        // conversation-runtime.test.cjs: summary stubs + hydrate merge.
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(
+            try event(
+                2, "provider.event",
+                #"{"turnId":"t","detailStub":true,"block":{"id":"call-1","category":"tool","phase":"completed","turnId":"t"},"toolCallId":"call-1","toolName":"shell"}"#
+            ))
+        runtime.ingest(
+            try event(
+                3, "provider.event",
+                #"{"turnId":"t","detailStub":true,"block":{"id":"think-1","category":"reasoning","phase":"completed","turnId":"t"}}"#
+            ))
+        runtime.ingest(try event(4, "message.delta", #"{"turnId":"t","text":"Answer"}"#))
+        runtime.ingest(try event(5, "turn.completed", #"{"turnId":"t"}"#))
+        #expect(runtime.appliedSequence == 5)
+        let toolStub = try #require(runtime.messages.first { $0.category == "tool" })
+        let thinkStub = try #require(runtime.messages.first { $0.category == "reasoning" })
+        #expect(toolStub.detail["detailStub"].boolValue == true)
+        #expect(thinkStub.detail["detailStub"].boolValue == true)
+        let hydrated = runtime.hydrate([
+            try event(
+                3, "provider.event",
+                #"{"turnId":"t","thinking":"deep thought","block":{"id":"think-1","category":"reasoning","phase":"completed","turnId":"t"}}"#
+            ),
+            try event(
+                2, "provider.event",
+                #"{"turnId":"t","block":{"id":"call-1","category":"tool","phase":"completed","turnId":"t"},"toolCallId":"call-1","result":"file list"}"#
+            ),
+        ])
+        #expect(hydrated)
+        let tool = try #require(runtime.messages.first { $0.id == toolStub.id })
+        let think = try #require(runtime.messages.first { $0.id == thinkStub.id })
+        #expect(tool.detail["detailStub"].isNull)
+        #expect(tool.text.contains("file list"))
+        #expect(think.text == "deep thought")
+        #expect(runtime.appliedSequence == 5)
+        #expect(runtime.messages.first { $0.role == "assistant" }?.text == "Answer")
+    }
+
+    @Test func stubFallbackCoversHeuristicEventsWhoseContentKeysWereStripped() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(
+            try event(2, "provider.event", #"{"turnId":"t","detailStub":true}"#))
+        runtime.ingest(
+            try event(3, "provider.event", #"{"turnId":"t","detailStub":true,"toolCall":{"id":"c1"}}"#))
+        #expect(runtime.messages.contains { $0.category == "reasoning" && $0.turnId == "t" })
+        #expect(runtime.messages.contains { $0.category == "tool" })
+    }
 }

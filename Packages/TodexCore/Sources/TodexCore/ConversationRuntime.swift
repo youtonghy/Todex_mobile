@@ -8,10 +8,12 @@ public struct TimelineMessage: Identifiable, Sendable, Equatable {
     public var text: String
     public var status: String
     public var detail: JSONValue
+    /// Source event sequence; process-detail hydration merges and orders by it.
+    public var sequence: Int
 
     public init(
         id: String, turnId: String, role: String, category: String, text: String,
-        status: String, detail: JSONValue
+        status: String, detail: JSONValue, sequence: Int = 0
     ) {
         self.id = id
         self.turnId = turnId
@@ -20,6 +22,7 @@ public struct TimelineMessage: Identifiable, Sendable, Equatable {
         self.text = text
         self.status = status
         self.detail = detail
+        self.sequence = sequence
     }
 }
 
@@ -200,8 +203,41 @@ public struct ConversationRuntime: Sendable {
         }
     }
 
+    /// Hydrate folded process entries after a `detail=summary` replay. Full
+    /// events for an expanded group's sequence range are projected on a
+    /// scratch runtime, then merged back by message id. Only process
+    /// categories merge: visible output already arrived complete and
+    /// assistant segment ids depend on stream context outside the range.
+    @discardableResult
+    public mutating func hydrate(_ events: [ConversationEvent]) -> Bool {
+        let detailCategories: Set<String> = ["tool", "reasoning", "status", "assistant_progress"]
+        let sorted = events
+            .filter { $0.conversationId == conversationId }
+            .sorted { $0.sequence < $1.sequence }
+        guard !sorted.isEmpty else { return false }
+        var scratch = ConversationRuntime(conversationId: conversationId)
+        for event in sorted {
+            scratch.apply(event)
+        }
+        var changed = false
+        for entry in scratch.messages where detailCategories.contains(entry.category) {
+            if let index = messages.firstIndex(where: { $0.id == entry.id }) {
+                if messages[index] != entry {
+                    messages[index] = entry
+                    changed = true
+                }
+            } else {
+                let position = messages.firstIndex { $0.sequence < entry.sequence } ?? messages.endIndex
+                messages.insert(entry, at: position)
+                changed = true
+            }
+        }
+        return changed
+    }
+
     private mutating func projectMessage(_ event: ConversationEvent, type: String, turnId: String) {
         let payload = event.payload
+        let isStub = payload["detailStub"].boolValue
         let block = payload["block"]
         let message = payload["message"]
         let role = Self.string(payload["role"], message["role"]).lowercased()
@@ -252,6 +288,12 @@ public struct ConversationRuntime: Sendable {
             .contains(type)
         {
             category = "assistant_final"
+        } else if isStub {
+            // Summary replays strip the content fields the heuristics match
+            // on; preserved tool markers decide between the two detail kinds.
+            category =
+                ["tool", "toolCall", "tool_call", "command", "function", "functionCall", "function_call"]
+                .contains { !payload[$0].isNull } ? "tool" : "reasoning"
         } else {
             return
         }
@@ -342,7 +384,8 @@ public struct ConversationRuntime: Sendable {
         } else {
             nextText = text
         }
-        guard !nextText.isEmpty || ["tool", "approval", "error"].contains(category) || previous != nil else { return }
+        guard !nextText.isEmpty || isStub || ["tool", "approval", "error"].contains(category) || previous != nil
+        else { return }
         let toolFailed = category == "tool" && (payload["isError"].boolValue || payload["is_error"].boolValue)
         let messageStatus =
             toolFailed
@@ -354,7 +397,8 @@ public struct ConversationRuntime: Sendable {
         let entry = TimelineMessage(
             id: id, turnId: turnId,
             role: category == "user" ? "user" : category == "assistant_final" ? "assistant" : "system",
-            category: category, text: nextText, status: messageStatus, detail: detail)
+            category: category, text: nextText, status: messageStatus, detail: detail,
+            sequence: event.sequence)
         if let index { messages[index] = entry } else { messages.insert(entry, at: 0) }
         if family != "assistant", category != "user" { assistantInterrupted = true }
     }

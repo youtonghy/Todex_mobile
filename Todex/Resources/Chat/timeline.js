@@ -25,7 +25,7 @@ quote.onclick=()=>{
  if(text.trim())bridge({action:'quote',text,id:quote.dataset.id||''});
  getSelection()?.removeAllRanges();quote.hidden=true;
 };
-let initial=true;const openDetails=new Set();const openTools=new Set();
+let initial=true;const openDetails=new Set();const openTools=new Set();const pendingLoads=new Set();
 const activityLabel={tool:'工具活动',reasoning:'思考过程',status:'状态',assistant_progress:'进度',usage:'用量'};
 const isActivity=m=>Object.prototype.hasOwnProperty.call(activityLabel,m.category);
 const runningStatus=m=>['running','streaming','awaitingApproval','in_progress'].includes(m.status);
@@ -78,8 +78,18 @@ function renderActivityGroup(items,existing){
  article.dataset.signature=signature;article.className='message activity';article.replaceChildren();
  const last=items[items.length-1],running=items.some(runningStatus);
  const d=document.createElement('details');d.className='activity';
- const s=document.createElement('summary');s.textContent=running?'正在工作 · '+activityLabel[last.category]+' · '+(last.text||'').slice(0,40):'过程记录 · '+items.length+' 项';d.append(s);
- const populate=()=>{if(d.dataset.loaded)return;d.dataset.loaded='1';for(const item of items){if(item.category==='tool'){d.append(renderTool(item));continue;}const row=document.createElement('div');row.className='activity-item';const label=document.createElement('div');label.className='activity-label';label.textContent=activityLabel[item.category];const body=document.createElement('div');body.className='body';renderBody(body,item.text);row.append(label,body);row.oncontextmenu=e=>{if(getSelection()?.toString())return;e.preventDefault();bridge({action:'message',id:item.id,text:item.text});};d.append(row);}};
+ const s=document.createElement('summary');s.textContent=running?'正在工作 · '+activityLabel[last.category]:'工作过程';d.append(s);
+ const populate=()=>{if(d.dataset.loaded)return;d.dataset.loaded='1';
+  const stubs=items.filter(i=>i.stub);
+  if(stubs.length){
+   const row=document.createElement('div');row.className='activity-loading';row.textContent='正在加载过程记录…';d.append(row);
+   if(!pendingLoads.has(key)){
+    const seqs=stubs.map(i=>i.sequence).filter(n=>typeof n==='number'&&n>0);
+    if(seqs.length){pendingLoads.add(key);d.dataset.from=String(Math.min(...seqs));d.dataset.to=String(Math.max(...seqs));bridge({action:'loadActivity',key,from:d.dataset.from,to:d.dataset.to});}
+   }
+   return;
+  }
+  for(const item of items){if(item.category==='tool'){d.append(renderTool(item));continue;}const row=document.createElement('div');row.className='activity-item';const label=document.createElement('div');label.className='activity-label';label.textContent=activityLabel[item.category];const body=document.createElement('div');body.className='body';renderBody(body,item.text);row.append(label,body);row.oncontextmenu=e=>{if(getSelection()?.toString())return;e.preventDefault();bridge({action:'message',id:item.id,text:item.text});};d.append(row);}};
  d.open=openDetails.has(key);if(d.open)populate();d.ontoggle=()=>{if(d.open){openDetails.add(key);populate();}else openDetails.delete(key);};article.append(d);existing.delete(key);return article;
 }
 window.renderTimeline=function(messages,provider,fontSize){
@@ -104,6 +114,14 @@ window.renderTimeline=function(messages,provider,fontSize){
   root.append(article);
  }existing.forEach(e=>e.remove());
  if(follow)scrollTo(0,document.documentElement.scrollHeight);else scrollTo(0,top);initial=false;updateBottom();
+};
+window.activityLoadFailed=function(key){
+ pendingLoads.delete(key);
+ const d=root.querySelector('[data-id="'+CSS.escape(key)+'"] details.activity');if(!d)return;
+ d.querySelectorAll('.activity-loading,.activity-load-failed').forEach(e=>e.remove());
+ const row=document.createElement('div');row.className='activity-load-failed';row.textContent='加载过程记录失败，点按重试';
+ row.onclick=()=>{row.className='activity-loading';row.textContent='正在加载过程记录…';row.onclick=null;pendingLoads.add(key);bridge({action:'loadActivity',key,from:d.dataset.from||'0',to:d.dataset.to||'0'});};
+ d.append(row);
 };
 document.addEventListener('click',e=>{const a=e.target.closest('a');if(a){e.preventDefault();bridge({action:'link',url:a.getAttribute('href')});}});
 bridge({action:'ready'});

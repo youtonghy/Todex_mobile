@@ -291,12 +291,14 @@ public final class APIClient: Sendable {
         return try value.decoded(ConversationManifest.self)
     }
 
-    public func events(conversationId: String, after: Int, limit: Int = 200) async throws -> JSONValue {
-        try await queryRequest(
-            path: "\(conversationPath(conversationId))/events",
-            query: [
-                "afterSequence": String(after), "limit": String(limit),
-            ])
+    public func events(
+        conversationId: String, after: Int, limit: Int = 200, detail: String = "full"
+    ) async throws -> JSONValue {
+        var query = ["afterSequence": String(after), "limit": String(limit)]
+        // `summary` folds process-only events down to detailStub markers; the
+        // full payloads for a sequence range are fetched on demand.
+        if detail != "full" { query["detail"] = detail }
+        return try await queryRequest(path: "\(conversationPath(conversationId))/events", query: query)
     }
 
     public func createConversation(

@@ -70,6 +70,17 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         timeline.insertText = { [weak self] in self?.insert($0) }
         timeline.openFile = { [weak self] in self?.openFile?($0) }
         timeline.addReference = { [weak self] in self?.addReference($0) }
+        timeline.loadActivity = { [weak self] key, from, to in
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.session.hydrateActivity(
+                        conversationId: self.conversation.id, from: from, to: to)
+                } catch {
+                    self.timeline.activityLoadFailed(key)
+                }
+            }
+        }
         let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
         glass.layer.cornerRadius = 26
         glass.clipsToBounds = true

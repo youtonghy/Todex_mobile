@@ -704,12 +704,46 @@ extension RealtimeClient: SessionSocket {}
         }
         throw TodexError.invalid("订阅分页过多，恢复未完成")
     }
+    /// Fetch the full events covering a folded process group and merge them
+    /// into the projected timeline. Called when a user expands a group that
+    /// arrived as `detail=summary` stubs.
+    func hydrateActivity(conversationId id: String, from lower: Int, to upper: Int) async throws {
+        guard let api, isConnected else { throw TodexError.disconnected }
+        let current = revision
+        var events: [ConversationEvent] = []
+        var cursor = lower - 1
+        for _ in 0..<10_000 {
+            try checkRevision(current)
+            let page = try await api.events(
+                conversationId: id, after: cursor, limit: min(200, max(1, upper - cursor)))
+            try checkRevision(current)
+            guard case .array(let raw) = page["events"] else { throw TodexError.invalid("历史分页响应无效") }
+            var reached = false
+            for value in raw {
+                let event = try value.decoded(ConversationEvent.self)
+                guard event.conversationId == id else { throw TodexError.invalid("历史事件属于其他对话") }
+                guard event.sequence > cursor, event.sequence <= upper else { continue }
+                events.append(event)
+                cursor = event.sequence
+                reached = true
+            }
+            guard reached else { throw TodexError.invalid("过程详情分页没有前进") }
+            if cursor >= upper || !page["hasMore"].boolValue { break }
+        }
+        guard cursor >= upper else { throw TodexError.invalid("过程详情分页过多") }
+        var runtime = runtimes[id] ?? ConversationRuntime(conversationId: id)
+        if runtime.hydrate(events) {
+            runtimes[id] = runtime
+            changed()
+        }
+    }
+
     private func replayPages(_ id: String, target: Int, api: APIClient, revision current: UUID) async throws {
         var highWater = target
         for _ in 0..<10_000 {
             try checkRevision(current)
             let before = runtimes[id]?.appliedSequence ?? 0
-            let page = try await api.events(conversationId: id, after: before, limit: 200)
+            let page = try await api.events(conversationId: id, after: before, limit: 200, detail: "summary")
             try checkRevision(current)
             guard case .array(let events) = page["events"] else { throw TodexError.invalid("历史分页响应无效") }
             for raw in events { try ingestReplay(raw, conversationId: id) }
