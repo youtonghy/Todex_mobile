@@ -61,7 +61,13 @@ final class AboutViewController: SettingsListController {
         }
         if let backend = backendInfo {
             rows.append(info("数据目录", backend["data_dir"].optionalString ?? "未知"))
-            rows.append(info("工作区根目录", backend["workspace_root"].optionalString ?? "未知"))
+            let workspaceRoots = backend["workspace_roots"].arrayValue
+                .map(\.stringValue).filter { !$0.isEmpty }
+            rows.append(info(
+                "工作区根目录",
+                workspaceRoots.isEmpty
+                    ? (backend["workspace_root"].optionalString ?? "未知")
+                    : workspaceRoots.joined(separator: "\n")))
         }
         sections = [
             SettingsSection(title: "TodeX", footer: "iPhone 与 iPad 原生客户端。", rows: rows),
