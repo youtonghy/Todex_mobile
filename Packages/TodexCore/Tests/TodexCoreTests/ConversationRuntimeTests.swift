@@ -5,9 +5,9 @@ import Testing
 
 /// Payloads below are excerpts from the actual shared-client regression fixtures
 /// and backend emitters, not values synthesized by the Swift reducer:
-/// - TodeX_app/tests/unit/conversation-runtime.test.cjs
-/// - TodeX_app/tests/unit/conversation-recovery.test.cjs
-/// - TodeX_app/tests/unit/mobile-parity.test.cjs
+/// - TodeX_protocol/tests/unit/conversation-runtime.test.cjs
+/// - TodeX_protocol/tests/unit/conversation-recovery.test.cjs
+/// - TodeX_protocol/tests/unit/mobile-parity.test.cjs
 /// - TodeX_backend/src/provider/codex.rs (codex_item_event)
 /// - TodeX_backend/src/provider/pi.rs (pi_completed_message_events, pi_tool_payload)
 /// Only the journal sequence/conversation wrapper is supplied by `event`.

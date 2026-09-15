@@ -4,7 +4,7 @@
 
 - 路由：[routes.rs](../../TodeX_backend/src/server/routes.rs)、[v2.rs](../../TodeX_backend/src/server/v2.rs)、[device_pairing.rs](../../TodeX_backend/src/server/device_pairing.rs)。
 - WS 分派及 wire：[websocket.rs](../../TodeX_backend/src/server/websocket.rs)、[protocol.rs](../../TodeX_backend/src/server/protocol.rs)。
-- 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。旧客户端 [v2.ts](../../TodeX_app/src/lib/v2.ts) 仅作交叉参考。
+- 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。共享客户端 [v2.ts](../../TodeX_protocol/src/v2.ts) 仅作交叉参考。
 
 **45/45 个普通 HTTP method + path 已封装，56/56 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 45 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
