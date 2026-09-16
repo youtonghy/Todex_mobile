@@ -29,6 +29,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private let suggestionList = UIStackView()
     private var mentionTask: Task<Void, Never>?
     private var skillCatalog: [JSONValue]?
+    private var mcpCatalog: [JSONValue]?
     private var skillCatalogTask: Task<Void, Never>?
     private var draft: ComposerDraft { session.drafts[conversation.id] ?? ComposerDraft() }
     private var submitting = false
@@ -260,10 +261,15 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         setDraft(value)
         focusCaret(after: reference.id)
     }
+    /// Toggles the chip like the desktop `#` picker: choosing an attached
+    /// skill detaches it again.
     func insertSkill(_ id: String, name: String) {
         var value = draft
-        guard !value.skills.contains(where: { $0.id == id }) else { return }
-        value.skills.append(.init(id: id, name: name))
+        if value.skills.contains(where: { $0.id == id }) {
+            value.skills.removeAll { $0.id == id }
+        } else {
+            value.skills.append(.init(id: id, name: name))
+        }
         setDraft(value)
     }
     private func setDraft(_ value: ComposerDraft) {
@@ -717,24 +723,24 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             }
             let items = slashSuggestions(matching: "/" + token)
             if items.isEmpty {
-                if let trigger = mentionTrigger() {
-                    fetchMentionSuggestions(trigger)
-                } else if let trigger = skillTrigger() {
-                    fetchSkillSuggestions(trigger)
-                } else {
-                    mentionTask?.cancel()
-                    hideSuggestions()
-                }
+                updateReferenceSuggestions()
             } else {
                 mentionTask?.cancel()
                 showSuggestions(items)
             }
             return
         }
-        if let trigger = mentionTrigger() {
-            fetchMentionSuggestions(trigger)
-        } else if let trigger = skillTrigger() {
-            fetchSkillSuggestions(trigger)
+        updateReferenceSuggestions()
+    }
+    /// `@` file mentions and `#` capability references share the popup; the
+    /// trigger closest to the caret wins, matching the desktop composer.
+    private func updateReferenceSuggestions() {
+        let mention = mentionTrigger()
+        let skill = skillTrigger()
+        if let mention, mention.range.location >= (skill?.range.location ?? -1) {
+            fetchMentionSuggestions(mention)
+        } else if let skill {
+            fetchSkillSuggestions(skill)
         } else {
             mentionTask?.cancel()
             hideSuggestions()
@@ -881,8 +887,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         sendButton.isEnabled = canSend
         hideSuggestions()
     }
-    /// `#` offers attachable skills from the backend catalog; picking one drops
-    /// the token and adds the same chip the catalog attach flow produces.
+    /// `#` offers attachable skills plus MCP references from the backend
+    /// catalogs; picking a skill drops the token and toggles the same chip the
+    /// catalog attach flow produces, while an MCP inserts `#name` text.
     private func skillTrigger() -> (range: NSRange, query: String)? {
         let text = composer.text ?? ""
         let ns = text as NSString
@@ -901,52 +908,95 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         else { return nil }
         return (NSRange(location: found.location, length: end - found.location), query)
     }
-    private func loadSkillCatalog() {
+    /// The desktop `#` popup merges every provider's catalog with the
+    /// conversation's own provider first; load both lists lazily and keep
+    /// partial results when one provider fails.
+    private func loadCapabilityCatalog() {
         guard skillCatalogTask == nil else { return }
         skillCatalogTask = Task { [weak self] in
             defer { self?.skillCatalogTask = nil }
             guard let self, let api = session.api else { return }
-            do {
-                let value = try await api.skills(
-                    provider: conversation.provider, workspace: conversation.workspace)
-                guard !Task.isCancelled else { return }
-                skillCatalog = value["skills"].arrayValue
-                updateSuggestions()
-            } catch { /* catalog stays nil; the next trigger retries */ }
+            var skills: [JSONValue] = []
+            var mcps: [JSONValue] = []
+            var ordered = [conversation.provider]
+            ordered += session.providers.map(\.id).filter { !ordered.contains($0) }
+            for provider in ordered {
+                if Task.isCancelled { return }
+                if let value = try? await api.skills(
+                    provider: provider, workspace: conversation.workspace) {
+                    skills += value["skills"].arrayValue
+                }
+                if let value = try? await api.mcpCatalog(
+                    provider: provider, workspace: conversation.workspace) {
+                    mcps += value["servers"].arrayValue
+                }
+            }
+            guard !Task.isCancelled else { return }
+            skillCatalog = skills
+            mcpCatalog = mcps
+            updateSuggestions()
         }
     }
     private func fetchSkillSuggestions(_ trigger: (range: NSRange, query: String)) {
         mentionTask?.cancel()
         let range = trigger.range
         let query = trigger.query.lowercased()
-        guard let catalog = skillCatalog else {
+        guard let skills = skillCatalog, let mcps = mcpCatalog else {
             showSuggestions(
-                [Suggestion(title: "正在读取 Skill 目录…", detail: "", apply: {})], interactive: false)
-            loadSkillCatalog()
+                [Suggestion(title: "正在读取 Skill 与 MCP 目录…", detail: "", apply: {})], interactive: false)
+            loadCapabilityCatalog()
             return
         }
-        let matched = catalog.filter { item in
+        var seenSkills = Set<String>()
+        let matchedSkills = skills.filter { item in
             guard item["valid"].boolValue, !(item["resourceId"].optionalString ?? "").isEmpty
             else { return false }
             let name = item["name"].optionalString ?? ""
+            let detail = item["description"].optionalString ?? item["source"].stringValue
+            return query.isEmpty || name.lowercased().contains(query) || detail.lowercased().contains(query)
+        }.filter { item in
+            seenSkills.insert("\(item["resourceId"].stringValue):\(item["name"].stringValue)").inserted
+        }
+        var seenMcps = Set<String>()
+        let matchedMcps = mcps.filter { item in
+            guard item["enabled"].boolValue else { return false }
+            let name = item["name"].optionalString ?? ""
             return query.isEmpty || name.lowercased().contains(query)
-        }.prefix(8)
-        guard !matched.isEmpty else {
+                || item["source"].stringValue.lowercased().contains(query)
+        }.filter { item in
+            let key = item["resourceId"].optionalString
+                ?? "\(item["name"].stringValue):\(item["source"].stringValue)"
+            return seenMcps.insert(key).inserted
+        }
+        let attached = draft.skills
+        var items = matchedSkills.map { item -> Suggestion in
+            let id = item["resourceId"].stringValue
+            let name = item["name"].optionalString ?? "未命名"
+            let detail = item["description"].optionalString ?? item["source"].stringValue
+            let state = attached.contains(where: { $0.id == id }) ? " · 已附加" : ""
+            return Suggestion(
+                title: "#\(name)",
+                detail: "Skill\(state)\(detail.isEmpty ? "" : " · \(detail)")"
+            ) { [weak self] in
+                self?.applySkillMention(range: range, id: id, name: name)
+            }
+        }
+        items += matchedMcps.map { item -> Suggestion in
+            let name = item["name"].optionalString ?? "未命名"
+            return Suggestion(
+                title: "#\(name)",
+                detail: "MCP · \(item["transport"].stringValue) · \(item["source"].stringValue)"
+            ) { [weak self] in
+                self?.applyMention(range: range, text: "#\(name) ")
+            }
+        }
+        items = Array(items.prefix(8))
+        guard !items.isEmpty else {
             showSuggestions(
-                [Suggestion(title: "没有匹配的 Skill", detail: "", apply: {})], interactive: false)
+                [Suggestion(title: "没有匹配的 Skill 或 MCP", detail: "", apply: {})], interactive: false)
             return
         }
-        showSuggestions(
-            matched.map { item in
-                let id = item["resourceId"].stringValue
-                let name = item["name"].optionalString ?? "未命名"
-                return Suggestion(
-                    title: "#\(name)",
-                    detail: item["description"].optionalString ?? item["source"].stringValue
-                ) { [weak self] in
-                    self?.applySkillMention(range: range, id: id, name: name)
-                }
-            })
+        showSuggestions(items)
     }
     private func applySkillMention(range: NSRange, id: String, name: String) {
         applyMention(range: range, text: "")
