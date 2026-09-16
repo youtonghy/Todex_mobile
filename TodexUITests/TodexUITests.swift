@@ -515,8 +515,9 @@ nonisolated final class TodexUITests: XCTestCase {
     }
 
     /// `#` lists backend skills and inserting one produces the same removable
-    /// chip as the catalog attach flow; a photo attachment renders a persisted
-    /// receipt card that survives relaunch.
+    /// chip as the catalog attach flow; a photo attachment becomes an inline
+    /// composer capsule and renders a persisted receipt card that survives
+    /// relaunch.
     @MainActor func testParitySkillMentionAndAttachmentReceipt() throws {
         continueAfterFailure = false
         guard ProcessInfo.processInfo.environment["TODEX_TEST_PORT"] != nil else {
@@ -562,9 +563,9 @@ nonisolated final class TodexUITests: XCTestCase {
         let confirm = app.buttons["完成"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         confirm.tap()
-        let attachedChip = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS %@", "图片.jpg")).firstMatch
-        XCTAssertTrue(attachedChip.waitForExistence(timeout: 10), "附件没有出现在草稿")
+        let capsuleValue = NSPredicate(format: "value CONTAINS %@", "图片.jpg")
+        expectation(for: capsuleValue, evaluatedWith: input)
+        waitForExpectations(timeout: 10)
         input.tap()
         input.typeText("带附件")
         let send = app.buttons["chat.send"]

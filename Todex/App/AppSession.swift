@@ -813,7 +813,7 @@ extension RealtimeClient: SessionSocket {}
             "conversationId": .string(id), "text": .string(draft.text),
             "content": .array(
                 draft.attachments
-                    .filter { !$0.isReference || draft.text.contains($0.referenceToken) }
+                    .filter { draft.text.contains($0.token) }
                     .map(\.wireValue)),
             "skills": .array(draft.skills.map { ["resourceId": .string($0.id), "name": .string($0.name)] }),
             "permissionMode": .string(pref.permissionMode), "workMode": .string(pref.workMode),

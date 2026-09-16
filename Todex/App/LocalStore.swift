@@ -287,7 +287,14 @@ nonisolated struct MessageAttachment: Identifiable, Codable, Sendable, Equatable
     var reference: Reference?
     var isImage: Bool { mimeType.hasPrefix("image/") }
     var isReference: Bool { reference != nil }
-    var referenceToken: String { "[引用:\(name)]" }
+    /// Single canonical inline token for this attachment, shared with the
+    /// desktop composer so a draft reads the same on both clients.
+    var token: String { Self.token(name: name, isImage: isImage, isReference: isReference) }
+    static func token(name: String, isImage: Bool, isReference: Bool) -> String {
+        if isReference { return "[引用:\(name)]" }
+        if isImage { return "[图片:\(name)]" }
+        return "[文件:\(name)]"
+    }
     struct Reference: Codable, Sendable, Equatable {
         var path: String?
         var lineStart: Int?

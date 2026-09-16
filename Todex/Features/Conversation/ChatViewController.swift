@@ -22,6 +22,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private var sendButton: UIButton!
     private var stopButton: UIButton!
     private var observer: UUID?
+    private var contentSizeObserver: NSObjectProtocol?
+    private var capsuleCache: [String: MessageAttachment] = [:]
     private var wasConnected = false
     private let suggestionBox = UIView()
     private let suggestionList = UIStackView()
@@ -38,7 +40,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    isolated deinit { if let observer { session.removeObserver(observer) } }
+    isolated deinit {
+        if let observer { session.removeObserver(observer) }
+        if let contentSizeObserver { NotificationCenter.default.removeObserver(contentSizeObserver) }
+    }
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = Theme.background
@@ -115,6 +120,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         composer.adjustsFontForContentSizeCategory = true
         composer.backgroundColor = .clear
         composer.delegate = self
+        contentSizeObserver = NotificationCenter.default.addObserver(
+            forName: UIContentSizeCategory.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.contentSizeCategoryChanged() }
+        }
         composer.accessibilityLabel = "消息输入框"
         composer.accessibilityIdentifier = "chat.composer"
         composer.textContainerInset = .init(top: 5, left: 6, bottom: 5, right: 6)
@@ -244,19 +254,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         }
         let preview = Self.referencePreview(of: String(decoding: attachment.data, as: UTF8.self))
         let base = preview.isEmpty ? attachment.name : preview
-        var name = base
-        var index = 2
-        let taken = Set(value.attachments.filter(\.isReference).map(\.name))
-        while taken.contains(name) || value.text.contains("[引用:\(name)]") {
-            name = "\(base) \(index)"
-            index += 1
-        }
         var reference = attachment
-        reference.name = name
-        let token = reference.referenceToken
-        value.text += (value.text.isEmpty ? "" : "\n") + token
-        value.attachments.append(reference)
+        reference.name = uniqueName(base, isImage: false, isReference: true, in: value)
+        insert(reference, into: &value)
         setDraft(value)
+        focusCaret(after: reference.id)
     }
     func insertSkill(_ id: String, name: String) {
         var value = draft
@@ -269,15 +271,86 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         session.saveSoon()
         reload()
     }
+    /// Insert a token at the caret so every glyph shares one plain-text source
+    /// of truth. Names stay unique because the token is the only lookup key.
+    /// A capsule never touches adjacent glyphs, matching the desktop composer.
+    private func insert(_ attachment: MessageAttachment, into value: inout ComposerDraft) {
+        var text = value.text
+        let offset = min(max(insertionOffset(in: value), 0), text.utf16.count)
+        let at = String.Index(
+            text.utf16.index(text.utf16.startIndex, offsetBy: offset), within: text
+        ) ?? text.endIndex
+        let lead = at > text.startIndex && text[..<at].last?.isWhitespace == false ? " " : ""
+        let tail = at < text.endIndex && text[at].isWhitespace == false ? " " : ""
+        text.insert(contentsOf: "\(lead)\(attachment.token)\(tail)", at: at)
+        value.text = text
+        value.attachments.append(attachment)
+    }
+    /// UTF-16 offset in `value.text` matching the composer's current selection.
+    private func insertionOffset(in value: ComposerDraft) -> Int {
+        guard let attributed = composer.attributedText, attributed.length > 0,
+            composer.selectedRange.location != NSNotFound
+        else { return value.text.utf16.count }
+        let location = min(max(composer.selectedRange.location, 0), attributed.length)
+        return ComposerText.plain(attributed, range: NSRange(location: 0, length: location)).utf16.count
+    }
+    private func focusCaret(after attachmentId: String) {
+        guard let attributed = composer.attributedText else { return }
+        var target: Int?
+        attributed.enumerateAttribute(
+            .attachment, in: NSRange(location: 0, length: attributed.length)
+        ) { value, range, stop in
+            if let capsule = value as? ComposerCapsuleAttachment, capsule.attachmentId == attachmentId {
+                target = range.location + range.length
+                stop.pointee = true
+            }
+        }
+        guard let target else { return }
+        composer.selectedRange = NSRange(location: target, length: 0)
+        composer.becomeFirstResponder()
+    }
+    private func uniqueName(
+        _ base: String, isImage: Bool, isReference: Bool, in value: ComposerDraft
+    ) -> String {
+        let taken = Set(value.attachments.map(\.name))
+        var name = base
+        var index = 2
+        while taken.contains(name)
+            || value.text.contains(
+                MessageAttachment.token(name: name, isImage: isImage, isReference: isReference))
+        {
+            name = "\(base) \(index)"
+            index += 1
+        }
+        return name
+    }
     func textViewDidChange(_ textView: UITextView) {
+        let attributed = textView.attributedText ?? NSAttributedString()
+        let text = ComposerText.plain(attributed)
+        var present = Set<String>()
+        attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: attributed.length)) {
+            value, _, _ in
+            if let capsule = value as? ComposerCapsuleAttachment { present.insert(capsule.attachmentId) }
+        }
         var value = draft
-        value.text = textView.text
+        value.text = text
+        // Tokens are the source of truth: drop records that no longer appear.
+        var retained = draft.attachments.filter { text.contains($0.token) }
+        for id in present where !retained.contains(where: { $0.id == id }) {
+            if let cached = capsuleCache[id] { retained.append(cached) }
+        }
+        value.attachments = retained
         session.drafts[conversation.id] = value
         renderedDraft = value
         session.saveSoon()
-        placeholder.isHidden = !textView.text.isEmpty
+        placeholder.isHidden = !text.isEmpty
         sendButton.isEnabled = canSend
         updateSuggestions()
+    }
+    private func contentSizeCategoryChanged() {
+        composer.font = .preferredFont(forTextStyle: .body)
+        resetTypingAttributes()
+        render(normalizedDraft())
     }
     func textViewDidChangeSelection(_ textView: UITextView) {
         resetTypingAttributes()
@@ -285,27 +358,58 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     }
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer is UITapGestureRecognizer else { return true }
-        return referenceName(at: gestureRecognizer.location(in: composer)) != nil
+        return capsuleHit(at: gestureRecognizer.location(in: composer)) != nil
     }
     @objc private func composerTapped(_ gesture: UITapGestureRecognizer) {
-        guard gesture.state == .ended,
-              let name = referenceName(at: gesture.location(in: composer))
+        guard gesture.state == .ended, let hit = capsuleHit(at: gesture.location(in: composer))
         else { return }
-        locateReference(named: name)
-    }
-    /// Name inside the `[引用:…]` token under `point` (in composer coordinates), if any.
-    private func referenceName(at point: CGPoint) -> String? {
-        guard let range = composer.characterRange(at: point) else { return nil }
-        let location = composer.offset(from: composer.beginningOfDocument, to: range.start)
-        let text = draft.text
-        guard let regex = try? NSRegularExpression(pattern: #"\[引用:([^\]\n]+)\]"#) else { return nil }
-        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-            guard NSLocationInRange(location, match.range),
-                  let nameRange = Range(match.range(at: 1), in: text)
-            else { continue }
-            return String(text[nameRange])
+        if hit.isDelete {
+            removeCapsule(id: hit.capsule.attachmentId)
+            return
         }
-        return nil
+        guard hit.capsule.kind == .reference else { return }
+        locateReference(named: hit.capsule.name)
+    }
+    /// Capsule under `point` (composer coordinates) plus whether the tap landed
+    /// on its trailing delete zone.
+    private func capsuleHit(at point: CGPoint)
+        -> (capsule: ComposerCapsuleAttachment, isDelete: Bool)?
+    {
+        guard composer.textStorage.length > 0, let range = composer.characterRange(at: point)
+        else { return nil }
+        let location = composer.offset(from: composer.beginningOfDocument, to: range.start)
+        guard location >= 0, location < composer.textStorage.length,
+            let capsule = composer.textStorage.attribute(.attachment, at: location, effectiveRange: nil)
+                as? ComposerCapsuleAttachment
+        else { return nil }
+        let glyphRange = composer.layoutManager.glyphRange(
+            forCharacterRange: NSRange(location: location, length: 1), actualCharacterRange: nil)
+        var rect = composer.layoutManager.boundingRect(
+            forGlyphRange: glyphRange, in: composer.textContainer)
+        rect.origin.x += composer.textContainerInset.left
+        rect.origin.y += composer.textContainerInset.top
+        guard rect.contains(point) else { return nil }
+        return (capsule, point.x >= rect.maxX - capsule.deleteZoneWidth)
+    }
+    /// Remove one capsule as a single undoable edit, keeping the caret in place.
+    private func removeCapsule(id: String) {
+        guard let attributed = composer.attributedText else { return }
+        var target: NSRange?
+        attributed.enumerateAttribute(
+            .attachment, in: NSRange(location: 0, length: attributed.length)
+        ) { value, range, stop in
+            if let capsule = value as? ComposerCapsuleAttachment, capsule.attachmentId == id {
+                target = range
+                stop.pointee = true
+            }
+        }
+        guard let target,
+            let start = composer.position(from: composer.beginningOfDocument, offset: target.location),
+            let end = composer.position(from: start, offset: target.length),
+            let textRange = composer.textRange(from: start, to: end)
+        else { return }
+        composer.replace(textRange, withText: "")
+        composer.becomeFirstResponder()
     }
     private func locateReference(named name: String) {
         guard let reference = draft.attachments
@@ -329,15 +433,22 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             .font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label,
         ]
     }
-    private func styledComposerText(_ text: String) -> NSAttributedString {
+    private func styledComposerText(_ draft: ComposerDraft) -> NSAttributedString {
         let styled = NSMutableAttributedString(
-            string: text,
+            string: draft.text,
             attributes: [.font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label])
-        if let regex = try? NSRegularExpression(pattern: #"\[引用:[^\]\n]+\]"#) {
-            for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                styled.addAttributes(
-                    [.foregroundColor: Theme.accent, .underlineStyle: NSUnderlineStyle.single.rawValue],
-                    range: match.range)
+        for attachment in draft.attachments {
+            // Replace every occurrence: a pasted token duplicate must also
+            // render as a capsule, not editable raw text.
+            var search = NSRange(location: 0, length: styled.length)
+            while true {
+                let found = (styled.string as NSString).range(of: attachment.token, range: search)
+                guard found.location != NSNotFound else { break }
+                let capsule = ComposerCapsuleAttachment(
+                    attachment: attachment, font: .preferredFont(forTextStyle: .body))
+                styled.replaceCharacters(in: found, with: NSAttributedString(attachment: capsule))
+                search = NSRange(
+                    location: found.location + 1, length: styled.length - found.location - 1)
             }
         }
         return styled
@@ -345,6 +456,25 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private var canSend: Bool {
         session.isConnected && session.runtimes[conversation.id]?.readyForActions == true && !draft.isEmpty
             && !submitting && session.pendingSends[conversation.id] == nil
+    }
+    /// Legacy drafts stored records without tokens in the text; materialize the
+    /// missing tokens once so their capsules survive a round trip.
+    private func normalizedDraft() -> ComposerDraft {
+        var value = draft
+        let missing = value.attachments.filter { !value.text.contains($0.token) }
+        guard !missing.isEmpty else { return value }
+        for attachment in missing {
+            value.text += (value.text.isEmpty ? "" : "\n") + attachment.token
+        }
+        session.drafts[conversation.id] = value
+        session.saveSoon()
+        return value
+    }
+    private func render(_ value: ComposerDraft) {
+        composer.attributedText = styledComposerText(value)
+        renderedDraft = value
+        capsuleCache = Dictionary(uniqueKeysWithValues: value.attachments.map { ($0.id, $0) })
+        composer.accessibilityValue = value.text
     }
     private func reload() {
         guard isViewLoaded else { return }
@@ -364,26 +494,17 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             runtime?.messages ?? [], provider: session.provider(for: conversation)?.displayName ?? conversation.provider,
             sentAttachments: session.sentAttachments(for: conversation.id)
         )
-        if renderedDraft != draft {
-            composer.attributedText = styledComposerText(draft.text)
-            renderedDraft = draft
+        let value = normalizedDraft()
+        if renderedDraft != value {
+            render(value)
         }
-        placeholder.isHidden = !draft.text.isEmpty
-        composer.accessibilityHint = draft.isEmpty ? "描述你的任务" : nil
+        placeholder.isHidden = !value.text.isEmpty
+        composer.accessibilityHint = value.isEmpty ? "描述你的任务" : nil
         sendButton.configuration?.title = running ? "加入队列" : "发送"
         sendButton.isEnabled = canSend
         stopButton.isHidden = !running
         stopButton.isEnabled = session.isConnected && runtime?.readyForActions == true
         chips.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for attachment in draft.attachments where !attachment.isReference {
-            chips.addArrangedSubview(
-                Theme.button("\(attachment.name) · 移除", icon: attachment.isImage ? "photo" : "doc") { [weak self] in
-                    guard let self else { return }
-                    var value = draft
-                    value.attachments.removeAll { $0.id == attachment.id }
-                    setDraft(value)
-                })
-        }
         for skill in draft.skills {
             chips.addArrangedSubview(
                 Theme.button("$\(skill.name) · 移除", icon: "sparkles") { [weak self] in
@@ -530,6 +651,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 guard let self else { return }
                 var value = self.draft
                 value.text = text
+                // Deleting a token here must stick, or `normalizedDraft`
+                // would resurrect the capsule on the next render.
+                value.attachments.removeAll { !text.contains($0.token) }
                 self.session.drafts[self.conversation.id] = value
                 self.session.saveSoon()
             },
@@ -640,11 +764,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private func applyTextSuggestion(_ replacement: String) {
         var value = draft
         value.text = replacement
-        composer.text = replacement
-        composer.selectedRange = NSRange(location: replacement.utf16.count, length: 0)
+        value.attachments.removeAll { !replacement.contains($0.token) }
         session.drafts[conversation.id] = value
-        renderedDraft = value
         session.saveSoon()
+        render(value)
+        composer.selectedRange = NSRange(location: (composer.text as NSString).length, length: 0)
         sendButton.isEnabled = canSend
         hideSuggestions()
     }
@@ -700,15 +824,27 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         }
     }
     private func applyMention(range: NSRange, text insert: String) {
-        let ns = NSMutableString(string: composer.text ?? "")
-        ns.replaceCharacters(in: range, with: insert)
-        composer.text = ns as String
-        composer.selectedRange = NSRange(location: range.location + insert.utf16.count, length: 0)
+        guard let attributed = composer.attributedText else { return }
+        let clamped = NSIntersectionRange(range, NSRange(location: 0, length: attributed.length))
+        let prefix = ComposerText.plain(
+            attributed, range: NSRange(location: 0, length: clamped.location))
+        // The trigger range is in composer coordinates; translate it through the
+        // serialized tokens so a capsule before the caret cannot corrupt the draft.
+        let removed = ComposerText.plain(attributed, range: clamped)
+        let start = prefix.utf16.count
+        let ns = NSMutableString(string: ComposerText.plain(attributed))
+        guard start <= ns.length, start + removed.utf16.count <= ns.length else { return }
+        ns.replaceCharacters(in: NSRange(location: start, length: removed.utf16.count), with: insert)
         var value = draft
-        value.text = composer.text
+        value.text = ns as String
+        value.attachments.removeAll { !value.text.contains($0.token) }
         session.drafts[conversation.id] = value
-        renderedDraft = value
         session.saveSoon()
+        render(value)
+        let caret = ComposerText.attributedLocation(
+            forPlainOffset: start + insert.utf16.count,
+            in: composer.attributedText ?? NSAttributedString())
+        composer.selectedRange = NSRange(location: caret, length: 0)
         sendButton.isEnabled = canSend
         hideSuggestions()
     }
@@ -1134,8 +1270,154 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             guard String(data: data, encoding: .utf8) != nil else { throw TodexError.invalid("文本附件须使用 UTF-8 编码") }
         }
         var value = draft
-        value.attachments.append(.init(name: name, mimeType: mime, data: data))
+        let isImage = mime.hasPrefix("image/")
+        let resolved = uniqueName(name, isImage: isImage, isReference: false, in: value)
+        let attachment = MessageAttachment(name: resolved, mimeType: mime, data: data)
+        insert(attachment, into: &value)
         setDraft(value)
+        focusCaret(after: attachment.id)
+    }
+}
+
+/// Serializes composer attributed text: every capsule stands in for its full
+/// token, so plain offsets and token offsets stay interchangeable.
+enum ComposerText {
+    static func plain(_ attributed: NSAttributedString) -> String {
+        plain(attributed, range: NSRange(location: 0, length: attributed.length))
+    }
+    static func plain(_ attributed: NSAttributedString, range: NSRange) -> String {
+        let clamped = NSIntersectionRange(range, NSRange(location: 0, length: attributed.length))
+        guard clamped.length > 0 else { return "" }
+        var result = ""
+        attributed.enumerateAttributes(in: clamped) { attributes, subrange, _ in
+            if let capsule = attributes[.attachment] as? ComposerCapsuleAttachment {
+                result += capsule.token
+            } else {
+                result += (attributed.string as NSString).substring(with: subrange)
+            }
+        }
+        return result
+    }
+    /// Composer character index for a plain-text offset, collapsing tokens back
+    /// to their single attachment character.
+    static func attributedLocation(forPlainOffset offset: Int, in attributed: NSAttributedString) -> Int {
+        var plain = 0
+        var result = attributed.length
+        attributed.enumerateAttributes(in: NSRange(location: 0, length: attributed.length)) {
+            attributes, range, stop in
+            if let capsule = attributes[.attachment] as? ComposerCapsuleAttachment {
+                if offset <= plain + capsule.token.utf16.count {
+                    result = range.location + range.length
+                    stop.pointee = true
+                    return
+                }
+                plain += capsule.token.utf16.count
+            } else {
+                if offset <= plain + range.length {
+                    result = range.location + max(0, offset - plain)
+                    stop.pointee = true
+                    return
+                }
+                plain += range.length
+            }
+        }
+        return result
+    }
+}
+
+/// A non-editable, deletable inline capsule for one composer attachment token.
+/// It is a single attachment character, so TextKit can never place the caret
+/// inside it and backspace always removes the whole token.
+nonisolated final class ComposerCapsuleAttachment: NSTextAttachment {
+    enum Kind: String {
+        case reference
+        case file
+        case image
+        init(_ attachment: MessageAttachment) {
+            self = attachment.isReference ? .reference : (attachment.isImage ? .image : .file)
+        }
+        var symbol: String {
+            switch self {
+            case .reference: "text.quote"
+            case .image: "photo"
+            case .file: "doc.text"
+            }
+        }
+    }
+
+    let attachmentId: String
+    let name: String
+    let kind: Kind
+    let token: String
+    let deleteZoneWidth: CGFloat
+
+    init(attachment: MessageAttachment, font: UIFont) {
+        let kind = Kind(attachment)
+        // `NSTextAttachment`'s designated initializers are nonisolated, so the
+        // subclass must be too; rendering still runs on the main actor.
+        let rendered = MainActor.assumeIsolated { Self.render(name: attachment.name, kind: kind, font: font) }
+        attachmentId = attachment.id
+        name = attachment.name
+        self.kind = kind
+        token = attachment.token
+        deleteZoneWidth = rendered.deleteZoneWidth
+        super.init(data: nil, ofType: nil)
+        image = rendered.image
+        bounds = rendered.bounds
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private struct Rendering {
+        let image: UIImage
+        let bounds: CGRect
+        let deleteZoneWidth: CGFloat
+    }
+
+    @MainActor private static func render(name: String, kind: Kind, font: UIFont) -> Rendering {
+        let labelFont = UIFont.systemFont(ofSize: min(font.pointSize, 15), weight: .medium)
+        let label = truncated(name)
+        let labelWidth = ceil((label as NSString).size(withAttributes: [.font: labelFont]).width)
+        let leading: CGFloat = 8
+        let trailing: CGFloat = 7
+        let gap: CGFloat = 4
+        let symbol = Theme.icon(kind.symbol, pointSize: 12)
+        let symbolWidth = ceil(symbol?.size.width ?? 13)
+        let mark = Theme.icon("xmark", pointSize: 9)
+        let markWidth = ceil(mark?.size.width ?? 9)
+        let height = ceil(font.lineHeight) + 2
+        let width = ceil(leading + symbolWidth + gap + labelWidth + gap + markWidth + trailing)
+        let size = CGSize(width: width, height: height)
+        let deleteZoneWidth = markWidth + trailing + 1
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            Theme.accent.withAlphaComponent(0.15).setFill()
+            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: height / 2).fill()
+            if let symbol = symbol?.withTintColor(Theme.accent, renderingMode: .alwaysOriginal) {
+                symbol.draw(in: CGRect(
+                    x: leading, y: (height - symbol.size.height) / 2,
+                    width: symbol.size.width, height: symbol.size.height))
+            }
+            (label as NSString).draw(
+                in: CGRect(
+                    x: leading + symbolWidth + gap, y: (height - labelFont.lineHeight) / 2,
+                    width: labelWidth, height: labelFont.lineHeight),
+                withAttributes: [.font: labelFont, .foregroundColor: Theme.accent])
+            if let mark = mark?.withTintColor(Theme.accent, renderingMode: .alwaysOriginal) {
+                mark.draw(in: CGRect(
+                    x: width - trailing - mark.size.width, y: (height - mark.size.height) / 2,
+                    width: mark.size.width, height: mark.size.height))
+            }
+        }
+        let bounds = CGRect(x: 0, y: (font.capHeight - height) / 2, width: width, height: height)
+        return Rendering(image: image, bounds: bounds, deleteZoneWidth: deleteZoneWidth)
+    }
+
+    private static func truncated(_ name: String, max: Int = 18) -> String {
+        guard name.count > max else { return name }
+        let keep = max - 1
+        let head = keep / 2
+        let tail = keep - head
+        return "\(name.prefix(head))…\(name.suffix(tail))"
     }
 }
 
