@@ -27,6 +27,7 @@
 		86C38986A674B9CDE0CEBFDC /* TimelineViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D967855CE742B8058D64D347 /* TimelineViewController.swift */; };
 		89B1CFAADFE78FB74B0A21DA /* UsageViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93278CF3C223560572013664 /* UsageViewController.swift */; };
 		8E0652E1B702E7B0460DD145 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 5EA42E70C96AE47DA0A8CF55 /* SwiftTerm */; };
+		94558318C2912CBD02D73075 /* AgentProvidersViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FAB4DDC0336E6D09338BB0 /* AgentProvidersViewController.swift */; };
 		A5794D37A904DD9ACC9EA14F /* Chat in Resources */ = {isa = PBXBuildFile; fileRef = E45D1797EEA72BE5FF1B4AFC /* Chat */; };
 		AB3953D149903B61FAE00E38 /* WorkbenchBrowserViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D53C9CFD11BD6B0243D37B /* WorkbenchBrowserViewController.swift */; };
 		AEA9E9846B6AEF037C5F8C71 /* PairingQRScannerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38CBAFAA70C87108D4EB0D31 /* PairingQRScannerViewController.swift */; };
@@ -65,6 +66,7 @@
 		57070A6A2EBECD844554413E /* PairingViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingViewController.swift; sourceTree = "<group>"; };
 		6132B4A0F2562217F85EC8F3 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		62B4BB75B1AB6E27238B47FA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		69FAB4DDC0336E6D09338BB0 /* AgentProvidersViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProvidersViewController.swift; sourceTree = "<group>"; };
 		6E485163C78FED62D3F25EF1 /* WorkbenchTerminalViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchTerminalViewController.swift; sourceTree = "<group>"; };
 		71EFB1B95610C55EA0C3C6D7 /* WorkbenchViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchViewController.swift; sourceTree = "<group>"; };
 		7D9683C59EB937E7F975E784 /* WorkbenchFilesViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchFilesViewController.swift; sourceTree = "<group>"; };
@@ -216,6 +218,7 @@
 			isa = PBXGroup;
 			children = (
 				B0C3871008BC1CDD5EC6A6BF /* AboutViewController.swift */,
+				69FAB4DDC0336E6D09338BB0 /* AgentProvidersViewController.swift */,
 				CD4992CC1CD7B78D9050C05A /* CatalogViewController.swift */,
 				C63AE09ECFA35413A032814D /* CLIViewController.swift */,
 				38CBAFAA70C87108D4EB0D31 /* PairingQRScannerViewController.swift */,
@@ -349,6 +352,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EF61661475F4CD89A8655828 /* AboutViewController.swift in Sources */,
+				94558318C2912CBD02D73075 /* AgentProvidersViewController.swift in Sources */,
 				D77BB42F7E3FA641974BA2DC /* AppDelegate.swift in Sources */,
 				E8612533DA5CE3F28E6E0B42 /* AppSession.swift in Sources */,
 				FDF662274A0BFA50B67CF129 /* AuxiliaryViewController.swift in Sources */,

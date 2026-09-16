@@ -265,6 +265,51 @@ public final class APIClient: Sendable {
         try await queryRequest(path: "/v2/providers/commands", query: ["provider": provider, "workspace": workspace])
     }
 
+    /// Managed agent provider accounts (cc-switch model). Secret values in the
+    /// returned settingsConfig are masked; writing the mask back keeps the
+    /// stored value server-side.
+    public func agentProviders(agent: String? = nil) async throws -> JSONValue {
+        var query: [String: String] = [:]
+        query["agent"] = agent
+        return try await queryRequest(path: "/v2/agent-providers", query: query)
+    }
+
+    public func upsertAgentProvider(agent: String, id: String, profile: JSONValue) async throws -> JSONValue {
+        try await http.request(
+            .put, path: "/v2/agent-providers/\(HTTPClient.segment(agent))/\(HTTPClient.segment(id))",
+            body: profile)
+    }
+
+    public func deleteAgentProvider(agent: String, id: String) async throws -> JSONValue {
+        try await http.request(
+            .delete, path: "/v2/agent-providers/\(HTTPClient.segment(agent))/\(HTTPClient.segment(id))")
+    }
+
+    public func activateAgentProvider(agent: String, id: String, modelId: String? = nil) async throws -> JSONValue {
+        var body: [String: JSONValue] = [:]
+        body["modelId"] = modelId.map(JSONValue.string)
+        return try await http.request(
+            .post,
+            path: "/v2/agent-providers/\(HTTPClient.segment(agent))/\(HTTPClient.segment(id))/activate",
+            body: .object(body))
+    }
+
+    /// Exclusive agents capture the whole live config; additive agents adopt the
+    /// live node whose key equals `id`.
+    public func importLiveAgentProvider(agent: String, id: String, name: String? = nil) async throws -> JSONValue {
+        var body: [String: JSONValue] = ["id": .string(id)]
+        body["name"] = name.map(JSONValue.string)
+        return try await http.request(
+            .post, path: "/v2/agent-providers/\(HTTPClient.segment(agent))/import-live",
+            body: .object(body))
+    }
+
+    /// Model listing proxied by the backend so the API key stays server-side.
+    public func agentProviderModels(agent: String, id: String) async throws -> JSONValue {
+        try await http.request(
+            path: "/v2/agent-providers/\(HTTPClient.segment(agent))/\(HTTPClient.segment(id))/models")
+    }
+
     public func skills(provider: String, workspace: String) async throws -> JSONValue {
         try await queryRequest(path: "/v2/catalog/skills", query: ["provider": provider, "workspace": workspace])
     }

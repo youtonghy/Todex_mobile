@@ -131,6 +131,14 @@ final class SettingsViewController: SettingsListController {
                 })
             rows.append(
                 SettingsRow(
+                    title: "Agent 账户", detail: "管理 Codex、Claude Code、Pi、OpenCode 的供应商与模型",
+                    symbol: "person.crop.circle.badge.switch", id: "settings.agentProviders"
+                ) { [weak self] in
+                    self?.navigationController?.pushViewController(
+                        AgentProvidersViewController(connection: connection), animated: true)
+                })
+            rows.append(
+                SettingsRow(
                     title: "使用统计", detail: "所有已同步对话的 token 用量汇总", symbol: "chart.bar",
                     id: "settings.usage"
                 ) { [weak self] in

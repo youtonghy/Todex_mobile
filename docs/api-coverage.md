@@ -62,6 +62,12 @@ swift test --package-path /path/to/TodexCore-copy \
 | GET | `/v2/providers/models` | `providerModels(provider:workspace:)` | 已封装；认证；运行时发现 | `endpointWire(providerModels)` |
 | GET | `/v2/providers/image-input` | `providerImageInput(provider:workspace:profile:model:)` | 已封装；认证；运行时能力 | `endpointWire(providerImageInput)` |
 | GET | `/v2/providers/commands` | `providerCommands(provider:workspace:)` | 已封装；认证；运行时发现 | `endpointWire(providerCommands)` |
+| GET | `/v2/agent-providers` | `agentProviders(agent:)` | 已封装；认证；可选 agent 过滤 | `endpointWire(agentProviders)` |
+| PUT | `/v2/agent-providers/{agent}/{id}` | `upsertAgentProvider(agent:id:profile:)` | 已封装；认证；settingsConfig 不透明、掩码写回保留密钥 | `endpointWire(upsertAgentProvider)` |
+| DELETE | `/v2/agent-providers/{agent}/{id}` | `deleteAgentProvider(agent:id:)` | 已封装；认证 | `endpointWire(deleteAgentProvider)` |
+| POST | `/v2/agent-providers/{agent}/{id}/activate` | `activateAgentProvider(agent:id:modelId:)` | 已封装；认证；modelId 可选 | `endpointWire(activateAgentProvider)` |
+| POST | `/v2/agent-providers/{agent}/import-live` | `importLiveAgentProvider(agent:id:name:)` | 已封装；认证；独占型捕获整份 live，叠加型按 id 收编 | `endpointWire(importLiveAgentProvider)` |
+| GET | `/v2/agent-providers/{agent}/{id}/models` | `agentProviderModels(agent:id:)` | 已封装；认证；后端代理拉取、密钥不出后端 | `endpointWire(agentProviderModels)` |
 | GET | `/v2/catalog/skills` | `skills(provider:workspace:)` | 已封装；认证 | `endpointWire(skills)` |
 | GET | `/v2/catalog/skills/{resource_id}` | `skillResource(id:provider:workspace:)` | 已封装；认证 | `endpointWire(skillResource)` |
 | GET | `/v2/catalog/mcp` | `mcpCatalog(provider:workspace:)` | 已封装；认证 | `endpointWire(mcpCatalog)` |

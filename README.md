@@ -37,12 +37,12 @@ SwiftTerm 的固定版本构建插件只生成源代码版本信息。上述命�
 | 消息 | 离线 Markdown、代码复制、表格、KaTeX 公式、工具与思考折叠、引用、导出；按阅读位置跟随输出；已发附件回执（本地 JPEG 缩略图，150 条/2 MB 上限） |
 | 审批 | 命令、文件、权限、计划反馈、多问题回答、extension UI、MCP schema 表单与 URL elicitation |
 | 控制 | 根据能力启用取消、引导、实时模型配置、原生队列、重试、分叉和压缩 |
-| 工作台 | SwiftTerm PTY、多标签、文件树/搜索/预览/编辑、原文比较保存、Git 状态/操作/差异、浏览器与后端预览 |
-| 设置 | CLI 版本和升级进度、Skills/MCP/命令目录、统计、深浅色、工作台共享方式 |
+| 工作台 | SwiftTerm PTY、多标签、文件树/搜索/语法高亮预览/编辑、原文比较保存、Git 状态/操作/差异、浏览器与后端预览 |
+| 设置 | Agent 供应商账户与模型切换（Codex/Claude Code/Pi/OpenCode）、CLI 版本和升级进度、Skills/MCP/命令目录、统计、深浅色、工作台共享方式 |
 
 ## 协议与限制
 
-`Packages/TodexCore` 提供 41 个 HTTP method/path 封装和全部 56 个已识别 WebSocket 命令的支持表。详细依据和测试映射见 [API coverage](docs/api-coverage.md)。接口存在、后端实现、远程 Agent 可用性和本次实测是不同层次，应用会保留错误与未确认状态。
+`Packages/TodexCore` 提供 47 个 HTTP method/path 封装和全部 56 个已识别 WebSocket 命令的支持表。详细依据和测试映射见 [API coverage](docs/api-coverage.md)。接口存在、后端实现、远程 Agent 可用性和本次实测是不同层次，应用会保留错误与未确认状态。
 
 - **Codex Fast**：当前统一对话的 prompt/configure 接口没有 serviceTier 字段。独立的 `codex.local.*` adapter 也不能定位统一对话的运行进程，因此禁用 Fast。需要后端增加带能力检查和确认响应的统一 API；移动端不会仅修改按钮状态来表示生效。
 - **恢复和后台**：iOS 不保证后台长连接。回到前台会核对会话历史；断线、后台和应用重启后候选消息队列暂停，需要用户恢复。未确认的发送不自动重试。
@@ -68,4 +68,4 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 - [SwiftTerm 1.20.0](https://github.com/migueldeicaza/SwiftTerm/tree/1.20.0)：原生终端。
 - [swift-sodium 0.11.0](https://github.com/jedisct1/swift-sodium/tree/0.11.0)：libsodium 兼容传输；ML-KEM 使用系统 CryptoKit。
 - [markdown-it 14.1.0](https://github.com/markdown-it/markdown-it/tree/14.1.0) 和 [KaTeX 0.16.22](https://github.com/KaTeX/KaTeX/tree/v0.16.22)：随应用本地打包，许可证在 `Todex/Resources/Chat`。Markdown 禁用原始 HTML，公式禁用 trust；消息中的远程图片按链接显示，点击外链才打开浏览器。
-- [highlight.js 11.11.1](https://github.com/highlightjs/highlight.js/tree/11.11.1)：离线代码高亮，许可证随应用打包。
+- [highlight.js 11.11.1](https://github.com/highlightjs/highlight.js/tree/11.11.1)：离线代码高亮，许可证随应用打包；消息内代码块走 WebView，工作台文件预览复用同一库在 JavaScriptCore 中高亮。

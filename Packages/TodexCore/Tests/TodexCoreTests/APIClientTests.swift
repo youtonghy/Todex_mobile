@@ -495,6 +495,40 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
             query: ["provider": "codex", "workspace": workspacePath]
         ) { try await $0.providerCommands(provider: "codex", workspace: workspacePath) },
         .init(
+            name: "agentProviders", method: "GET", path: "/v2/agent-providers",
+            query: ["agent": "codex"]
+        ) { try await $0.agentProviders(agent: "codex") },
+        .init(
+            name: "upsertAgentProvider", method: "PUT", path: "/v2/agent-providers/claude-code/\(escaped)",
+            body: [
+                "name": "custom",
+                "settingsConfig": ["env": ["ANTHROPIC_BASE_URL": "https://example.test"]],
+            ]
+        ) {
+            try await $0.upsertAgentProvider(
+                agent: "claude-code", id: id,
+                profile: [
+                    "name": "custom",
+                    "settingsConfig": ["env": ["ANTHROPIC_BASE_URL": "https://example.test"]],
+                ])
+        },
+        .init(name: "deleteAgentProvider", method: "DELETE", path: "/v2/agent-providers/pi/\(escaped)") {
+            try await $0.deleteAgentProvider(agent: "pi", id: id)
+        },
+        .init(
+            name: "activateAgentProvider", method: "POST",
+            path: "/v2/agent-providers/opencode/\(escaped)/activate",
+            body: ["modelId": "model &+?"]
+        ) { try await $0.activateAgentProvider(agent: "opencode", id: id, modelId: "model &+?") },
+        .init(
+            name: "importLiveAgentProvider", method: "POST",
+            path: "/v2/agent-providers/codex/import-live",
+            body: ["id": .string(id), "name": "已导入"]
+        ) { try await $0.importLiveAgentProvider(agent: "codex", id: id, name: "已导入") },
+        .init(name: "agentProviderModels", method: "GET", path: "/v2/agent-providers/codex/\(escaped)/models") {
+            try await $0.agentProviderModels(agent: "codex", id: id)
+        },
+        .init(
             name: "skills", method: "GET", path: "/v2/catalog/skills",
             query: ["provider": "codex", "workspace": workspacePath]
         ) { try await $0.skills(provider: "codex", workspace: workspacePath) },
