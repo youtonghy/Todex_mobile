@@ -367,8 +367,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             removeCapsule(id: hit.capsule.attachmentId)
             return
         }
-        guard hit.capsule.kind == .reference else { return }
-        locateReference(named: hit.capsule.name)
+        previewCapsule(hit.capsule)
     }
     /// Capsule under `point` (composer coordinates) plus whether the tap landed
     /// on its trailing delete zone.
@@ -411,14 +410,48 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         composer.replace(textRange, withText: "")
         composer.becomeFirstResponder()
     }
-    private func locateReference(named name: String) {
-        guard let reference = draft.attachments
-            .first(where: { $0.isReference && $0.name == name })?.reference else { return }
-        if let path = reference.path, !path.isEmpty {
-            openFile?(path)
-        } else if let messageId = reference.messageId {
-            timeline.scrollToMessage(messageId)
+    /// Tapping a capsule body opens a modal preview; the trailing zone still deletes.
+    private func previewCapsule(_ capsule: ComposerCapsuleAttachment) {
+        guard let attachment = draft.attachments.first(where: { $0.id == capsule.attachmentId })
+            ?? capsuleCache[capsule.attachmentId]
+            ?? draft.attachments.first(where: { $0.name == capsule.name })
+        else { return }
+        if attachment.isImage, let image = UIImage(data: attachment.data) {
+            presentImagePreview(image, named: attachment.name)
+            return
         }
+        var actions: [(String, @MainActor (String) -> Void)] = []
+        if let reference = attachment.reference {
+            if let path = reference.path, !path.isEmpty {
+                actions.append(("打开文件", { [weak self] _ in self?.openFile?(path) }))
+            } else if let messageId = reference.messageId {
+                actions.append(("跳到消息", { [weak self] _ in self?.timeline.scrollToMessage(messageId) }))
+            }
+        }
+        let excerpt = String(decoding: attachment.data, as: UTF8.self)
+        let location = attachment.reference?.location ?? ""
+        var parts = location.isEmpty ? [] : [location]
+        parts.append(excerpt.isEmpty ? "（没有可预览的内容）" : excerpt)
+        WBUI.textSheet(on: self, title: attachment.name, text: parts.joined(separator: "\n\n"), actions: actions)
+    }
+    private func presentImagePreview(_ image: UIImage, named name: String) {
+        let page = UIViewController()
+        page.title = name
+        page.view.backgroundColor = .systemBackground
+        let view = UIImageView(image: image)
+        view.contentMode = .scaleAspectFit
+        page.view.addSubview(view)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: page.view.safeAreaLayoutGuide.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: page.view.safeAreaLayoutGuide.trailingAnchor),
+            view.topAnchor.constraint(equalTo: page.view.safeAreaLayoutGuide.topAnchor),
+            view.bottomAnchor.constraint(equalTo: page.view.safeAreaLayoutGuide.bottomAnchor),
+        ])
+        let nav = UINavigationController(rootViewController: page)
+        page.navigationItem.rightBarButtonItem = UIBarButtonItem(
+            systemItem: .done, primaryAction: UIAction { [weak nav] _ in nav?.dismiss(animated: true) })
+        WBUI.presentModal(nav, on: self)
     }
     /// First non-empty line of the excerpt, whitespace-collapsed, truncated for the token label.
     static func referencePreview(of excerpt: String, max: Int = 10) -> String {
