@@ -9,6 +9,7 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     private let conversationId: String
     private let command: WorkbenchCommand
     private let insertReference: @MainActor (String) -> Void
+    private let refreshWorkspaces: @MainActor () async throws -> Void
     private let table = UITableView(frame: .zero, style: .insetGrouped)
     private let info = UILabel()
     private let operationInfo = UILabel()
@@ -41,7 +42,8 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
 
     init(
         connection: BackendConnection, workspace: WorkspaceRecord, conversationId: String,
-        command: @escaping WorkbenchCommand, insertReference: @escaping @MainActor (String) -> Void
+        command: @escaping WorkbenchCommand, insertReference: @escaping @MainActor (String) -> Void,
+        refreshWorkspaces: @escaping @MainActor () async throws -> Void
     ) {
         http = HTTPClient(connection: connection)
         self.connection = connection
@@ -49,6 +51,7 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
         self.conversationId = conversationId
         self.command = command
         self.insertReference = insertReference
+        self.refreshWorkspaces = refreshWorkspaces
         super.init(nibName: nil, bundle: nil)
     }
     /// Workspace records carry the backend-assigned tenant; an empty one falls
@@ -620,6 +623,7 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
                 _ = try await self.http.request(
                     .put, path: "/v2/workspaces",
                     body: ["workspaces": .array([try JSONValue(encoding: record)])])
+                try await self.refreshWorkspaces()
                 self.operationInfo.text = "已将工作树添加为工作区「\(record.name)」。"
                 WBUI.message(on: self.presenter, title: "已添加工作区", text: "「\(record.name)」已保存，可在首页为其创建对话。")
             } catch { WBUI.error(error, on: self.presenter) }

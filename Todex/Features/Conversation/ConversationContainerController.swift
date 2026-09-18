@@ -69,6 +69,10 @@ final class ConversationContainerController: UIViewController {
                     self?.chat.addReference(attachment)
                     self?.picker.selectedSegmentIndex = 0
                     self?.layoutPanes()
+                },
+                refreshWorkspaces: { [weak session] in
+                    guard let session else { throw TodexError.disconnected }
+                    try await session.refresh()
                 })
             self.workbench = workbench
             addChild(workbench)

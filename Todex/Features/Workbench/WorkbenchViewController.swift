@@ -48,6 +48,7 @@ final class WorkbenchViewController: UIViewController {
     private let events: AsyncStream<JSONValue>
     private let insertReference: @MainActor (String) -> Void
     private let addReference: @MainActor (MessageAttachment) -> Void
+    private let refreshWorkspaces: @MainActor () async throws -> Void
     private var eventTask: Task<Void, Never>?
     private var tabs: [WorkbenchTab] = []
     private var selected: String?
@@ -67,7 +68,8 @@ final class WorkbenchViewController: UIViewController {
         connection: BackendConnection, workspace: WorkspaceRecord, conversationId: String,
         command: @escaping @MainActor (String, JSONValue, TimeInterval) async throws -> JSONValue,
         events: AsyncStream<JSONValue>, insertReference: @escaping @MainActor (String) -> Void,
-        addReference: @escaping @MainActor (MessageAttachment) -> Void
+        addReference: @escaping @MainActor (MessageAttachment) -> Void,
+        refreshWorkspaces: @escaping @MainActor () async throws -> Void
     ) {
         self.connection = connection
         self.workspace = workspace
@@ -76,6 +78,7 @@ final class WorkbenchViewController: UIViewController {
         self.events = events
         self.insertReference = insertReference
         self.addReference = addReference
+        self.refreshWorkspaces = refreshWorkspaces
         super.init(nibName: nil, bundle: nil)
         sharingScope =
             SharingScope(rawValue: UserDefaults.standard.string(forKey: preferenceKey) ?? "") ?? .conversation
@@ -312,7 +315,7 @@ final class WorkbenchViewController: UIViewController {
         if let sharedGit { return sharedGit }
         let controller = WorkbenchGitViewController(
             connection: connection, workspace: workspace, conversationId: conversationId,
-            command: command, insertReference: insertReference)
+            command: command, insertReference: insertReference, refreshWorkspaces: refreshWorkspaces)
         controller.loadViewIfNeeded()
         sharedGit = controller
         return controller
