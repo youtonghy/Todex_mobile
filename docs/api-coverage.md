@@ -68,6 +68,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | POST | `/v2/agent-providers/{agent}/{id}/activate` | `activateAgentProvider(agent:id:modelId:)` | 已封装；认证；modelId 可选 | `endpointWire(activateAgentProvider)` |
 | POST | `/v2/agent-providers/{agent}/import-live` | `importLiveAgentProvider(agent:id:name:)` | 已封装；认证；独占型捕获整份 live，叠加型按 id 收编 | `endpointWire(importLiveAgentProvider)` |
 | GET | `/v2/agent-providers/{agent}/{id}/models` | `agentProviderModels(agent:id:)` | 已封装；认证；后端代理拉取、密钥不出后端 | `endpointWire(agentProviderModels)` |
+| POST | `/v2/agent-providers/{agent}/{id}/models` | — | 未封装；保存前预览拉取，掩码密钥按同 id 档案/live 节点还原 | — |
 | GET | `/v2/catalog/skills` | `skills(provider:workspace:)` | 已封装；认证 | `endpointWire(skills)` |
 | GET | `/v2/catalog/skills/{resource_id}` | `skillResource(id:provider:workspace:)` | 已封装；认证 | `endpointWire(skillResource)` |
 | GET | `/v2/catalog/mcp` | `mcpCatalog(provider:workspace:)` | 已封装；认证 | `endpointWire(mcpCatalog)` |
