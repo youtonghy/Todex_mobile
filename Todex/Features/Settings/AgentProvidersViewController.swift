@@ -2,9 +2,10 @@ import Foundation
 import TodexCore
 import UIKit
 
-/// cc-switch 同款的多供应商/账户管理：每个 Agent 一份档案库，激活时改写该
-/// Agent 的全局配置文件。settingsConfig 中的密钥由后端脱敏返回，原样写回即
-/// 保留已存密钥。
+/// cc-switch 同款的多供应商/账户管理：每个 Agent 一份档案库。独占型（Codex、
+/// Claude Code）激活时改写该 Agent 的全局配置文件；叠加型（Pi、OpenCode）
+/// 保存档案即把 provider 节点写入全局配置，可多个并存，界面只保留编辑入口。
+/// settingsConfig 中的密钥由后端脱敏返回，原样写回即保留已存密钥。
 @MainActor
 final class AgentProvidersViewController: SettingsListController {
     private static let agentIDs = ["codex", "claude-code", "pi", "opencode"]
@@ -133,9 +134,11 @@ final class AgentProvidersViewController: SettingsListController {
         let additive = Self.additiveAgents.contains(agent)
         let alert = UIAlertController(title: name, message: nil, preferredStyle: .actionSheet)
 
-        if !isCurrent {
+        // 叠加型 Agent 的供应商保存即全部生效，不提供"设为当前"；独占型才需要
+        // 通过激活改写全局配置。
+        if !additive, !isCurrent {
             alert.addAction(UIAlertAction(title: "设为当前", style: .default) { [weak self] _ in
-                self?.beginActivate(agent: agent, id: id, settings: profile["settingsConfig"], additive: additive)
+                self?.submitActivate(agent: agent, id: id)
             })
         }
         alert.addAction(UIAlertAction(title: "获取模型列表", style: .default) { [weak self] _ in
@@ -162,26 +165,13 @@ final class AgentProvidersViewController: SettingsListController {
         present(alert, animated: true)
     }
 
-    private func beginActivate(agent: String, id: String, settings: JSONValue, additive: Bool) {
-        let modelIds = Self.declaredModelIds(agent: agent, settings: settings)
-        if additive, modelIds.count > 1 {
-            choose(
-                title: "选择默认模型", choices: modelIds.map { ($0, $0) }, selected: modelIds.first ?? ""
-            ) { [weak self] modelId in
-                self?.submitActivate(agent: agent, id: id, modelId: modelId)
-            }
-        } else {
-            submitActivate(agent: agent, id: id, modelId: modelIds.first)
-        }
-    }
-
-    private func submitActivate(agent: String, id: String, modelId: String?) {
+    private func submitActivate(agent: String, id: String) {
         confirm(
             title: "切换供应商？",
             message: "将改写该 Agent 的全局配置文件，对 TodeX 内外的新会话同时生效；运行中的会话不受影响。"
         ) { [weak self] in
             self?.mutate { api in
-                _ = try await api.activateAgentProvider(agent: agent, id: id, modelId: modelId)
+                _ = try await api.activateAgentProvider(agent: agent, id: id)
             }
         }
     }
@@ -291,17 +281,6 @@ final class AgentProvidersViewController: SettingsListController {
         return String(text[range])
     }
 
-    private static func declaredModelIds(agent: String, settings: JSONValue) -> [String] {
-        switch agent {
-        case "opencode":
-            return settings["models"].objectValue.keys.sorted()
-        case "pi":
-            return settings["models"].arrayValue.compactMap { $0["id"].optionalString }
-        default:
-            return []
-        }
-    }
-
     private static func template(for agent: String) -> String {
         switch agent {
         case "claude-code":
@@ -324,7 +303,7 @@ final class AgentProvidersViewController: SettingsListController {
         var sections = [
             SettingsSection(
                 title: "当前后端",
-                footer: "激活供应商会改写该 Agent 的全局配置文件（如 ~/.claude/settings.json、~/.codex/config.toml），对 TodeX 内外的新会话同时生效。",
+                footer: "独占型（Codex、Claude Code）激活时改写全局配置文件，对 TodeX 内外的新会话同时生效；叠加型（Pi、OpenCode）保存即写入全局配置、可多个并存，「默认」为该 Agent 的启动默认选中，在 Agent 侧修改。",
                 rows: [
                     SettingsRow(
                         title: connection.name, detail: connection.serverURL, symbol: "server.rack",
@@ -361,19 +340,26 @@ final class AgentProvidersViewController: SettingsListController {
             let additive = Self.additiveAgents.contains(agent)
             var rows: [SettingsRow] = []
 
+            // 叠加型 Agent 的"默认"取 live.selection——settings.json 里的真实
+            // 默认选中，比在 Agent 侧改动后可能漂移的 currentProviderId 更准。
+            let selection = bucket["live"]["selection"]
             for profile in bucket["providers"].arrayValue {
                 let id = profile["id"].stringValue
-                let isCurrent = bucket["currentProviderId"].stringValue == id
+                let isCurrent = !additive && bucket["currentProviderId"].stringValue == id
+                let isDefault = additive && selection["providerId"].stringValue == id
+                let defaultModel = isDefault ? selection["modelId"].optionalString : nil
                 let detail = [
                     Self.summary(agent: agent, settings: profile["settingsConfig"]),
                     isCurrent ? "当前" : "",
+                    isDefault ? "默认" : "",
+                    defaultModel ?? "",
                 ].filter { !$0.isEmpty }.joined(separator: " · ")
                 rows.append(
                     SettingsRow(
                         title: profile["name"].stringValue, detail: detail,
-                        symbol: isCurrent ? "checkmark.circle.fill" : "person.crop.circle",
+                        symbol: isCurrent || isDefault ? "checkmark.circle.fill" : "person.crop.circle",
                         id: "agentProviders.\(agent).\(id)",
-                        enabled: !loading && !submitting, checked: isCurrent
+                        enabled: !loading && !submitting, checked: isCurrent || isDefault
                     ) { [weak self] in
                         self?.providerActions(agent: agent, bucket: bucket, profile: profile)
                     })
@@ -382,9 +368,11 @@ final class AgentProvidersViewController: SettingsListController {
             // 叠加型 Agent：live 文件里未托管的节点显示为可收编项。
             if additive {
                 for nodeId in bucket["live"]["unmanagedProviders"].arrayValue.compactMap(\.optionalString) {
+                    let isDefault = selection["providerId"].stringValue == nodeId
                     rows.append(
                         SettingsRow(
-                            title: nodeId, detail: "未托管 · 点按收编",
+                            title: nodeId,
+                            detail: isDefault ? "未托管 · 默认 · 点按收编" : "未托管 · 点按收编",
                             symbol: "questionmark.circle", id: "agentProviders.\(agent).unmanaged.\(nodeId)",
                             enabled: !loading && !submitting
                         ) { [weak self] in
