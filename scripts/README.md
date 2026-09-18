@@ -92,6 +92,12 @@ Use `xcrun simctl list devices available` to choose an installed iPhone or iPad.
 
 The UI suite creates synthetic conversations, edits the fixture workspace's `README.md`, starts/stops a real PTY, and reads a loopback page and Git status. Run devices sequentially against one fixture to avoid concurrent edits to that file. Screenshots are XCTest attachments. No real model credentials are available to these fake providers.
 
+Per-simulator prerequisites:
+
+- The attachment test needs at least one photo: `xcrun simctl addmedia <udid> image.jpg`.
+- The completion-notification test needs notification authorization already granted for `com.todex.mobile` (`simctl privacy` cannot grant it). Enable the app's 完成通知 toggle once and accept the prompt, or rerun the test after a first attempt creates the authorization entry.
+- `#` skill suggestions read `workspaces/project/.codex/skills/fixture-skill` and the Git menu's worktree entry reads the `wt-fixture` linked worktree; `backend_fixture.py start` creates both. Fixtures started before that change need them added manually.
+
 `run_session_tests.sh` requires macOS 26+ and Swift 6.2+. It builds TodexCore and the real AppSession/LocalStore sources in a fresh temporary Swift package, runs 13 bounded regression scenarios with HTTP/Socket/Keychain substitutes, and removes its generated build and test data on exit. It needs network access to fetch dependencies; it does not depend on an earlier `/tmp` build or call a provider.
 
 The one authorized real Codex request is documented separately in [real-provider-validation.md](../docs/real-provider-validation.md). It must not be rerun by this suite.

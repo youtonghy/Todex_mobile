@@ -76,8 +76,15 @@ def start(binary):
     workspace = root / "workspaces/project"
     (workspace / "README.md").write_text("# TodeX isolated fixture\n\nUse fixture:permission or fixture:hold in chat.\n")
     (workspace / "sample + 中文.md").write_text("original text\n")
+    # UI tests resolve "#" skills from the provider project skill root.
+    skill = workspace / ".codex/skills/fixture-skill"
+    skill.mkdir(parents=True, exist_ok=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: fixture-skill\ndescription: Fixture skill used by the TodeX mobile UI tests.\n---\n")
     env = environment(root)
-    for args in (["init", "--initial-branch=fixture"], ["add", "."], ["commit", "-m", "Initial isolated fixture"]):
+    for args in (["init", "--initial-branch=fixture"], ["add", "."], ["commit", "-m", "Initial isolated fixture"],
+                 # The Git worktree menu lists linked trees; UI tests open this one as a workspace.
+                 ["worktree", "add", "../wt-fixture", "-b", "wt-fixture"]):
         subprocess.run(["/usr/bin/git", "-C", str(workspace), *args], env=env, check=True, capture_output=True, text=True)
     quote = json.dumps
     config = '\n'.join([
