@@ -286,7 +286,7 @@ struct RealtimeCommand: Sendable {
     let payload: JSONValue
     var isReadOnly: Bool {
         [
-            "server.ping", "session.resume", "conversation.subscribe", "terminal.status", "codex.local.status",
+            "server.ping", "session.resume", "conversation.subscribe", "conversation.unsubscribe", "terminal.status", "codex.local.status",
             "codex.local.replay", "codex.local.snapshot", "codex.local.attach", "mcp.list",
         ].contains(type)
     }

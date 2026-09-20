@@ -274,7 +274,7 @@ struct APIClientTests {
     func catalogMatchesRecognizedTypesAndHonestSupport() {
         let expected = Set(
             """
-            conversation.subscribe conversation.create conversation.prompt conversation.followUp conversation.retry
+            conversation.subscribe conversation.unsubscribe conversation.create conversation.prompt conversation.followUp conversation.retry
             conversation.resume conversation.fork conversation.compact conversation.control conversation.cancel
             conversation.interrupt conversation.stop conversation.permission.respond mcp.list mcp.refresh mcp.call server.ping session.resume
             codex.gateway.control codex.local.start codex.local.status codex.local.stop codex.local.turn codex.local.input

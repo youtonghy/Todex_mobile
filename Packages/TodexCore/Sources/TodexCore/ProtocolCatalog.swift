@@ -14,6 +14,7 @@ public enum ProtocolCatalog {
     /// All types recognized by is_v2_native_command or ClientMessageKind.
     public enum Command: String, Codable, CaseIterable, Sendable {
         case conversationSubscribe = "conversation.subscribe"
+        case conversationUnsubscribe = "conversation.unsubscribe"
         case conversationCreate = "conversation.create"
         case conversationPrompt = "conversation.prompt"
         case conversationFollowUp = "conversation.followUp"
@@ -148,6 +149,9 @@ public enum ProtocolCatalog {
         case .conversationSubscribe:
             support = .supported
             detail = "Replays through a captured high-water sequence, then forwards live events with gap recovery."
+        case .conversationUnsubscribe:
+            support = .supported
+            detail = "Releases the per-connection subscription slot and stops the forwarding task; idempotent."
         case .conversationCreate, .conversationPrompt, .conversationFollowUp, .conversationRetry,
             .conversationCancel, .conversationInterrupt, .conversationStop, .conversationPermissionRespond:
             support = .supported

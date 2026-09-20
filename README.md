@@ -42,7 +42,7 @@ SwiftTerm 的固定版本构建插件只生成源代码版本信息。上述命�
 
 ## 协议与限制
 
-`Packages/TodexCore` 提供 47 个 HTTP method/path 封装和全部 56 个已识别 WebSocket 命令的支持表。详细依据和测试映射见 [API coverage](docs/api-coverage.md)。接口存在、后端实现、远程 Agent 可用性和本次实测是不同层次，应用会保留错误与未确认状态。
+`Packages/TodexCore` 提供 47 个 HTTP method/path 封装和全部 57 个已识别 WebSocket 命令的支持表。详细依据和测试映射见 [API coverage](docs/api-coverage.md)。接口存在、后端实现、远程 Agent 可用性和本次实测是不同层次，应用会保留错误与未确认状态。
 
 - **Codex Fast**：当前统一对话的 prompt/configure 接口没有 serviceTier 字段。独立的 `codex.local.*` adapter 也不能定位统一对话的运行进程，因此禁用 Fast。需要后端增加带能力检查和确认响应的统一 API；移动端不会仅修改按钮状态来表示生效。
 - **恢复和后台**：iOS 不保证后台长连接。回到前台会核对会话历史；断线、后台和应用重启后候选消息队列暂停，需要用户恢复。未确认的发送不自动重试。

@@ -40,7 +40,7 @@ Apple 发布的最新 [Xcode 27 RC（27A266a）](https://developer.apple.com/new
 
 真实 Rust 二进制 SHA-256：`2e82c4ca33024574756e7207ec392e3cb1ddae4b78f220b658e03ca69cc01fa7`，版本 `DEV0.0.0`。已有二进制可能与源码 checkout 不同，以上 hash 是实际运行对象。
 
-[backend_integration.py](../scripts/backend_integration.py) 完成 **16 组检查、40 次 HTTP 请求**，另有 WebSocket、真实 `/bin/sh` PTY 与临时 Git 仓库。验证了保存读回、`expectedText` 冲突不覆盖、审批决定传至假 CLI、取消后持久化完成、分页和重连无序号缺口。详细接口分层及 41 HTTP / 56 WS 支持表见 [api-coverage.md](api-coverage.md)。
+[backend_integration.py](../scripts/backend_integration.py) 完成 **16 组检查、40 次 HTTP 请求**，另有 WebSocket、真实 `/bin/sh` PTY 与临时 Git 仓库。验证了保存读回、`expectedText` 冲突不覆盖、审批决定传至假 CLI、取消后持久化完成、分页和重连无序号缺口。详细接口分层及 41 HTTP / 57 WS 支持表见 [api-coverage.md](api-coverage.md)。
 
 最终假 CLI fixture 保持运行于 `http://127.0.0.1:49933`，目录 `/private/tmp/todex-mobile-fixture-ke6n6g8s`。配置、数据、Token、工作区和 CLI HOME 全部隔离；Token 没有写入仓库。模拟器连接同机 loopback；真机需要填写它能够访问的后端地址。
 

@@ -6,7 +6,7 @@
 - WS 分派及 wire：[websocket.rs](../../TodeX_backend/src/server/websocket.rs)、[protocol.rs](../../TodeX_backend/src/server/protocol.rs)。
 - 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。共享客户端 [v2.ts](../../TodeX_protocol/src/v2.ts) 仅作交叉参考。
 
-**45/45 个普通 HTTP method + path 已封装，56/56 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 45 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
+**45/45 个普通 HTTP method + path 已封装，57/57 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 45 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
 ## 验证范围
 
@@ -109,6 +109,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | WS 命令 | 后端支持状态 | 说明 |
 | --- | --- | --- |
 | `conversation.subscribe` | Supported | 回放至 high-water sequence，再转发实时事件并补齐缺口。 |
+| `conversation.unsubscribe` | Supported | 释放该连接上的订阅槽位并停止转发任务；重复调用幂等。 |
 | `conversation.create` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
 | `conversation.prompt` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
 | `conversation.followUp` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
