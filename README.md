@@ -38,7 +38,7 @@ SwiftTerm 的固定版本构建插件只生成源代码版本信息。上述命�
 | 审批 | 命令、文件、权限、计划反馈、多问题回答、extension UI、MCP schema 表单与 URL elicitation |
 | 控制 | 根据能力启用取消、引导、实时模型配置、原生队列、重试、分叉和压缩 |
 | 工作台 | SwiftTerm PTY、多标签、文件树/搜索/语法高亮预览/编辑、原文比较保存、Git 状态/操作/差异、浏览器与后端预览 |
-| 设置 | Agent 供应商账户与模型切换（Codex/Claude Code/Pi/OpenCode）、CLI 版本和升级进度、Skills/MCP/命令目录、统计、深浅色、工作台共享方式 |
+| 设置 | Agent 供应商账户与模型切换（Codex/Claude Code/Grok Build/Pi/OpenCode）、CLI 版本和升级进度、Skills/MCP/命令目录、统计、深浅色、工作台共享方式 |
 
 ## 协议与限制
 

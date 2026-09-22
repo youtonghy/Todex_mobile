@@ -3,15 +3,16 @@ import TodexCore
 import UIKit
 
 /// cc-switch 同款的多供应商/账户管理：每个 Agent 一份档案库。独占型（Codex、
-/// Claude Code）激活时改写该 Agent 的全局配置文件；叠加型（Pi、OpenCode）
+/// Claude Code、Grok Build）激活时改写该 Agent 的全局配置文件；叠加型（Pi、OpenCode）
 /// 保存档案即把 provider 节点写入全局配置，可多个并存，界面只保留编辑入口。
 /// settingsConfig 中的密钥由后端脱敏返回，原样写回即保留已存密钥。
 @MainActor
 final class AgentProvidersViewController: SettingsListController {
-    private static let agentIDs = ["codex", "claude-code", "pi", "opencode"]
+    private static let agentIDs = ["codex", "claude-code", "grok-build", "pi", "opencode"]
     private static let agentTitles: [String: String] = [
         "codex": "Codex CLI",
         "claude-code": "Claude Code",
+        "grok-build": "Grok Build",
         "pi": "Pi",
         "opencode": "OpenCode",
     ]
@@ -263,6 +264,12 @@ final class AgentProvidersViewController: SettingsListController {
             return settings["env"]["ANTHROPIC_BASE_URL"].stringValue
         case "codex":
             return firstMatch(in: settings["config"].stringValue, pattern: #"base_url\s*=\s*"([^"]*)""#)
+        case "grok-build":
+            // 订阅档案显示 grok login 的账户邮箱，API 档案显示 base_url。
+            let email = settings["auth"].objectValue.values.lazy
+                .compactMap { $0["email"].optionalString }.first
+            return email
+                ?? firstMatch(in: settings["config"].stringValue, pattern: #"base_url\s*=\s*"([^"]*)""#)
         case "opencode":
             return settings["options"]["baseURL"].optionalString
                 ?? settings["options"]["baseUrl"].stringValue
@@ -287,6 +294,9 @@ final class AgentProvidersViewController: SettingsListController {
             return #"{"env":{"ANTHROPIC_BASE_URL":"","ANTHROPIC_AUTH_TOKEN":"","ANTHROPIC_MODEL":""}}"#
         case "codex":
             return #"{"auth":{"OPENAI_API_KEY":""},"config":"model_provider = \"custom\"\nmodel = \"gpt-5\"\n\n[model_providers.custom]\nname = \"Custom\"\nbase_url = \"https://example.com/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n"}"#
+        case "grok-build":
+            // API 密钥档案；官方订阅请先在后端主机 grok login，再用"导入当前生效配置"。
+            return #"{"auth":null,"config":"[models]\ndefault = \"grok-4.7\"\n\n[model.\"grok-4.7\"]\nmodel = \"grok-4.7\"\nbase_url = \"https://api.x.ai/v1\"\napi_key = \"\"\n"}"#
         case "opencode":
             return #"{"options":{"baseURL":"","apiKey":""},"models":{"model-id":{}}}"#
         case "pi":
@@ -303,7 +313,7 @@ final class AgentProvidersViewController: SettingsListController {
         var sections = [
             SettingsSection(
                 title: "当前后端",
-                footer: "独占型（Codex、Claude Code）激活时改写全局配置文件，对 TodeX 内外的新会话同时生效；叠加型（Pi、OpenCode）保存即写入全局配置、可多个并存，「默认」为该 Agent 的启动默认选中，在 Agent 侧修改。",
+                footer: "独占型（Codex、Claude Code、Grok Build）激活时改写全局配置文件，对 TodeX 内外的新会话同时生效；叠加型（Pi、OpenCode）保存即写入全局配置、可多个并存，「默认」为该 Agent 的启动默认选中，在 Agent 侧修改。",
                 rows: [
                     SettingsRow(
                         title: connection.name, detail: connection.serverURL, symbol: "server.rack",
