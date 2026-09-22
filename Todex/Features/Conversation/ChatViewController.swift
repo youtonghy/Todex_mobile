@@ -87,6 +87,16 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 }
             }
         }
+        timeline.loadEarlier = { [weak self] in
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.session.loadEarlier(self.conversation.id)
+                } catch {
+                    self.timeline.historyLoadFailed()
+                }
+            }
+        }
         let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
         glass.layer.cornerRadius = 26
         glass.clipsToBounds = true
@@ -531,7 +541,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             "\(conversation.provider) · \(session.isConnected ? runtime?.readyForActions == true ? (running ? "正在进行" : "已同步") : "正在补齐记录" : session.status)"
         timeline.update(
             runtime?.messages ?? [], provider: session.provider(for: conversation)?.displayName ?? conversation.provider,
-            sentAttachments: session.sentAttachments(for: conversation.id)
+            sentAttachments: session.sentAttachments(for: conversation.id),
+            hasEarlier: session.hasEarlierHistory(conversation.id),
+            loadingEarlier: session.isLoadingEarlier(conversation.id)
         )
         let value = normalizedDraft()
         if renderedDraft != value {

@@ -122,6 +122,13 @@ extension RealtimeClient: SessionSocket {}
     private var cachedBytes = 0
     private var cacheLoaded: Set<String> = []
     private var dirtyCaches: Set<String> = []
+    /// Lazily-opened histories: `historyFloors[id]` is the highest sequence not
+    /// yet loaded (the next `beforeSequence` cursor). Absent or 0 means the
+    /// loaded window already reaches the journal head.
+    private var historyFloors: [String: Int] = [:]
+    private var earlierLoading: [String: UUID] = [:]
+    private static let historyPageSize = 300
+    private static let activeTurnScanPages = 10
     private struct CacheWrite {
         let namespace: String
         let version: UInt64
@@ -516,6 +523,8 @@ extension RealtimeClient: SessionSocket {}
         where oldScopes[conversation.id] != nil && oldScopes[conversation.id] != conversationScope(conversation) {
             readSequences.removeValue(forKey: conversation.id)
             runtimes.removeValue(forKey: conversation.id)
+            historyFloors.removeValue(forKey: conversation.id)
+            earlierLoading.removeValue(forKey: conversation.id)
             removeCache(conversation.id)
             cacheLoaded.remove(conversation.id)
         }
@@ -648,6 +657,13 @@ extension RealtimeClient: SessionSocket {}
         let manifest = try await api.conversation(id: id)
         try checkRevision(current)
         guard manifest.id == id else { throw TodexError.invalid("对话恢复响应不匹配") }
+        // A runtime that has never applied an event opens at the journal tail
+        // instead of replaying from sequence 0; earlier pages load on demand.
+        var lazyOpened = false
+        if (runtimes[id]?.appliedSequence ?? 0) == 0, manifest.lastSequence > 0 {
+            lazyOpened = try await seedTailWindow(id, manifest: manifest, api: api, revision: current)
+        }
+        if lazyOpened { cacheLoaded.insert(id) }
         if !cacheLoaded.contains(id) {
             let cached: [ConversationEvent]
             do { cached = try await persistence.events(eventKey(manifest)) } catch {
@@ -736,6 +752,113 @@ extension RealtimeClient: SessionSocket {}
             runtimes[id] = runtime
             changed()
         }
+    }
+
+    func hasEarlierHistory(_ id: String) -> Bool { (historyFloors[id] ?? 0) > 0 }
+    func isLoadingEarlier(_ id: String) -> Bool { earlierLoading[id] != nil }
+
+    /// Fetch the page of history directly below the loaded window and merge it
+    /// as older entries. The runtime's live state is untouched: `prepend`
+    /// projects the page on a scratch runtime and appends timeline rows only.
+    func loadEarlier(_ id: String) async throws {
+        guard let api, isConnected else { throw TodexError.disconnected }
+        let floor = historyFloors[id] ?? 0
+        guard floor > 0, runtimes[id] != nil, earlierLoading[id] == nil else { return }
+        let current = revision
+        let token = UUID()
+        earlierLoading[id] = token
+        changed()
+        defer {
+            if earlierLoading[id] == token { earlierLoading.removeValue(forKey: id) }
+            if current == revision { changed() }
+        }
+        let page = try await api.events(
+            conversationId: id, before: floor, limit: Self.historyPageSize, detail: "summary")
+        try checkRevision(current)
+        guard case .array(let raw) = page["events"] else { throw TodexError.invalid("历史分页响应无效") }
+        var events: [ConversationEvent] = []
+        for value in raw {
+            let event = try value.decoded(ConversationEvent.self)
+            guard event.conversationId == id else { throw TodexError.invalid("历史事件属于其他对话") }
+            events.append(event)
+        }
+        events.sort { $0.sequence < $1.sequence }
+        // A missing page anchor means the backend ignored `beforeSequence`;
+        // keep the floor so the forward path still owns those sequences.
+        guard let first = events.first, let last = events.last, last.sequence <= floor else { return }
+        var runtime = runtimes[id] ?? ConversationRuntime(conversationId: id)
+        runtime.prepend(events, below: floor)
+        runtimes[id] = runtime
+        historyFloors[id] = page["hasMore"].boolValue && first.sequence > 1 ? first.sequence - 1 : 0
+        if let pending = pendingSends[id] {
+            for event in events
+            where event.sequence > pending.afterSequence
+                && event.payload["clientRequestId"].stringValue == pending.requestId
+            {
+                pendingSends.removeValue(forKey: id)
+                saveSoon()
+                break
+            }
+        }
+        changed()
+    }
+
+    /// Open an uninitialized runtime at the journal tail: fetch the newest
+    /// page(s) with `beforeSequence`, seed the applied cursor below the window,
+    /// then ingest the window forward so buffered live frames still drain in
+    /// order. An active turn scans back — bounded — for its `turn.started` so
+    /// the running state and pending approvals project correctly.
+    /// Returns false when the backend predates `beforeSequence` (its answer is
+    /// not anchored at the cursor); the caller falls back to forward replay.
+    private func seedTailWindow(
+        _ id: String, manifest: ConversationManifest, api: APIClient, revision current: UUID
+    ) async throws -> Bool {
+        // Manifests from the wire are snake_case; locally refreshed entries can
+        // carry the runtime's camelCase spelling.
+        let turnActive = ["running", "waiting_permission", "waitingPermission"].contains(manifest.status)
+        var pages: [[ConversationEvent]] = []
+        var cursor = manifest.lastSequence
+        var hasMore = true
+        while cursor > 0, pages.count < (turnActive ? Self.activeTurnScanPages : 1) {
+            let page = try await api.events(
+                conversationId: id, before: cursor, limit: Self.historyPageSize, detail: "summary")
+            try checkRevision(current)
+            guard case .array(let raw) = page["events"] else {
+                throw TodexError.invalid("历史分页响应无效")
+            }
+            var events: [ConversationEvent] = []
+            for value in raw {
+                let event = try value.decoded(ConversationEvent.self)
+                guard event.conversationId == id else {
+                    throw TodexError.invalid("历史事件属于其他对话")
+                }
+                events.append(event)
+            }
+            events.sort { $0.sequence < $1.sequence }
+            guard let first = events.first, let last = events.last, last.sequence == cursor else {
+                return false
+            }
+            pages.append(events)
+            hasMore = page["hasMore"].boolValue && first.sequence > 1
+            cursor = first.sequence - 1
+            if !hasMore { break }
+            if turnActive,
+                events.contains(where: { ConversationRuntime.canonicalType($0) == "turn.started" })
+            {
+                break
+            }
+        }
+        guard let earliest = pages.last?.first?.sequence else { return false }
+        let floor = hasMore ? max(0, earliest - 1) : 0
+        var runtime = runtimes[id] ?? ConversationRuntime(conversationId: id)
+        // If a live frame already applied the journal head, forward replay
+        // fills every sequence below the window and no earlier page remains.
+        historyFloors[id] = runtime.seedHistoryFloor(floor) ? floor : 0
+        runtimes[id] = runtime
+        for page in pages.reversed() {
+            for event in page { ingest(event) }
+        }
+        return true
     }
 
     private func replayPages(_ id: String, target: Int, api: APIClient, revision current: UUID) async throws {
@@ -941,6 +1064,13 @@ extension RealtimeClient: SessionSocket {}
         let current = revision
         try await recover(id)
         try checkRevision(current)
+        // A lazily opened window may end above the pending send's events; page
+        // backward until the clientRequestId match resolves it or the journal
+        // head is reached.
+        while pendingSends[id] != nil, hasEarlierHistory(id) {
+            try await loadEarlier(id)
+            try checkRevision(current)
+        }
         if pendingSends[id] != nil { throw TodexError.unknownOutcome("完整记录中仍未找到这次请求，原消息保留在待核对区") }
     }
     func restoreUnknownAsDraft(_ id: String) {
@@ -1436,6 +1566,8 @@ extension RealtimeClient: SessionSocket {}
         readSequences = [:]
         legacyCursors = [:]
         rawEvents = [:]
+        historyFloors = [:]
+        earlierLoading = [:]
         cachedBytes = 0
         cacheLoaded = []
         dirtyCaches = []

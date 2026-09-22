@@ -758,4 +758,82 @@ struct ConversationRuntimeTests {
         #expect(runtime.messages.contains { $0.category == "reasoning" && $0.turnId == "t" })
         #expect(runtime.messages.contains { $0.category == "tool" })
     }
+
+    @Test func lazySeedOpensAtTailAndLiveFramesAboveFloorStillApply() throws {
+        // Live frames can arrive before the seed lands; they buffer, then the
+        // tail window drains them once its contiguous prefix reaches the gap.
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(9, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(try event(10, "message.delta", #"{"turnId":"t","text":"live"}"#))
+        runtime.ingest(try event(3, "message.delta", #"{"text":"stale"}"#))
+        #expect(runtime.bufferedEventCount == 3)
+        runtime.seedHistoryFloor(4)
+        #expect(runtime.appliedSequence == 4)
+        // The frame below the floor is already inside the loaded window.
+        #expect(runtime.bufferedEventCount == 2)
+        for sequence in 5...8 {
+            runtime.ingest(
+                try event(
+                    sequence, "message.completed",
+                    #"{"message":{"role":"assistant","text":"older"}}"#))
+        }
+        #expect(runtime.appliedSequence == 10)
+        #expect(runtime.activeTurnId == "t")
+        #expect(runtime.status == "running")
+        #expect(runtime.messages.first?.text == "live")
+        runtime.markReplayComplete(highWater: 10)
+        #expect(runtime.readyForActions)
+        // Events at or below the floor never resurrect after the seed.
+        runtime.ingest(
+            try event(2, "message.completed", #"{"message":{"role":"assistant","text":"old"}}"#))
+        #expect(runtime.appliedSequence == 10)
+        #expect(runtime.messages.first { $0.text == "old" } == nil)
+    }
+
+    @Test func lazySeedIsIgnoredOnceTheRuntimeIsInitialized() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.seedHistoryFloor(40)
+        #expect(runtime.appliedSequence == 1)
+        runtime.seedHistoryFloor(0)
+        #expect(runtime.appliedSequence == 1)
+    }
+
+    @Test func prependAppendsOlderWindowWithoutRevivingStaleState() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.seedHistoryFloor(5)
+        runtime.ingest(try event(6, "turn.started", #"{"turnId":"t2"}"#))
+        runtime.ingest(
+            try event(
+                7, "message.completed",
+                #"{"turnId":"t2","message":{"role":"assistant","text":"new answer"}}"#))
+        runtime.ingest(try event(8, "turn.completed", #"{"turnId":"t2"}"#))
+        runtime.markReplayComplete(highWater: 8)
+        let older = [
+            try event(2, "turn.started", #"{"turnId":"t1"}"#),
+            try event(
+                3, "permission.requested",
+                #"{"turnId":"t1","permissionId":"p1","title":"old approval"}"#),
+            try event(
+                4, "message.completed",
+                #"{"turnId":"t1","message":{"role":"assistant","text":"older answer"}}"#),
+            try event(5, "turn.completed", #"{"turnId":"t1"}"#),
+        ]
+        let prepended = runtime.prepend(older, below: 5)
+        #expect(prepended)
+        // The older turn's unresolved approval must not reopen on the live runtime.
+        #expect(runtime.pendingPermissions.isEmpty)
+        #expect(runtime.activeTurnId.isEmpty)
+        #expect(runtime.status == "completed")
+        #expect(runtime.messages.map(\.text) == ["new answer", "older answer", "old approval"])
+        #expect(runtime.messages.last?.sequence == 3)
+        // Re-prepending the same page is a no-op, and events above the floor
+        // belong to the live window rather than the history tail.
+        let again = runtime.prepend(older, below: 5)
+        #expect(!again)
+        let aboveFloor = runtime.prepend(
+            [try event(9, "message.completed", #"{"message":{"role":"assistant","text":"late"}}"#)],
+            below: 5)
+        #expect(!aboveFloor)
+    }
 }

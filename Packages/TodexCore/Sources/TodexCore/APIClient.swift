@@ -346,6 +346,18 @@ public final class APIClient: Sendable {
         return try await queryRequest(path: "\(conversationPath(conversationId))/events", query: query)
     }
 
+    /// Reverse pagination: the last `limit` events with `sequence <= before`.
+    /// The next older page starts at `events.first.sequence - 1`; `hasMore`
+    /// reports whether earlier events remain. Backends that predate the
+    /// parameter ignore it and answer with the journal head instead.
+    public func events(
+        conversationId: String, before: Int, limit: Int = 200, detail: String = "full"
+    ) async throws -> JSONValue {
+        var query = ["beforeSequence": String(before), "limit": String(limit)]
+        if detail != "full" { query["detail"] = detail }
+        return try await queryRequest(path: "\(conversationPath(conversationId))/events", query: query)
+    }
+
     public func createConversation(
         workspace: WorkspaceRecord, provider: String, profile: String? = nil, title: String? = nil
     ) async throws -> ConversationManifest {

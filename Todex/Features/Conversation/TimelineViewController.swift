@@ -9,11 +9,14 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
     private var messages: [TimelineMessage] = []
     private var provider = "TodeX"
     private var sentAttachments: [SentAttachmentRecord] = []
+    private var history = (more: false, loading: false)
     var insertText: ((String) -> Void)?
     var openFile: ((String) -> Void)?
     var addReference: ((MessageAttachment) -> Void)?
     /// Fetch full process details for a folded group: (group key, fromSequence, toSequence).
     var loadActivity: ((String, Int, Int) -> Void)?
+    /// Fetch the next page of older history when the scroll view nears the top.
+    var loadEarlier: (() -> Void)?
     override func viewDidLoad() {
         super.viewDidLoad()
         let config = WKWebViewConfiguration()
@@ -37,14 +40,17 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
     }
     func update(
         _ messages: [TimelineMessage], provider: String,
-        sentAttachments: [SentAttachmentRecord] = []
+        sentAttachments: [SentAttachmentRecord] = [],
+        hasEarlier: Bool = false, loadingEarlier: Bool = false
     ) {
+        let history = (more: hasEarlier, loading: loadingEarlier)
         guard self.messages != messages || self.provider != provider
-            || self.sentAttachments != sentAttachments
+            || self.sentAttachments != sentAttachments || self.history != history
         else { return }
         self.messages = messages
         self.provider = provider
         self.sentAttachments = sentAttachments
+        self.history = history
         render()
     }
     /// Scroll the timeline so the source message of a reference is visible.
@@ -61,6 +67,10 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "'", with: "\\'")
         web.evaluateJavaScript("window.activityLoadFailed?.('\(escaped)')")
+    }
+    /// Tell the web view the earlier-history page failed so it can offer a retry.
+    func historyLoadFailed() {
+        web.evaluateJavaScript("window.historyLoadFailed?.()")
     }
     /// Display name for a tool call: the provider-reported name when present,
     /// the command itself for shell executions, otherwise a generic label.
@@ -105,10 +115,11 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
         Task { [weak self] in
             guard let self else { return }
             _ = try? await web.callAsyncJavaScript(
-                "window.renderTimeline(messages, provider, fontSize)",
+                "window.renderTimeline(messages, provider, fontSize, history)",
                 arguments: [
                     "messages": values, "provider": provider,
                     "fontSize": UIFont.preferredFont(forTextStyle: .body).pointSize,
+                    "history": ["more": history.more, "loading": history.loading],
                 ], in: nil, contentWorld: .page)
         }
     }
@@ -123,6 +134,8 @@ final class TimelineViewController: UIViewController, WKScriptMessageHandler, WK
                 let from = Int(body["from"] ?? ""), let to = Int(body["to"] ?? ""), to >= from
             else { return }
             loadActivity?(key, from, to)
+        case "loadEarlier":
+            loadEarlier?()
         case "copy":
             UIPasteboard.general.string = body["text"]
             UIAccessibility.post(notification: .announcement, argument: "已复制")

@@ -62,11 +62,20 @@ actor Backend {
     var eventCalls = 0
     var manifestCalls = 0
     var pageSize = 200
+    var reversePages = true
+    var beforeCursors: [Int] = []
     var firstPageGate: Gate?
+    var nextPageGate: Gate?
     init(_ events: [ConversationEvent] = []) { journal = events }
     func configure(gate: Gate? = nil, pageSize: Int = 200) { firstPageGate = gate; self.pageSize = pageSize }
     func setProviders(_ values: [ProviderDescriptor]) { providers = values }
     func changeTenant() { workspace.tenantId = "tenant-b" }
+    func setStatus(_ value: String) { manifest.status = value }
+    /// Simulate a backend that predates `beforeSequence`: it answers every page
+    /// from the journal head regardless of the parameter.
+    func setReversePages(_ value: Bool) { reversePages = value }
+    /// Gate the next `/events` call regardless of its position in the sequence.
+    func gateNextPage(_ gate: Gate) { nextPageGate = gate }
     func append(_ events: [ConversationEvent]) { journal.append(contentsOf: events) }
     func handle(_ url: URL) async throws -> JSONValue {
         switch url.path {
@@ -81,11 +90,19 @@ actor Backend {
             return try JSONValue(encoding: current)
         case "/v2/conversations/c/events":
             eventCalls += 1
-            let after = Int(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "afterSequence" })?.value ?? "0") ?? 0
-            let remaining = journal.filter { $0.sequence > after }, page = Array(remaining.prefix(pageSize))
-            let response: JSONValue = ["events": try JSONValue(encoding: page), "nextSequence": .number(Double(page.last?.sequence ?? after)), "hasMore": .bool(remaining.count > page.count)]
             if eventCalls == 1 { await firstPageGate?.wait() }
-            return response
+            if let gate = nextPageGate { nextPageGate = nil; await gate.wait() }
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if let before = Int(items.first(where: { $0.name == "beforeSequence" })?.value ?? "") {
+                beforeCursors.append(before)
+            }
+            if reversePages, let before = Int(items.first(where: { $0.name == "beforeSequence" })?.value ?? "") {
+                let eligible = journal.filter { $0.sequence <= before }, page = Array(eligible.suffix(pageSize))
+                return ["events": try JSONValue(encoding: page), "nextSequence": .number(Double(page.last?.sequence ?? before)), "hasMore": .bool(eligible.count > page.count)]
+            }
+            let after = Int(items.first(where: { $0.name == "afterSequence" })?.value ?? "0") ?? 0
+            let remaining = journal.filter { $0.sequence > after }, page = Array(remaining.prefix(pageSize))
+            return ["events": try JSONValue(encoding: page), "nextSequence": .number(Double(page.last?.sequence ?? after)), "hasMore": .bool(remaining.count > page.count)]
         case "/v2/providers/models": return ["models": .array([])]
         default: throw Failure(description: "unexpected HTTP: \(url)")
         }
@@ -338,7 +355,11 @@ actor FakeSocket: SessionSocket {
     h.session.disconnect()
 }
 @MainActor func scopedReadsAndCachePrefix() async throws {
-    let h = try Harness((1...10_005).map { event($0) }); try await h.ready()
+    let h = try Harness((1...10_005).map { event($0) })
+    // The bounded-prefix cache is exercised through the forward path; a lazy
+    // tail window would only stage never-drained pending entries.
+    await h.backend.setReversePages(false)
+    try await h.ready()
     h.session.readSequences["c"] = 10_005; h.session.persist()
     try await eventually("cache persisted") { try h.store.read(h.eventKey, as: [ConversationEvent].self)?.count == 10_000 }
     let cached = try h.store.read(h.eventKey, as: [ConversationEvent].self)!
@@ -481,6 +502,76 @@ actor FakeSocket: SessionSocket {
     h.session.disconnect()
     revived.session.disconnect()
 }
+@MainActor func lazyTailOpenAndEarlierPaging() async throws {
+    // Distinct message ids keep every completed message a separate row.
+    let records = (1...450).map { n in
+        let message: JSONValue = ["role": "assistant", "text": .string("m\(n)"), "id": .string("msg-\(n)")]
+        return event(n, "message.completed", ["message": message])
+    }
+    let h = try Harness(records)
+    try await h.ready()
+    // Fixture caps pages at 200: one reverse page seeds the tail, then the
+    // forward cursor confirmation and the subscribe handshake run unchanged.
+    try check(await h.backend.eventCalls == 3, "lazy open replayed forward pages")
+    try check(await h.backend.beforeCursors == [450], "open did not anchor at the journal tail")
+    try check(h.session.runtimes["c"]?.appliedSequence == 450, "tail window not applied")
+    try check(h.session.runtimes["c"]?.readyForActions == true, "lazy open gated actions")
+    try check(h.session.runtimes["c"]?.messages.count == 200, "tail window size")
+    try check(h.session.runtimes["c"]?.messages.last?.sequence == 251, "window floor")
+    try check(h.session.hasEarlierHistory("c"), "history exhausted too early")
+    // A live frame landing while the earlier page is in flight must survive.
+    let gate = Gate()
+    await h.backend.gateNextPage(gate)
+    let load = Task { try await h.session.loadEarlier("c") }
+    try await eventually("earlier page gated") { await h.backend.eventCalls == 4 }
+    try await h.socket.emit(
+        event(451, "message.completed", ["message": ["role": "assistant", "text": "live", "id": "msg-451"]]))
+    // A second request while one is in flight must not issue another fetch.
+    try await h.session.loadEarlier("c")
+    await gate.release()
+    try await load.value
+    try await eventually("live frame applied") { h.session.runtimes["c"]?.appliedSequence == 451 }
+    try check(await h.backend.eventCalls == 4, "single-flight or live follow-up fetch broken")
+    try check(h.session.runtimes["c"]?.messages.first?.text == "live", "live message not at head")
+    try check(h.session.runtimes["c"]?.messages.count == 401, "earlier page not prepended")
+    try check(h.session.runtimes["c"]?.messages.last?.sequence == 51, "page floor wrong")
+    try check(h.session.hasEarlierHistory("c"), "floor should remain above the head")
+    try await h.session.loadEarlier("c")
+    try check(h.session.runtimes["c"]?.messages.count == 451, "final page missing")
+    try check(!h.session.hasEarlierHistory("c"), "history floor did not reach the journal head")
+    try check(await h.backend.beforeCursors == [450, 250, 50], "wrong reverse cursors")
+    let calls = await h.backend.eventCalls
+    try await h.session.loadEarlier("c")
+    try check(await h.backend.eventCalls == calls, "exhausted history still fetched")
+    h.session.disconnect()
+}
+@MainActor func lazyOpenFallsBackToForwardReplay() async throws {
+    let records = (1...450).map { n in
+        let message: JSONValue = ["role": "assistant", "text": .string("m\(n)"), "id": .string("msg-\(n)")]
+        return event(n, "message.completed", ["message": message])
+    }
+    let h = try Harness(records)
+    await h.backend.setReversePages(false)
+    try await h.ready()
+    try check(h.session.runtimes["c"]?.appliedSequence == 450, "fallback replay incomplete")
+    try check(h.session.runtimes["c"]?.messages.count == 450, "fallback dropped messages")
+    try check(!h.session.hasEarlierHistory("c"), "fallback left a history floor")
+    try check(await h.backend.beforeCursors == [450], "fallback never tried a reverse page")
+    h.session.disconnect()
+}
+@MainActor func lazyOpenScansBackForActiveTurn() async throws {
+    var records = (1...450).map { event($0) }
+    records[149] = event(150, "turn.started", ["turnId": "t-active"])
+    let h = try Harness(records)
+    await h.backend.setStatus("running")
+    try await h.ready()
+    // Page [251..450] holds no turn.started, so recovery pages back to 150.
+    try check(await h.backend.beforeCursors == [450, 250], "active turn scan did not page back")
+    try check(h.session.runtimes["c"]?.activeTurnId == "t-active", "active turn lost")
+    try check(h.session.runtimes["c"]?.status == "running", "active turn status lost")
+    try check(h.session.hasEarlierHistory("c"), "scan should stop above the journal head")
+    h.session.disconnect()
+}
 @MainActor func fixtureNeverOverwritesCatalog() async throws {
     #if DEBUG
     let store = try TestEnvironment.store()
@@ -521,7 +612,10 @@ actor FakeSocket: SessionSocket {
             ("DEBUG port environment fixture", debugPortFixture),
             ("fixture launch never overwrites catalog", fixtureNeverOverwritesCatalog),
             ("task plan persistence + legacy snapshot decode", taskPlanPersistence),
-            ("composer memory persistence + capability fallback", composerMemory)
+            ("composer memory persistence + capability fallback", composerMemory),
+            ("lazy tail open + earlier paging", lazyTailOpenAndEarlierPaging),
+            ("old backend falls back to forward replay", lazyOpenFallsBackToForwardReplay),
+            ("lazy open scans back for active turn", lazyOpenScansBackForActiveTurn)
         ]
         var failures = 0
         for (name, run) in tests {

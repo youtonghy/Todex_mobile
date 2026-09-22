@@ -95,6 +95,43 @@ public struct ConversationRuntime: Sendable {
     /// Failed or partial replay leaves actions disabled until a successful retry.
     public mutating func beginReplay() { replayComplete = false }
 
+    /// Open recovery at the journal tail instead of sequence 0: `floor` becomes
+    /// the applied cursor so the next event accepted is `floor + 1`. Live frames
+    /// buffered before the seed stay buffered when they belong above the floor;
+    /// frames at or below it are already inside the loaded window and drop.
+    /// Returns false once any event has applied — the forward replay path then
+    /// owns every sequence below the tail window.
+    @discardableResult
+    public mutating func seedHistoryFloor(_ floor: Int) -> Bool {
+        guard appliedSequence == 0, floor > 0 else { return false }
+        appliedSequence = floor
+        pendingEvents = pendingEvents.filter { $0.key > floor }
+        pendingBytes = pendingEvents.values.reduce(0) { $0 + $1.bytes }
+        return true
+    }
+
+    /// Merge a page of older history fetched with `beforeSequence`. The events
+    /// replay on a scratch runtime so stale turn/permission/usage state cannot
+    /// overwrite the newest window; only projected timeline entries append
+    /// (newest-first list, so older pages go to the tail). Entries already
+    /// loaded keep their newer-window version.
+    @discardableResult
+    public mutating func prepend(_ events: [ConversationEvent], below floor: Int) -> Bool {
+        let sorted = events
+            .filter { $0.conversationId == conversationId && $0.sequence <= floor }
+            .sorted { $0.sequence < $1.sequence }
+        guard !sorted.isEmpty else { return false }
+        var scratch = ConversationRuntime(conversationId: conversationId)
+        for event in sorted {
+            scratch.apply(event)
+        }
+        let existing = Set(messages.map(\.id))
+        let older = scratch.messages.filter { !existing.contains($0.id) }
+        guard !older.isEmpty else { return false }
+        messages.append(contentsOf: older)
+        return true
+    }
+
     public mutating func markReplayComplete(highWater: Int) {
         guard highWater >= 0 else { return }
         highWaterSequence = max(highWaterSequence, highWater)
@@ -649,7 +686,9 @@ public struct ConversationRuntime: Sendable {
         "inputTokens", "outputTokens", "cachedInputTokens", "cacheWriteTokens", "totalTokens",
     ]
 
-    private static func canonicalType(_ event: ConversationEvent) -> String {
+    /// Wire type normalized through the provider alias table. Recovery scans
+    /// for `turn.started` with the same canonicalization the reducer applies.
+    public static func canonicalType(_ event: ConversationEvent) -> String {
         let aliases = [
             "codex.turn.started": "turn.started", "codex.turn.completed": "turn.completed",
             "conversation.interrupted": "turn.interrupted", "conversation.failed": "turn.failed",

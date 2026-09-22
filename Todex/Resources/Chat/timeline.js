@@ -45,6 +45,20 @@ function renderTool(item){
  return card;
 }
 function bridge(value){window.webkit.messageHandlers.chat.postMessage(value);}
+// Earlier-history paging: the sentinel row sits above the loaded window. The
+// native side owns `more`/`loading`; `failed` is local until the next render.
+let history={more:false,loading:false,failed:false};
+function requestEarlier(){if(!history.more||history.loading||history.failed)return;history.loading=true;renderHistory();bridge({action:'loadEarlier'});}
+function renderHistory(){
+ let row=document.getElementById('history');
+ if(!history.more){row?.remove();return;}
+ if(!row){row=document.createElement('button');row.id='history';row.type='button';row.onclick=()=>{history.failed=false;requestEarlier();};}
+ row.disabled=history.loading;
+ row.textContent=history.failed?'加载更早的记录失败，点按重试':history.loading?'正在加载更早的记录…':'加载更早的消息';
+ if(root.firstElementChild!==row)root.prepend(row);
+}
+window.historyLoadFailed=function(){history.failed=true;history.loading=false;renderHistory();};
+addEventListener('scroll',()=>{if(scrollY<240)requestEarlier();},{passive:true});
 function nearBottom(){return document.documentElement.scrollHeight-innerHeight-scrollY<130;}
 function updateBottom(){bottom.style.display=nearBottom()?'none':'block';}
 addEventListener('scroll',updateBottom,{passive:true});bottom.onclick=()=>{scrollTo({top:document.documentElement.scrollHeight,behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'instant':'smooth'});};
@@ -92,10 +106,15 @@ function renderActivityGroup(items,existing){
   for(const item of items){if(item.category==='tool'){d.append(renderTool(item));continue;}const row=document.createElement('div');row.className='activity-item';const label=document.createElement('div');label.className='activity-label';label.textContent=activityLabel[item.category];const body=document.createElement('div');body.className='body';renderBody(body,item.text);row.append(label,body);row.oncontextmenu=e=>{if(getSelection()?.toString())return;e.preventDefault();bridge({action:'message',id:item.id,text:item.text});};d.append(row);}};
  d.open=openDetails.has(key);if(d.open)populate();d.ontoggle=()=>{if(d.open){openDetails.add(key);populate();}else openDetails.delete(key);};article.append(d);existing.delete(key);return article;
 }
-window.renderTimeline=function(messages,provider,fontSize){
- const follow=initial||nearBottom(),top=scrollY;root.style.fontSize=fontSize+'px';
+window.renderTimeline=function(messages,provider,fontSize,historyState){
+ if(historyState)history={more:!!historyState.more,loading:!!historyState.loading,failed:history.failed&&!!historyState.more};
+ const follow=initial||nearBottom(),top=scrollY;
+ // Anchor to the topmost rendered row: prepended history and bottom appends
+ // both keep the row under the viewport stable instead of restoring a raw offset.
+ const anchor=root.querySelector('.message'),anchorTop=anchor?anchor.offsetTop:0,anchorId=anchor?.dataset.id;
+ root.style.fontSize=fontSize+'px';
  const existing=new Map([...root.querySelectorAll('.message')].map(e=>[e.dataset.id,e]));
- if(!messages.length){root.innerHTML='<div class="empty"><h2>一起把想法变成现实</h2><p>描述你的任务，或从操作台引用文件。</p></div>';return;}
+ if(!messages.length){root.innerHTML='<div class="empty"><h2>一起把想法变成现实</h2><p>描述你的任务，或从操作台引用文件。</p></div>';renderHistory();return;}
  root.querySelector('.empty')?.remove();
  for(let i=0;i<messages.length;i++){const message=messages[i];
   if(isActivity(message)){
@@ -113,7 +132,13 @@ window.renderTimeline=function(messages,provider,fontSize){
   article.oncontextmenu=e=>{if(getSelection()?.toString())return;e.preventDefault();bridge({action:'message',id:message.id,text:message.text});};
   root.append(article);
  }existing.forEach(e=>e.remove());
- if(follow)scrollTo(0,document.documentElement.scrollHeight);else scrollTo(0,top);initial=false;updateBottom();
+ renderHistory();
+ if(follow)scrollTo(0,document.documentElement.scrollHeight);
+ else if(anchorId){const now=root.querySelector('[data-id="'+CSS.escape(anchorId)+'"]');scrollTo(0,now?top+now.offsetTop-anchorTop:top);}
+ else scrollTo(0,top);
+ initial=false;updateBottom();
+ // A window shorter than the viewport still pages back until it fills.
+ if(history.more&&!history.loading&&!history.failed&&document.documentElement.scrollHeight<=innerHeight+80)requestEarlier();
 };
 window.activityLoadFailed=function(key){
  pendingLoads.delete(key);

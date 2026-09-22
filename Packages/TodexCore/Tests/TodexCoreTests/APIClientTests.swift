@@ -154,6 +154,19 @@ struct APIClientTests {
         #expect(try replay["events"].decoded([ConversationEvent].self).first?.sequence == 7)
     }
 
+    @Test
+    func paginationUsesBeforeSequenceForTailWindows() async throws {
+        let fixture = APIFixture { request in
+            let url = try #require(request.url)
+            #expect(url.query == "beforeSequence=40&detail=summary&limit=17")
+            return try .json(TestWire.replay)
+        }
+        defer { fixture.close() }
+        let replay = try await fixture.api.events(conversationId: "c", before: 40, limit: 17, detail: "summary")
+        #expect(replay["hasMore"] == true)
+        #expect(try replay["events"].decoded([ConversationEvent].self).first?.sequence == 7)
+    }
+
     @Test(arguments: [
         ErrorCase(
             status: 401, body: ["code": "UNAUTHORIZED", "message": "signature rejected"], code: "UNAUTHORIZED",

@@ -77,7 +77,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | GET | `/v2/conversations/{conversation_id}` | `conversation(id:)` | 已封装；认证；返回 manifest | `endpointWire(conversation)` |
 | PATCH | `/v2/conversations/{conversation_id}` | `updateConversation(id:patch:)` | 已封装；认证；返回 manifest | `endpointWire(updateConversation)` |
 | DELETE | `/v2/conversations/{conversation_id}` | `deleteConversation(id:)` | 已封装；认证 | `endpointWire(deleteConversation)` |
-| GET | `/v2/conversations/{conversation_id}/events` | `events(conversationId:after:limit:)` | 已封装；认证；保留 replay 外层字段 | `endpointWire(events)` |
+| GET | `/v2/conversations/{conversation_id}/events` | `events(conversationId:after:limit:)`、`events(conversationId:before:limit:)` | 已封装；认证；保留 replay 外层字段 | `endpointWire(events)` |
 | POST | `/v2/conversations/{conversation_id}/prompt` | `promptConversation(id:prompt:)` | 已封装；认证；JSONValue 原样发送 | `endpointWire(promptConversation)` |
 | POST | `/v2/conversations/{conversation_id}/cancel` | `cancelConversation(id:)` | 已封装；认证 | `endpointWire(cancelConversation)` |
 | POST | `/v2/conversations/{conversation_id}/interrupt` | `interruptConversation(id:)` | 已封装；认证；后端与 cancel 共用处理器 | `endpointWire(interruptConversation)` |
@@ -92,7 +92,7 @@ swift test --package-path /path/to/TodexCore-copy \
 - `ProviderDescriptor.profiles` 是字符串数组；capabilities 和 models 的未知字段通过 JSONValue 保留。静态 WS 支持表不能取代运行时 provider 能力探测。
 - `ConversationEvent` 使用整数 schemaVersion/sequence，字符串时间和开放 type/provider，保留 normalizedType/rawType/payload；历史事件缺少可选来源字段仍可解码。JSONValue 内部使用 Double，超过其精确整数范围的数值不额外获得精度保证。
 - 创建会话发送 `workspace.path` 字符串和 `providerProfile`；不会发送整个 workspace 对象。nil profile/title 不入请求体。更新支持后端的 title/archived patch，原样保留调用方 JSON；无额外成功语义。
-- 回放使用 `afterSequence` 和 `limit`（默认 200），返回完整 replay JSON，保留 nextSequence/hasMore。不会将缺失的列表字段悄悄当作空列表。
+- 回放使用 `afterSequence` 和 `limit`（默认 200），返回完整 replay JSON，保留 nextSequence/hasMore。不会将缺失的列表字段悄悄当作空列表。反向翻页使用 `beforeSequence`（包含式上界）加 `limit`，返回 `sequence <= before` 的最后一页，`hasMore` 表示还有更早事件；下一页游标为本页首条 `sequence - 1`。旧后端忽略该参数时由调用方校验锚点并回退正向回放。
 - 文件保存必需 `expectedText`。Git operation 的 wire 为 `{ "workspacePath": "…", "operation": { "action": "create-branch", "branchName": "…" } }`。权限回复 wire 为 `{ "outcome": "allow_once", "optionId": "…" }` 等后端决策结构。
 - 复用现有 JSONValue、BackendConnection、HTTPClient，包括 URL 规范化、路径 segment 编码和 JSON 请求/错误处理。只在 APIClient 内处理两个例外：/health 的纯文本，以及查询值含字面量 + 的 GET。后者将 URLQueryItem 留下的 + 改为 %2B，避免被 Axum 的表单查询解析器变为空格；% 字符不重复解码。这两个分支使用同一个 session，并保留大小上限与 HTTP 错误语义，共同文件未修改。
 - 默认 session 禁用重定向、缓存和 cookie；公开探测/配对方法不附带设备签名。额外的 `init(connection:session:)` 允许 URLProtocol 注入，调用方负责注入 session 的策略。
