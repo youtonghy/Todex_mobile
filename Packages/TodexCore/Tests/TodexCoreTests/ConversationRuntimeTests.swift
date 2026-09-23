@@ -836,4 +836,66 @@ struct ConversationRuntimeTests {
             below: 5)
         #expect(!aboveFloor)
     }
+
+    // pi.rs message_update/pi_completed_message_events and conversation-runtime.test.cjs:
+    // Pi streams answer text as progress blocks and finalizes it under the native id.
+    private func piProgress(_ sequence: Int, _ text: String, block: String = "m-1-assistant_progress-1")
+        throws -> ConversationEvent
+    {
+        try event(
+            sequence, "message.delta",
+            #"{"provider":"pi","turnId":"t","delta":{"type":"text_delta","contentIndex":1,"delta":"\#(text)"},"block":{"category":"assistant_progress","id":"\#(block)","turnId":"t","phase":"delta","contentIndex":1}}"#
+        )
+    }
+
+    private func piFinal(_ sequence: Int, supersedes: String?) throws -> ConversationEvent {
+        let field = supersedes.map { #","supersedes":["\#($0)"]"# } ?? ""
+        return try event(
+            sequence, "message.completed",
+            #"{"provider":"pi","turnId":"t","role":"assistant","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Answer"}]},"block":{"category":"assistant_final","id":"native-1","turnId":"t","phase":"completed"\#(field)}}"#
+        )
+    }
+
+    @Test func piStreamedAnswerIsVisibleAndReplacedByTheFinalAnswer() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(try piProgress(2, "Ans"))
+        runtime.ingest(try piProgress(3, "wer"))
+        #expect(runtime.messages.map(\.category) == ["assistant_progress"])
+        #expect(runtime.messages.map(\.text) == ["Answer"])
+        var legacy = runtime
+        runtime.ingest(try piFinal(4, supersedes: "m-1-assistant_progress-1"))
+        #expect(runtime.messages.map(\.category) == ["assistant_final"])
+        #expect(runtime.messages.map(\.text) == ["Answer"])
+        // Journals written before `supersedes` existed keep both rows.
+        legacy.ingest(try piFinal(4, supersedes: nil))
+        #expect(legacy.messages.count == 2)
+    }
+
+    @Test func supersedesOnlyRemovesTheNamedProgressBlocks() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(try piProgress(2, "Checking files", block: "m-0-assistant_progress-0"))
+        runtime.ingest(try event(3, "tool.started", #"{"turnId":"t","toolCallId":"call","toolName":"read"}"#))
+        runtime.ingest(try piProgress(4, "Answer"))
+        runtime.ingest(try piFinal(5, supersedes: "m-1-assistant_progress-1"))
+        #expect(runtime.messages.filter { $0.category.hasPrefix("assistant") }.map(\.text) == ["Answer", "Checking files"])
+        #expect(runtime.messages.first { $0.text == "Checking files" }?.category == "assistant_progress")
+    }
+
+    @Test func olderPagesAndHydrationCannotReviveSupersededProgress() throws {
+        let events = [
+            try event(1, "turn.started", #"{"turnId":"t"}"#), try piProgress(2, "Answer"),
+            try piFinal(3, supersedes: "m-1-assistant_progress-1"),
+        ]
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.seedHistoryFloor(2)
+        runtime.ingest(events[2])
+        runtime.markReplayComplete(highWater: 3)
+        let prepended = runtime.prepend(Array(events[0...1]), below: 2)
+        let hydrated = runtime.hydrate(Array(events[0...1]))
+        #expect(!prepended)
+        #expect(!hydrated)
+        #expect(runtime.messages.map(\.category) == ["assistant_final"])
+    }
 }

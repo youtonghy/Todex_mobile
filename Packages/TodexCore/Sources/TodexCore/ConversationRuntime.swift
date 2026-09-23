@@ -128,7 +128,9 @@ public struct ConversationRuntime: Sendable {
         let existing = Set(messages.map(\.id))
         let older = scratch.messages.filter { !existing.contains($0.id) }
         guard !older.isEmpty else { return false }
-        messages.append(contentsOf: older)
+        let merged = Self.droppingSupersededProgress(messages + older)
+        guard merged != messages else { return false }
+        messages = merged
         return true
     }
 
@@ -256,6 +258,7 @@ public struct ConversationRuntime: Sendable {
         for event in sorted {
             scratch.apply(event)
         }
+        let original = messages
         var changed = false
         for entry in scratch.messages where detailCategories.contains(entry.category) {
             if let index = messages.firstIndex(where: { $0.id == entry.id }) {
@@ -269,7 +272,27 @@ public struct ConversationRuntime: Sendable {
                 changed = true
             }
         }
-        return changed
+        // Hydrated progress rows may belong to an answer that already replaced them.
+        messages = Self.droppingSupersededProgress(messages)
+        return changed && messages != original
+    }
+
+    /// A final answer names the progress blocks its text was streamed under
+    /// (`block.supersedes`); those copies are dropped so the answer shows once.
+    private static func droppingSupersededProgress(_ messages: [TimelineMessage]) -> [TimelineMessage] {
+        var superseded = Set<String>()
+        for message in messages where message.category == "assistant_final" {
+            for blockID in message.detail["block"]["supersedes"].arrayValue {
+                if let blockID = blockID.optionalString, !blockID.isEmpty {
+                    superseded.insert(identity([message.turnId, blockID]))
+                }
+            }
+        }
+        guard !superseded.isEmpty else { return messages }
+        return messages.filter {
+            $0.category != "assistant_progress"
+                || !superseded.contains(identity([$0.turnId, string($0.detail["block"]["id"])]))
+        }
     }
 
     private mutating func projectMessage(_ event: ConversationEvent, type: String, turnId: String) {
@@ -404,7 +427,7 @@ public struct ConversationRuntime: Sendable {
         // Pi emits null for tool fields omitted on later execution callbacks.
         // Keep the earlier arguments alongside the final result in the detail view.
         let detail = Self.merge(previous?.detail ?? .null, payload, preservingNulls: category == "tool")
-        let text = Self.messageText(payload, category: category)
+        let text = Self.messageText(payload, category: category, typedBlock: validBlock)
         let structuredToolDelta =
             category == "tool"
             && ["toolCall", "tool_call", "partialResult", "partial_result"]
@@ -437,6 +460,9 @@ public struct ConversationRuntime: Sendable {
             category: category, text: nextText, status: messageStatus, detail: detail,
             sequence: event.sequence)
         if let index { messages[index] = entry } else { messages.insert(entry, at: 0) }
+        if category == "assistant_final", !payload["block"]["supersedes"].arrayValue.isEmpty {
+            messages = Self.droppingSupersededProgress(messages)
+        }
         if family != "assistant", category != "user" { assistantInterrupted = true }
     }
 
@@ -801,7 +827,16 @@ public struct ConversationRuntime: Sendable {
         }
     }
 
-    private static func messageText(_ payload: JSONValue, category: String) -> String {
+    private static func messageText(_ payload: JSONValue, category: String, typedBlock: Bool = false) -> String {
+        // Pi streams answer text as typed-block `text_delta` fragments. Untyped
+        // Claude stream frames share that type but are superseded by per-block
+        // completions, so they stay excluded by the text-only filter below.
+        if typedBlock, category == "assistant_final" || category == "assistant_progress",
+            payload["delta"]["type"].stringValue == "text_delta",
+            let fragment = payload["delta"]["delta"].optionalString
+        {
+            return fragment
+        }
         let values: [JSONValue]
         switch category {
         case "assistant_final", "assistant_progress", "user":
