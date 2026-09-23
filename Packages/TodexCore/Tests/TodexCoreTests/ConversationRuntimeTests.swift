@@ -898,4 +898,38 @@ struct ConversationRuntimeTests {
         #expect(!hydrated)
         #expect(runtime.messages.map(\.category) == ["assistant_final"])
     }
+
+    // claude.rs handle_stream_event and the `assistant` frame: text streams as
+    // untyped `text_delta`, then one message.completed per content block.
+    private func claudeCompleted(_ sequence: Int, _ part: String) throws -> ConversationEvent {
+        try event(
+            sequence, "message.completed",
+            #"{"provider":"claude-code","turnId":"t","message":{"id":"msg_1","type":"message","role":"assistant","content":[\#(part)]}}"#
+        )
+    }
+
+    @Test func claudeStreamsAnswersAndBlockCompletionsKeepTheirText() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(
+            try event(
+                2, "thought.delta",
+                #"{"provider":"claude-code","role":"assistant","turnId":"t","delta":{"type":"thinking_delta","thinking":"Plan"}}"#))
+        runtime.ingest(try claudeCompleted(3, #"{"type":"thinking","thinking":"Plan","signature":"s"}"#))
+        for (sequence, text) in [(4, "Hel"), (5, "lo")] {
+            runtime.ingest(
+                try event(
+                    sequence, "message.delta",
+                    #"{"provider":"claude-code","role":"assistant","turnId":"t","delta":{"type":"text_delta","text":"\#(text)"}}"#))
+        }
+        let answers = { runtime.messages.filter { $0.category == "assistant_final" } }
+        #expect(answers().map(\.text) == ["Hello"])
+        #expect(answers().first?.status == "streaming")
+        runtime.ingest(try claudeCompleted(6, #"{"type":"text","text":"Hello"}"#))
+        runtime.ingest(try claudeCompleted(7, #"{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}"#))
+        // Thinking stays reasoning; the tool_use completion does not blank the answer.
+        #expect(answers().map(\.text) == ["Hello"])
+        #expect(answers().first?.status == "completed")
+        #expect(runtime.messages.contains { $0.category == "reasoning" && $0.text == "Plan" })
+    }
 }

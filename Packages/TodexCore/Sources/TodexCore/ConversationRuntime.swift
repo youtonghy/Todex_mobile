@@ -427,7 +427,7 @@ public struct ConversationRuntime: Sendable {
         // Pi emits null for tool fields omitted on later execution callbacks.
         // Keep the earlier arguments alongside the final result in the detail view.
         let detail = Self.merge(previous?.detail ?? .null, payload, preservingNulls: category == "tool")
-        let text = Self.messageText(payload, category: category, typedBlock: validBlock)
+        let text = Self.messageText(payload, category: category)
         let structuredToolDelta =
             category == "tool"
             && ["toolCall", "tool_call", "partialResult", "partial_result"]
@@ -438,7 +438,7 @@ public struct ConversationRuntime: Sendable {
         } else if text.isEmpty,
             !(phase == "completed" && family == "assistant"
                 && (!payload["text"].isNull || !payload["content"].isNull
-                    || !payload["message"]["text"].isNull || !payload["message"]["content"].isNull))
+                    || !payload["message"]["text"].isNull || Self.carriesText(payload["message"]["content"])))
         {
             nextText = previous?.text ?? ""
         } else {
@@ -807,7 +807,8 @@ public struct ConversationRuntime: Sendable {
         case .array(let values): return values.map { text($0, depth: depth + 1, textOnly: textOnly) }.joined()
         case .object:
             if textOnly, let type = value["type"].optionalString,
-                !["text", "output_text", "input_text", "agentMessage", "agent_message"].contains(type)
+                !["text", "text_delta", "message", "output_text", "input_text", "agentMessage", "agent_message"]
+                    .contains(type)
             {
                 return ""
             }
@@ -827,16 +828,22 @@ public struct ConversationRuntime: Sendable {
         }
     }
 
-    private static func messageText(_ payload: JSONValue, category: String, typedBlock: Bool = false) -> String {
-        // Pi streams answer text as typed-block `text_delta` fragments. Untyped
-        // Claude stream frames share that type but are superseded by per-block
-        // completions, so they stay excluded by the text-only filter below.
-        if typedBlock, category == "assistant_final" || category == "assistant_progress",
-            payload["delta"]["type"].stringValue == "text_delta",
-            let fragment = payload["delta"]["delta"].optionalString
-        {
-            return fragment
+    /// Claude sends one completion per content block; a thinking or tool_use
+    /// completion carries no answer text and must not blank the streamed draft.
+    private static func carriesText(_ content: JSONValue) -> Bool {
+        switch content {
+        case .string: return true
+        case .array(let parts):
+            return parts.contains {
+                if case .string = $0 { return true }
+                let type = $0["type"].stringValue
+                return type.isEmpty || ["text", "output_text", "input_text"].contains(type)
+            }
+        default: return false
         }
+    }
+
+    private static func messageText(_ payload: JSONValue, category: String) -> String {
         let values: [JSONValue]
         switch category {
         case "assistant_final", "assistant_progress", "user":
