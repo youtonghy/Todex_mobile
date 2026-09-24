@@ -108,7 +108,7 @@ swift test --package-path /path/to/TodexCore-copy \
 
 | WS 命令 | 后端支持状态 | 说明 |
 | --- | --- | --- |
-| `conversation.subscribe` | Supported | 回放至 high-water sequence，再转发实时事件并补齐缺口。 |
+| `conversation.subscribe` | Supported | 以 `detail: summary` 回放，最多 `backfillLimit` 条；`hasMore` 时经 HTTP 补齐至 `lastSequence`，再转发实时事件并补齐缺口。 |
 | `conversation.unsubscribe` | Supported | 释放该连接上的订阅槽位并停止转发任务；重复调用幂等。 |
 | `conversation.create` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
 | `conversation.prompt` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |

@@ -129,6 +129,8 @@ extension RealtimeClient: SessionSocket {}
     private var earlierLoading: [String: UUID] = [:]
     private static let historyPageSize = 300
     private static let activeTurnScanPages = 10
+    /// Events a subscription backfills over the socket; the rest pages over HTTP.
+    private static let subscribeBackfillLimit = 500
     private struct CacheWrite {
         let namespace: String
         let version: UInt64
@@ -686,7 +688,13 @@ extension RealtimeClient: SessionSocket {}
             let before = runtimes[id]?.appliedSequence ?? 0
             let result = try await socket.command(
                 type: "conversation.subscribe",
-                payload: ["conversationId": .string(id), "afterSequence": .number(Double(before)), "limit": 200],
+                // Backfill folded like HTTP history pages and capped so a stale
+                // cursor cannot stream a whole journal; `hasMore` then pages the
+                // rest over HTTP below. Older backends ignore both fields.
+                payload: [
+                    "conversationId": .string(id), "afterSequence": .number(Double(before)), "limit": 200,
+                    "detail": "summary", "backfillLimit": .number(Double(Self.subscribeBackfillLimit)),
+                ],
                 timeout: 45, id: UUID().uuidString)
             try checkRevision(current)
             guard result["conversationId"].isNull || result["conversationId"] == .string(id) else {
