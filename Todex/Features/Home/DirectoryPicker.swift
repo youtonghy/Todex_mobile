@@ -19,12 +19,12 @@ final class DirectoryPicker: UITableViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "选择后端目录"
+        title = String(localized: "选择后端目录")
         view.backgroundColor = Theme.background
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             systemItem: .cancel, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
         navigationItem.rightBarButtonItem = UIBarButtonItem(
-            title: "选择",
+            title: String(localized: "选择"),
             primaryAction: UIAction { [weak self] _ in
                 guard let self, !current.isEmpty else { return }
                 dismiss(animated: true) { self.choose(self.current) }
@@ -51,8 +51,8 @@ final class DirectoryPicker: UITableViewController {
         return section == parentSection ? (parentPath == nil ? 0 : 1) : entries.count
     }
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        if showsRoots && section == 0 { return "根目录" }
-        return section == parentSection ? current : "文件夹"
+        if showsRoots && section == 0 { return String(localized: "根目录") }
+        return section == parentSection ? current : String(localized: "文件夹")
     }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
@@ -62,7 +62,7 @@ final class DirectoryPicker: UITableViewController {
             config.image = Theme.icon("folder")
             cell.accessoryType = roots[indexPath.row] == root ? .checkmark : .disclosureIndicator
         } else {
-            config.text = indexPath.section == parentSection ? "上级目录" : entries[indexPath.row]["name"].stringValue
+            config.text = indexPath.section == parentSection ? String(localized: "上级目录") : entries[indexPath.row]["name"].stringValue
             config.image = Theme.icon(indexPath.section == parentSection ? "arrow.turn.up.left" : "folder")
             cell.accessoryType = .disclosureIndicator
         }
