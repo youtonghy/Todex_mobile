@@ -125,10 +125,10 @@ enum Theme {
 }
 
 extension UIViewController {
-    func showError(_ error: Error) { showNotice(title: "无法完成操作", message: error.localizedDescription) }
+    func showError(_ error: Error) { showNotice(title: String(localized: "无法完成操作"), message: error.localizedDescription) }
     func showNotice(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "好", style: .default))
+        alert.addAction(UIAlertAction(title: String(localized: "好"), style: .default))
         WBUI.presentModal(alert, on: self)
     }
     func askText(
@@ -142,9 +142,9 @@ extension UIViewController {
             field.autocorrectionType = .no
             field.autocapitalizationType = .none
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
         alert.addAction(
-            UIAlertAction(title: "确定", style: .default) { [weak alert] _ in
+            UIAlertAction(title: String(localized: "确定"), style: .default) { [weak alert] _ in
                 guard let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
                     !text.isEmpty
                 else { return }
@@ -154,8 +154,8 @@ extension UIViewController {
     }
     func confirm(title: String, message: String, destructive: Bool = false, action: @escaping () -> Void) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "继续", style: destructive ? .destructive : .default) { _ in action() })
+        alert.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "继续"), style: destructive ? .destructive : .default) { _ in action() })
         present(alert, animated: true)
     }
 }

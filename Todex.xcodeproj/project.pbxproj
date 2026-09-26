@@ -20,6 +20,8 @@
 		5DA5576BFC34C8FE5BFEF743 /* HomeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EB322422A711D553BA2D0EF /* HomeViewController.swift */; };
 		5DE7147A79524C28EAF3913C /* CatalogViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD4992CC1CD7B78D9050C05A /* CatalogViewController.swift */; };
 		5EA5115C50E4546B218113C7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6132B4A0F2562217F85EC8F3 /* Assets.xcassets */; };
+		F3EF1317238422A7A549C50F /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = F451B746771C19B33AECD3B5 /* Localizable.xcstrings */; };
+		A1C0DE5E1F0A7B2C3D4E5F60 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A1C0DE5E1F0A7B2C3D4E5F61 /* InfoPlist.xcstrings */; };
 		6B7A7D7F0B3BB9A0CA92ED3F /* ConversationContainerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA55EE3C9574508B34FF25E6 /* ConversationContainerController.swift */; };
 		6F4586857B6DB936801ABA79 /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F221C4394429D796D00CBB9F /* LocalStore.swift */; };
 		7A61C87DEEA2D93B7356EBCB /* CodeHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E94641F64C898CE786F92167 /* CodeHighlighter.swift */; };
@@ -66,6 +68,8 @@
 		57070A6A2EBECD844554413E /* PairingViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingViewController.swift; sourceTree = "<group>"; };
 		6132B4A0F2562217F85EC8F3 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		62B4BB75B1AB6E27238B47FA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		F451B746771C19B33AECD3B5 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		A1C0DE5E1F0A7B2C3D4E5F61 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
 		69FAB4DDC0336E6D09338BB0 /* AgentProvidersViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProvidersViewController.swift; sourceTree = "<group>"; };
 		6E485163C78FED62D3F25EF1 /* WorkbenchTerminalViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchTerminalViewController.swift; sourceTree = "<group>"; };
 		71EFB1B95610C55EA0C3C6D7 /* WorkbenchViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchViewController.swift; sourceTree = "<group>"; };
@@ -236,6 +240,8 @@
 				6132B4A0F2562217F85EC8F3 /* Assets.xcassets */,
 				E45D1797EEA72BE5FF1B4AFC /* Chat */,
 				62B4BB75B1AB6E27238B47FA /* Info.plist */,
+				A1C0DE5E1F0A7B2C3D4E5F61 /* InfoPlist.xcstrings */,
+				F451B746771C19B33AECD3B5 /* Localizable.xcstrings */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -303,11 +309,14 @@
 				};
 			};
 			buildConfigurationList = 54188C430F27D7C4FD7A6FEE /* Build configuration list for PBXProject "Todex" */;
-			developmentRegion = en;
+			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				Base,
+				"zh-Hans",
 				en,
+				ja,
+				ko,
 			);
 			mainGroup = 6EBE9322E7154F3362F44387;
 			minimizedProjectReferenceProxies = 1;
@@ -333,6 +342,8 @@
 			files = (
 				5EA5115C50E4546B218113C7 /* Assets.xcassets in Resources */,
 				A5794D37A904DD9ACC9EA14F /* Chat in Resources */,
+				A1C0DE5E1F0A7B2C3D4E5F60 /* InfoPlist.xcstrings in Resources */,
+				F3EF1317238422A7A549C50F /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
