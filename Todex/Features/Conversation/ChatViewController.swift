@@ -10,12 +10,25 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private let session: AppSession
     private let conversation: ConversationManifest
     private let timeline = TimelineViewController()
-    private let composer = UITextView()
-    private let placeholder = Theme.label("描述你的任务", color: .placeholderText)
-    private let status = Theme.label("正在同步…", style: .caption1, color: .secondaryLabel)
+    private let composer = ComposerTextView()
+    /// Container-provided panels for `/diff` and `/skills` / `/mcp`.
+    var openGit: (() -> Void)?
+    var openCatalog: (() -> Void)?
+    private let contextButton = UIButton(type: .system)
+    /// Desktop ConversationRunStatus: a running turn quiet for 2 minutes on
+    /// this client (not by replayed timestamps) gets a possibly-stuck notice.
+    private var quietKey = ""
+    private var quietSince = Date()
+    private var stallTicker: Task<Void, Never>?
+    private static let stallInterval: TimeInterval = 120
+    /// One-shot notices (compaction finished) shown in the alert area.
+    private var transientNotice: (text: String, color: UIColor, until: Date)?
+    private var noticedCompaction: String?
+    private let placeholder = Theme.label(String(localized: "描述你的任务"), color: .placeholderText)
+    private let status = Theme.label(String(localized: "正在同步…"), style: .caption1, color: .secondaryLabel)
     private let chips = UIStackView()
     private let alerts = UIStackView()
-    private let modelChip = Theme.chip("模型", icon: "cpu")
+    private let modelChip = Theme.chip(String(localized: "模型"), icon: "cpu")
     private let permissionChip = UIButton(configuration: Theme.iconChipConfiguration(icon: "hand.raised.fill", tint: .systemOrange))
     private let workModeChip = UIButton(configuration: Theme.iconChipConfiguration(icon: "bolt.fill", tint: Theme.accent))
     private let moreChip = Theme.iconButton("ellipsis", pointSize: 11)
@@ -44,6 +57,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     isolated deinit {
         if let observer { session.removeObserver(observer) }
         if let contentSizeObserver { NotificationCenter.default.removeObserver(contentSizeObserver) }
+        stallTicker?.cancel()
     }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -87,6 +101,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 }
             }
         }
+        timeline.previewSentAttachment = { [weak self] in self?.previewSent($0) }
         timeline.loadEarlier = { [weak self] in
             Task { [weak self] in
                 guard let self else { return }
@@ -136,10 +151,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.contentSizeCategoryChanged() }
         }
-        composer.accessibilityLabel = "消息输入框"
+        composer.accessibilityLabel = String(localized: "消息输入框")
         composer.accessibilityIdentifier = "chat.composer"
         composer.textContainerInset = .init(top: 5, left: 6, bottom: 5, right: 6)
         composer.heightAnchor.constraint(equalToConstant: 75).isActive = true
+        composer.onPaste = { [weak self] in self?.handlePaste($0) ?? false }
         // Only claim taps that land on a reference token. If this recognizer
         // were allowed to recognize ordinary taps it would pre-empt the text
         // view's own tap handling and the keyboard would never appear.
@@ -151,7 +167,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         dismiss.items = [
             .flexibleSpace(),
             UIBarButtonItem(
-                title: "收起键盘", image: nil,
+                title: String(localized: "收起键盘"), image: nil,
                 primaryAction: UIAction { [weak composer] _ in composer?.resignFirstResponder() }),
         ]
         dismiss.sizeToFit()
@@ -168,7 +184,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         ])
         inputStack.addArrangedSubview(composer)
         let expand = Theme.iconButton("arrow.up.left.and.arrow.down.right", pointSize: 12)
-        expand.accessibilityLabel = "全屏编辑"
+        expand.accessibilityLabel = String(localized: "全屏编辑")
         expand.accessibilityIdentifier = "chat.composer.expand"
         expand.addAction(
             UIAction { [weak self] _ in self?.presentFullscreenComposer() }, for: .touchUpInside)
@@ -179,20 +195,20 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             expand.topAnchor.constraint(equalTo: composer.topAnchor, constant: 2),
         ])
         let attach = Theme.iconButton("plus")
-        attach.accessibilityLabel = "附件"
+        attach.accessibilityLabel = String(localized: "附件")
         attach.showsMenuAsPrimaryAction = true
         attach.menu = UIMenu(children: [
-            UIAction(title: "照片", image: Theme.icon("photo")) { [weak self] _ in self?.pickPhotos() },
-            UIAction(title: "文件", image: Theme.icon("doc")) { [weak self] _ in self?.pickFiles() },
+            UIAction(title: String(localized: "照片"), image: Theme.icon("photo")) { [weak self] _ in self?.pickPhotos() },
+            UIAction(title: String(localized: "文件"), image: Theme.icon("doc")) { [weak self] _ in self?.pickFiles() },
         ])
         for chip in [modelChip, permissionChip, workModeChip, moreChip] {
             chip.showsMenuAsPrimaryAction = true
             chip.setContentHuggingPriority(.required, for: .horizontal)
             chip.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
-        moreChip.accessibilityLabel = "更多控制"
-        stopButton = Theme.button("停止", icon: "stop.fill") { [weak self] in self?.performControl("cancel") }
-        sendButton = Theme.button("发送", icon: "arrow.up", prominent: true) { [weak self] in self?.submit() }
+        moreChip.accessibilityLabel = String(localized: "更多控制")
+        stopButton = Theme.button(String(localized: "停止"), icon: "stop.fill") { [weak self] in self?.performControl("cancel") }
+        sendButton = Theme.button(String(localized: "发送"), icon: "arrow.up", prominent: true) { [weak self] in self?.submit() }
         sendButton.accessibilityIdentifier = "chat.send"
         let selectorScroll = UIScrollView()
         selectorScroll.showsHorizontalScrollIndicator = false
@@ -210,11 +226,13 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         ])
         selectorScroll.setContentHuggingPriority(.defaultLow, for: .horizontal)
         selectorScroll.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        for button in [attach, stopButton!, sendButton!] {
+        contextButton.accessibilityIdentifier = "chat.context"
+        contextButton.addAction(UIAction { [weak self] _ in self?.showContextUsage() }, for: .touchUpInside)
+        for button in [contextButton, attach, stopButton!, sendButton!] {
             button.setContentHuggingPriority(.required, for: .horizontal)
             button.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
-        let toolbar = UIStackView(arrangedSubviews: [selectorScroll, attach, stopButton, sendButton])
+        let toolbar = UIStackView(arrangedSubviews: [selectorScroll, contextButton, attach, stopButton, sendButton])
         toolbar.axis = .horizontal
         toolbar.spacing = 6
         toolbar.alignment = .center
@@ -240,6 +258,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        session.viewingConversationID = conversation.id
         // Model catalogs are discovered live by the backend; refresh whenever the
         // conversation is shown again so CLI config edits are reflected.
         Task { [weak self] in
@@ -247,10 +266,37 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             try? await self.session.loadModels(for: self.conversation)
             try? await self.session.loadCommands(for: self.conversation)
         }
+        // Re-evaluates time-based notices (stall, one-shot) without new events.
+        stallTicker?.cancel()
+        stallTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+                guard let self else { return }
+                // Only time-based notices need a tick; an idle reload would also
+                // steal VoiceOver focus from the rebuilt alert buttons.
+                let running = self.session.runtimes[self.conversation.id]?.status == "running"
+                if running || self.transientNotice != nil { self.reload() }
+            }
+        }
     }
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        if session.viewingConversationID == conversation.id { session.viewingConversationID = nil }
+        stallTicker?.cancel()
+        stallTicker = nil
         session.persist()
+    }
+    override var keyCommands: [UIKeyCommand]? {
+        // iPad hardware keyboards: ⌘↩ sends, ⌘. stops the running turn.
+        [
+            UIKeyCommand(title: String(localized: "发送"), action: #selector(sendShortcut), input: "\r", modifierFlags: .command),
+            UIKeyCommand(title: String(localized: "停止"), action: #selector(stopShortcut), input: ".", modifierFlags: .command),
+        ]
+    }
+    @objc private func sendShortcut() { submit() }
+    @objc private func stopShortcut() {
+        guard !stopButton.isHidden, stopButton.isEnabled else { return }
+        performControl("cancel")
     }
     func insert(_ text: String) {
         var value = draft
@@ -260,7 +306,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     func addReference(_ attachment: MessageAttachment) {
         var value = draft
         guard value.attachments.count < 6 else {
-            status.text = "附件最多 6 个，请先移除部分附件后再添加引用"
+            status.text = String(localized: "附件最多 6 个，请先移除部分附件后再添加引用")
             return
         }
         let preview = Self.referencePreview(of: String(decoding: attachment.data, as: UTF8.self))
@@ -439,16 +485,40 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         var actions: [(String, @MainActor (String) -> Void)] = []
         if let reference = attachment.reference {
             if let path = reference.path, !path.isEmpty {
-                actions.append(("打开文件", { [weak self] _ in self?.openFile?(path) }))
+                actions.append((String(localized: "打开文件"), { [weak self] _ in self?.openFile?(path) }))
             } else if let messageId = reference.messageId {
-                actions.append(("跳到消息", { [weak self] _ in self?.timeline.scrollToMessage(messageId) }))
+                actions.append((String(localized: "跳到消息"), { [weak self] _ in self?.timeline.scrollToMessage(messageId) }))
             }
         }
         let excerpt = String(decoding: attachment.data, as: UTF8.self)
+        // Desktop parity: a pasted or picked text file can be edited before
+        // sending. References stay read-only; they quote a source.
+        if attachment.isImage {
+            showNotice(title: attachment.name, message: String(localized: "无法预览此图片。"))
+            return
+        }
+        if attachment.reference == nil {
+            WBUI.textSheet(
+                on: self, title: attachment.name, text: excerpt, editable: true,
+                actions: [(String(localized: "保存修改"), { @MainActor [weak self] text in self?.updateAttachmentText(attachment.id, text) })])
+            return
+        }
         let location = attachment.reference?.location ?? ""
         var parts = location.isEmpty ? [] : [location]
-        parts.append(excerpt.isEmpty ? "（没有可预览的内容）" : excerpt)
+        parts.append(excerpt.isEmpty ? String(localized: "（没有可预览的内容）") : excerpt)
         WBUI.textSheet(on: self, title: attachment.name, text: parts.joined(separator: "\n\n"), actions: actions)
+    }
+    private func updateAttachmentText(_ id: String, _ text: String) {
+        var value = draft
+        guard let index = value.attachments.firstIndex(where: { $0.id == id }) else { return }
+        let data = Data(text.utf8)
+        let others = value.attachments.enumerated().filter { $0.offset != index }.reduce(0) { $0 + $1.element.data.count }
+        guard data.count + others <= 2_500_000 else {
+            showError(TodexError.invalid(String(localized: "附件总大小需小于 2.5 MB")))
+            return
+        }
+        value.attachments[index].data = data
+        setDraft(value)
     }
     private func presentImagePreview(_ image: UIImage, named name: String) {
         let page = UIViewController()
@@ -504,7 +574,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     }
     private var canSend: Bool {
         session.isConnected && session.runtimes[conversation.id]?.readyForActions == true && !draft.isEmpty
-            && !submitting && session.pendingSends[conversation.id] == nil
+            && !submitting && !switchingAgent && session.pendingSends[conversation.id] == nil
     }
     /// Legacy drafts stored records without tokens in the text; materialize the
     /// missing tokens once so their capsules survive a round trip.
@@ -538,10 +608,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         let running = ["running", "waitingPermission"].contains(runtime?.status ?? "")
         let pref = session.preferences(for: conversation)
         status.text =
-            "\(conversation.provider) · \(session.isConnected ? runtime?.readyForActions == true ? (running ? "正在进行" : "已同步") : "正在补齐记录" : session.status)"
+            String(localized: "\(conversation.provider) · \(session.isConnected ? runtime?.readyForActions == true ? (running ? String(localized: "正在进行") : String(localized: "已同步")) : String(localized: "正在补齐记录") : session.status)")
         timeline.update(
             runtime?.messages ?? [], provider: session.provider(for: conversation)?.displayName ?? conversation.provider,
             sentAttachments: session.sentAttachments(for: conversation.id),
+            usage: runtime?.usageRecords ?? [],
             hasEarlier: session.hasEarlierHistory(conversation.id),
             loadingEarlier: session.isLoadingEarlier(conversation.id)
         )
@@ -550,15 +621,15 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             render(value)
         }
         placeholder.isHidden = !value.text.isEmpty
-        composer.accessibilityHint = value.isEmpty ? "描述你的任务" : nil
-        sendButton.configuration?.title = running ? "加入队列" : "发送"
+        composer.accessibilityHint = value.isEmpty ? String(localized: "描述你的任务") : nil
+        sendButton.configuration?.title = running ? String(localized: "加入队列") : String(localized: "发送")
         sendButton.isEnabled = canSend
         stopButton.isHidden = !running
         stopButton.isEnabled = session.isConnected && runtime?.readyForActions == true
         chips.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for skill in draft.skills {
             chips.addArrangedSubview(
-                Theme.button("$\(skill.name) · 移除", icon: "sparkles") { [weak self] in
+                Theme.button(String(localized: "$\(skill.name) · 移除"), icon: "sparkles") { [weak self] in
                     guard let self else { return }
                     var value = draft
                     value.skills.removeAll { $0.id == skill.id }
@@ -569,65 +640,286 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         alerts.arrangedSubviews.forEach { $0.removeFromSuperview() }
         if let pending = session.pendingSends[conversation.id] {
             alerts.addArrangedSubview(
-                Theme.button("消息等待核对 · 查看", icon: "exclamationmark.arrow.trianglehead.2.clockwise.rotate.90") {
+                Theme.button(String(localized: "消息等待核对 · 查看"), icon: "exclamationmark.arrow.trianglehead.2.clockwise.rotate.90") {
                     [weak self] in self?.showUnknown(pending)
                 })
         }
-        if let permission = runtime?.pendingPermissions.first {
+        // Desktop lists every pending approval above the composer; show up to
+        // three and summarize the rest so the timeline keeps its space.
+        let permissions = runtime?.pendingPermissions ?? []
+        for (index, permission) in permissions.prefix(3).enumerated() {
+            let title = permission.payload["title"].optionalString ?? String(localized: "需要你的审批")
             let button = Theme.button(
-                permission.payload["title"].optionalString ?? "需要你的审批", icon: "hand.raised.fill", prominent: true
-            ) { [weak self] in
-                guard let self else { return }
-                let page = PermissionViewController(
-                    session: session, conversationId: conversation.id, permission: permission)
-                present(UINavigationController(rootViewController: page), animated: true)
-            }
+                permission.isSessionScoped ? String(localized: "\(title) · 会话") : title, icon: "hand.raised.fill", prominent: index == 0
+            ) { [weak self] in self?.presentPermission(permission) }
             button.isEnabled = session.isConnected && runtime?.readyForActions == true
-            button.accessibilityIdentifier = "chat.permission"
+            button.accessibilityIdentifier = index == 0 ? "chat.permission" : "chat.permission.\(index)"
             alerts.addArrangedSubview(button)
         }
-        if let items = session.queues[conversation.id], !items.isEmpty {
+        if permissions.count > 3 {
+            alerts.addArrangedSubview(
+                Theme.button(String(localized: "另有 \(permissions.count - 3) 项审批"), icon: "list.bullet") { [weak self] in
+                    self?.showAllPermissions()
+                })
+        }
+        let nativeItems = (runtime?.queueItems ?? []).filter {
+            ["queued", "pending", "delivering", "unknown"].contains($0["status"].stringValue)
+        }
+        if !nativeItems.isEmpty {
             alerts.addArrangedSubview(
                 Theme.button(
-                    "候选消息 \(items.count) 条\(session.pausedQueues.contains(conversation.id) ? " · 已暂停" : "")",
+                    String(localized: "Agent 队列 \(nativeItems.count) 条\(runtime?.queuePaused == true ? String(localized: " · 已暂停，请核对") : "")"),
+                    icon: "tray.full"
+                ) { [weak self] in self?.nativeQueue() })
+        }
+        if let items = session.queues[conversation.id], !items.isEmpty {
+            let paused = session.pausedQueues.contains(conversation.id)
+            alerts.addArrangedSubview(
+                Theme.button(
+                    String(localized: "候选消息 \(items.count) 条\(paused ? String(localized: " · 已暂停") : "")"),
                     icon: "text.line.first.and.arrowtriangle.forward"
                 ) { [weak self] in self?.showQueue() })
+            // A paused queue's failure reason would otherwise only show offline.
+            if paused, session.isConnected, let error = session.lastError {
+                alerts.addArrangedSubview(Theme.label(String(localized: "候选消息未发送：\(error)"), style: .caption1, color: .systemOrange))
+            }
         }
-        if runtime?.compaction["status"] == "running" {
-            alerts.addArrangedSubview(Theme.label("正在压缩上下文…", style: .caption1, color: .secondaryLabel))
-        }
+        addRuntimeNotices(runtime, running: running)
         if let error = session.storageError ?? (session.isConnected ? nil : session.lastError) {
             alerts.addArrangedSubview(Theme.label(error, style: .caption1, color: .systemOrange))
         }
         alerts.isHidden = alerts.arrangedSubviews.isEmpty
         let models = session.models[conversation.provider + ":" + conversation.workspace] ?? []
-        let descriptor = models.first { $0["id"].stringValue == pref.model }
         let modelTitle =
             pref.model.isEmpty
-            ? "默认模型"
-            : (descriptor?["name"].optionalString ?? descriptor?["displayName"].optionalString ?? pref.model)
+            ? models.first { $0["isDefault"].boolValue }.map { String(localized: "默认 · ") + Self.modelName($0) } ?? String(localized: "默认模型")
+            : models.first { $0["id"].stringValue == pref.model }.map(Self.modelName) ?? pref.model
         modelChip.configuration = Theme.chipConfiguration(
             title: modelTitle, icon: "cpu",
             detail: pref.reasoningEffort.isEmpty ? nil : "· \(pref.reasoningEffort)")
-        modelChip.accessibilityLabel = "模型：\(modelTitle)"
+        modelChip.accessibilityLabel = String(localized: "模型：\(modelTitle)")
         modelChip.menu = modelMenu()
         let capability = session.provider(for: conversation)?.capabilities ?? .null
         let permissionStyle = Self.permissionStyle(pref.permissionMode)
         permissionChip.configuration = Theme.iconChipConfiguration(
             icon: permissionStyle.icon, tint: permissionStyle.color)
-        permissionChip.accessibilityLabel = "权限模式：\(permissionStyle.title)"
+        permissionChip.accessibilityLabel = String(localized: "权限模式：\(permissionStyle.title)")
         permissionChip.isEnabled = !capability["permissionConfig"]["modes"].arrayValue.isEmpty
         permissionChip.menu = permissionMenu()
+        let modes = capability["permissionConfig"]["modes"].arrayValue.compactMap(\.optionalString)
+        if !modes.isEmpty, !modes.contains(pref.permissionMode) {
+            // Desktop parity: an unsupported or unset mode is never sent silently.
+            permissionChip.configuration = Theme.iconChipConfiguration(
+                icon: "exclamationmark.triangle.fill", tint: .systemRed)
+            permissionChip.accessibilityLabel = String(localized: "权限模式未选择，请重新选择")
+        }
+        updateContextButton(runtime)
         workModeChip.isHidden = !capability["permissionConfig"]["supportsPlan"].boolValue
         let workModeStyle = Self.workModeStyle(pref.workMode)
         workModeChip.configuration = Theme.iconChipConfiguration(
             icon: workModeStyle.icon, tint: workModeStyle.color)
-        workModeChip.accessibilityLabel = "工作模式：\(workModeStyle.title)"
+        workModeChip.accessibilityLabel = String(localized: "工作模式：\(workModeStyle.title)")
         workModeChip.menu = workModeMenu()
         moreChip.menu = moreMenu()
         updateSuggestions()
     }
-    private func submit() {
+    /// Run-status notices (desktop ConversationRunStatus / ConversationControls):
+    /// compaction progress and results, a context-size suggestion, a stalled
+    /// turn, and a configuration the agent refused.
+    private func addRuntimeNotices(_ runtime: ConversationRuntime?, running: Bool) {
+        guard let runtime else { return }
+        let compaction = runtime.compaction
+        let supported = session.provider(for: conversation)?.capabilities["controlActions"].arrayValue
+            .compactMap(\.optionalString) ?? []
+        let compactionStatus = compaction["status"].stringValue
+        let compactionKey = compaction["updatedAt"].stringValue
+        // The first reload adopts the current state: reopening a conversation
+        // must not announce a compaction that finished long ago.
+        if noticedCompaction == nil { noticedCompaction = compactionKey }
+        switch compactionStatus {
+        case "running":
+            alerts.addArrangedSubview(Theme.label(String(localized: "正在压缩上下文…"), style: .caption1, color: .secondaryLabel))
+        case "failed" where compactionKey != noticedCompaction:
+            let reason = compaction["error"].optionalString ?? String(localized: "上下文压缩失败")
+            alerts.addArrangedSubview(Theme.label(String(localized: "上下文压缩失败：\(reason)"), style: .caption1, color: .systemRed))
+        case "completed" where compactionKey != noticedCompaction:
+            // Announce a finished compaction once, like the desktop toast.
+            noticedCompaction = compactionKey
+            transientNotice = (String(localized: "上下文压缩完成"), .systemGreen, Date().addingTimeInterval(6))
+        default: break
+        }
+        // A later context build-up can recommend compacting again after any
+        // earlier result, so this is independent of the last status.
+        if compactionStatus != "running", compaction["recommended"].boolValue {
+            let label = String(localized: "上下文已接近上限，建议压缩")
+            alerts.addArrangedSubview(
+                supported.contains("compact")
+                    ? Theme.button("\(label) · \(String(localized: "压缩"))", icon: "arrow.down.right.and.arrow.up.left") {
+                        [weak self] in self?.performControl("compact")
+                    }
+                    : Theme.label(label, style: .caption1, color: .secondaryLabel))
+        }
+        if let notice = transientNotice {
+            if notice.until > Date() {
+                alerts.addArrangedSubview(Theme.label(notice.text, style: .caption1, color: notice.color))
+            } else {
+                transientNotice = nil
+            }
+        }
+        if runtime.configurationStatus == "rejected" {
+            alerts.addArrangedSubview(
+                Theme.label(String(localized: "配置未应用：\(runtime.configurationError)"), style: .caption1, color: .systemOrange))
+        }
+        // Quiet time is measured on this client so replayed timestamps and clock
+        // skew cannot trigger it; known work (approvals, running tools,
+        // compaction) is progress, not a stall.
+        let key = [
+            runtime.activeTurnId, runtime.lastProgressAt?.description ?? "", String(runtime.appliedSequence),
+        ].joined(separator: "|")
+        if key != quietKey {
+            quietKey = key
+            quietSince = Date()
+        }
+        let busy =
+            !runtime.pendingPermissions.isEmpty || compaction["status"] == "running"
+            || runtime.messages.contains { $0.turnId == runtime.activeTurnId && $0.category == "tool" && $0.status == "running" }
+        if running, runtime.status == "running", runtime.readyForActions, session.isConnected, !busy,
+            Date().timeIntervalSince(quietSince) >= Self.stallInterval
+        {
+            alerts.addArrangedSubview(
+                Theme.button(String(localized: "超过 2 分钟没有新进展，可能仍在执行或已卡住 · 同步记录"), icon: "clock.badge.exclamationmark") {
+                    [weak self] in
+                    guard let self else { return }
+                    Task { [weak self] in
+                        guard let self else { return }
+                        do { try await session.recover(conversation.id) } catch { showError(error) }
+                    }
+                })
+        }
+    }
+    private func presentPermission(_ permission: PendingPermission) {
+        let page = PermissionViewController(session: session, conversationId: conversation.id, permission: permission)
+        present(UINavigationController(rootViewController: page), animated: true)
+    }
+    private func showAllPermissions() {
+        let sheet = UIAlertController(title: String(localized: "待审批"), message: nil, preferredStyle: .actionSheet)
+        for permission in session.runtimes[conversation.id]?.pendingPermissions ?? [] {
+            sheet.addAction(
+                UIAlertAction(title: permission.payload["title"].optionalString ?? String(localized: "需要你的审批"), style: .default) {
+                    [weak self] _ in self?.presentPermission(permission)
+                })
+        }
+        sheet.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
+        WBUI.presentSheet(sheet, on: self)
+    }
+    /// Context window in use (desktop ContextUsageIndicator): runtime-reported
+    /// usage over the provider's window, falling back to the model descriptor.
+    private func contextUsage(_ runtime: ConversationRuntime?) -> (used: Double, window: Double?)? {
+        guard let runtime, let used = runtime.compaction["usedTokens"].doubleValue else { return nil }
+        let models = session.models[conversation.provider + ":" + conversation.workspace] ?? []
+        let pref = session.preferences(for: conversation)
+        let model =
+            pref.model.isEmpty ? models.first { $0["isDefault"].boolValue } : models.first { $0["id"] == .string(pref.model) }
+        let window = runtime.compaction["contextWindow"].doubleValue ?? model?["contextWindow"].doubleValue
+        return (used, window.flatMap { $0 > 0 ? $0 : nil })
+    }
+    private func updateContextButton(_ runtime: ConversationRuntime?) {
+        let usage = contextUsage(runtime)
+        contextButton.isHidden = usage == nil
+        guard let usage else { return }
+        let fraction = usage.window.map { min(1, max(0, usage.used / $0)) }
+        let size = CGSize(width: 20, height: 20)
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            let rect = CGRect(origin: .zero, size: size).insetBy(dx: 2.5, dy: 2.5)
+            let track = UIBezierPath(ovalIn: rect)
+            track.lineWidth = 3
+            UIColor.separator.setStroke()
+            track.stroke()
+            guard let fraction, fraction > 0 else { return }
+            let arc = UIBezierPath(
+                arcCenter: CGPoint(x: size.width / 2, y: size.height / 2), radius: rect.width / 2,
+                startAngle: -.pi / 2, endAngle: -.pi / 2 + 2 * .pi * fraction, clockwise: true)
+            arc.lineWidth = 3
+            arc.lineCapStyle = .round
+            (fraction >= 0.8 ? UIColor.systemOrange : Theme.accent).setStroke()
+            arc.stroke()
+        }
+        contextButton.setImage(image.withRenderingMode(.alwaysOriginal), for: .normal)
+        contextButton.accessibilityLabel =
+            fraction.map { String(localized: "上下文已使用 \(Int(($0 * 100).rounded()))%") } ?? String(localized: "上下文用量等待模型窗口信息")
+    }
+    private func showContextUsage() {
+        let runtime = session.runtimes[conversation.id]
+        guard let usage = contextUsage(runtime) else { return }
+        var lines = [
+            usage.window.map {
+                "\(UsageCalculation.format(usage.used)) / \(UsageCalculation.format($0)) tokens · "
+                    + String(format: "%.1f%%", usage.used / $0 * 100)
+            } ?? String(localized: "已用 \(UsageCalculation.format(usage.used)) tokens，模型窗口未知")
+        ]
+        if let latest = runtime?.usageRecords.first {
+            let value = { (key: String) in UsageCalculation.number(latest, key).map(UsageCalculation.format) ?? String(localized: "未知") }
+            lines.append(String(localized: "最近一次：输入 \(value("inputTokens")) · 输出 \(value("outputTokens"))"))
+            lines.append(String(localized: "缓存读取 \(value("cachedInputTokens")) · 缓存写入 \(value("cacheWriteTokens"))"))
+        }
+        showNotice(title: String(localized: "上下文用量"), message: lines.joined(separator: "\n"))
+    }
+    /// Receipt preview for an already-sent attachment (desktop SentAttachmentPreview).
+    private func previewSent(_ attachment: SentAttachment) {
+        if attachment.kind == "image" {
+            guard let preview = attachment.preview, let comma = preview.firstIndex(of: ","),
+                let data = Data(base64Encoded: String(preview[preview.index(after: comma)...])),
+                let image = UIImage(data: data)
+            else {
+                showNotice(title: attachment.name, message: String(localized: "缩略图已超出本地保存上限，无法预览。"))
+                return
+            }
+            presentImagePreview(image, named: attachment.name)
+            return
+        }
+        guard let text = attachment.textContent else {
+            showNotice(title: attachment.name, message: String(localized: "内容已超出本地保存上限，无法预览。"))
+            return
+        }
+        WBUI.textSheet(on: self, title: attachment.name, text: text.isEmpty ? String(localized: "（空文件）") : text, actions: [])
+    }
+    /// Desktop composer paste: images become attachments, and text longer
+    /// than five lines becomes a text attachment capsule instead of a wall
+    /// of composer text. Returns true when the paste was consumed.
+    private func handlePaste(_ pasteboard: UIPasteboard) -> Bool {
+        do {
+            // Rich copies (spreadsheet cells, web selections) carry text and an
+            // image rendition; the text is what the user meant.
+            if let text = pasteboard.string, !text.isEmpty {
+                let lines = text.replacingOccurrences(of: #"[\r\n]+$"#, with: "", options: .regularExpression)
+                    .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+                guard lines.count > 5 else { return false }
+                try addAttachment(Data(text.utf8), name: String(localized: "粘贴的文本"), mime: "text/plain")
+                return true
+            }
+            guard pasteboard.hasImages, let image = pasteboard.image else { return false }
+            // Point-sized rendering at scale 1: the screen scale would triple the
+            // pixels and push ordinary screenshots past the attachment limit.
+            let scale = min(1, 1600 / max(image.size.width * image.scale, image.size.height * image.scale, 1))
+            let size = CGSize(
+                width: (image.size.width * image.scale * scale).rounded(),
+                height: (image.size.height * image.scale * scale).rounded())
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let rendered = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                image.draw(in: CGRect(origin: .zero, size: size))
+            }
+            guard let jpeg = rendered.jpegData(compressionQuality: 0.8) else {
+                throw TodexError.invalid(String(localized: "无法读取剪贴板图片"))
+            }
+            try addAttachment(jpeg, name: String(localized: "粘贴的图片.jpg"), mime: "image/jpeg")
+            return true
+        } catch {
+            showError(error)
+            return true
+        }
+    }
+    private func submit(nativeQueue: Bool = true) {
         if runClientCommand() { return }
         guard canSend else { return }
         let value = draft
@@ -647,10 +939,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                         provider: conversation.provider, workspace: conversation.workspace,
                         profile: conversation.providerProfile, model: pref.model.isEmpty ? nil : pref.model)
                     guard capability["imageInput"].boolValue else {
-                        throw TodexError.invalid(capability["reason"].optionalString ?? "当前模型不支持图片输入")
+                        throw TodexError.invalid(capability["reason"].optionalString ?? String(localized: "当前模型不支持图片输入"))
                     }
                 }
-                try await session.send(value, in: conversation)
+                try await session.send(value, in: conversation, nativeQueue: nativeQueue)
             } catch { showError(error) }
         }
     }
@@ -662,9 +954,61 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         guard draft.attachments.isEmpty, draft.skills.isEmpty, text.hasPrefix("/"),
             let token = text.split(whereSeparator: \.isWhitespace).first
         else { return false }
+        let rest = text.dropFirst(token.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        let capability = session.provider(for: conversation)?.capabilities ?? .null
         switch token.lowercased() {
         case "/memory", "/memories", "/subagents":
             openAuxiliary()
+        case "/plan":
+            guard capability["permissionConfig"]["supportsPlan"].boolValue else {
+                showNotice(title: String(localized: "计划模式"), message: String(localized: "当前 Agent 不支持计划模式。"))
+                return true
+            }
+            configure { $0.workMode = "plan" }
+            // `/plan <task>` switches to plan mode and sends the task at once;
+            // while a turn runs it waits locally so it is sent as a plan prompt.
+            if !rest.isEmpty {
+                setDraft(ComposerDraft(text: rest))
+                submit(nativeQueue: false)
+                return true
+            }
+        case "/model":
+            if rest.isEmpty {
+                presentModelSearch()
+            } else {
+                configure { $0.model = rest; $0.reasoningEffort = "" }
+            }
+        case "/permissions", "/permission":
+            let modes = capability["permissionConfig"]["modes"].arrayValue.compactMap(\.optionalString)
+            if let mode = modes.first(where: { $0.lowercased() == rest.lowercased() }) {
+                configure { $0.permissionMode = mode }
+            } else {
+                showPermissionPicker(modes)
+            }
+        case "/copy":
+            guard
+                let reply = session.runtimes[conversation.id]?.messages.first(where: {
+                    $0.category == "assistant_final" && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                })
+            else {
+                showNotice(title: String(localized: "复制回复"), message: String(localized: "还没有可复制的 Agent 回复。"))
+                return true
+            }
+            UIPasteboard.general.string = reply.text
+            transientNotice = (String(localized: "已复制最近一条回复"), .secondaryLabel, Date().addingTimeInterval(4))
+        case "/diff":
+            openGit?()
+        case "/skills", "/mcp":
+            openCatalog?()
+        case "/approve", "/approval":
+            // Decisions differ per request schema, so open the request itself
+            // rather than guessing an allow/deny payload.
+            let pending = session.runtimes[conversation.id]?.pendingPermissions ?? []
+            guard let target = pending.first(where: { $0.id == rest }) ?? pending.first else {
+                showNotice(title: String(localized: "审批"), message: String(localized: "当前没有待处理的审批请求。"))
+                return true
+            }
+            presentPermission(target)
         case "/resume":
             let supported =
                 session.provider(for: conversation)?.capabilities["controlActions"].arrayValue
@@ -673,7 +1017,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 performControl("resume")
             } else {
                 showNotice(
-                    title: "恢复对话", message: "请发送明确的后续消息继续对话；当前 Agent 不支持独立恢复操作。")
+                    title: String(localized: "恢复对话"), message: String(localized: "请发送明确的后续消息继续对话；当前 Agent 不支持独立恢复操作。"))
             }
         case "/compact", "/retry":
             performControl(String(token.dropFirst()))
@@ -723,7 +1067,20 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     /// Commands handled locally in `runClientCommand`; provider-advertised
     /// commands with the same name are shadowed, matching the desktop table.
     private static let clientCommands: Set<String> = [
-        "/memory", "/memories", "/subagents", "/compact", "/retry", "/resume",
+        "/memory", "/memories", "/subagents", "/compact", "/retry", "/resume", "/plan", "/model", "/permissions",
+        "/permission", "/copy", "/diff", "/skills", "/mcp", "/approve", "/approval",
+    ]
+    /// Local commands offered in the `/` popup: (command, detail, prefill).
+    /// Commands taking an argument prefill the composer instead of running.
+    private static let localCommandSuggestions: [(String, String, String?)] = [
+        ("/plan", String(localized: "切换到计划模式；后接内容时直接发送"), "/plan "),
+        ("/model", String(localized: "切换模型；不带参数时打开模型搜索"), nil),
+        ("/permissions", String(localized: "切换权限模式"), nil),
+        ("/copy", String(localized: "复制最近一条 Agent 回复"), nil),
+        ("/diff", String(localized: "查看工作区 Git 改动"), nil),
+        ("/skills", String(localized: "打开 Skill 目录"), nil),
+        ("/mcp", String(localized: "打开 MCP 目录"), nil),
+        ("/approve", String(localized: "处理待审批请求"), nil),
     ]
     private func updateSuggestions() {
         let text = composer.text ?? ""
@@ -771,8 +1128,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             session.provider(for: conversation)?.capabilities["controlActions"].arrayValue
             .compactMap(\.optionalString) ?? []
         for (command, action, detail) in [
-            ("/compact", "compact", "压缩上下文，保留关键进展"), ("/retry", "retry", "重试上一轮"),
-            ("/resume", "resume", "恢复对话"),
+            ("/compact", "compact", String(localized: "压缩上下文，保留关键进展")), ("/retry", "retry", String(localized: "重试上一轮")),
+            ("/resume", "resume", String(localized: "恢复对话")),
         ]
         where supported.contains(action) && command.hasPrefix(lowered) {
             items.append(
@@ -781,13 +1138,25 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 })
         }
         for (command, detail) in [
-            ("/memory", "查看当前对话的 Agent 记忆"), ("/memories", "查看当前对话的 Agent 记忆"),
-            ("/subagents", "查看当前对话的子代理运行"),
+            ("/memory", String(localized: "查看当前对话的 Agent 记忆")), ("/memories", String(localized: "查看当前对话的 Agent 记忆")),
+            ("/subagents", String(localized: "查看当前对话的子代理运行")),
         ] where command.hasPrefix(lowered) {
             items.append(
                 Suggestion(title: command, detail: detail) { [weak self] in
                     self?.applyTextSuggestion("")
                     self?.openAuxiliary()
+                })
+        }
+        for (command, detail, prefill) in Self.localCommandSuggestions where command.hasPrefix(lowered) {
+            items.append(
+                Suggestion(title: command, detail: detail) { [weak self] in
+                    guard let self else { return }
+                    if let prefill {
+                        applyTextSuggestion(prefill)
+                    } else {
+                        applyTextSuggestion(command)
+                        submit()
+                    }
                 })
         }
         for item in session.commands[conversation.provider + ":" + conversation.workspace] ?? [] {
@@ -845,7 +1214,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         mentionTask?.cancel()
         let range = trigger.range
         let query = trigger.query
-        showSuggestions([Suggestion(title: "正在搜索工作区文件…", detail: "", apply: {})], interactive: false)
+        showSuggestions([Suggestion(title: String(localized: "正在搜索工作区文件…"), detail: "", apply: {})], interactive: false)
         mentionTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(200))
             guard let self, !Task.isCancelled else { return }
@@ -866,7 +1235,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 }
                 items.isEmpty
                     ? self.showSuggestions(
-                        [Suggestion(title: "没有匹配的文件", detail: "", apply: {})], interactive: false)
+                        [Suggestion(title: String(localized: "没有匹配的文件"), detail: "", apply: {})], interactive: false)
                     : self.showSuggestions(Array(items))
             } catch {
                 guard !Task.isCancelled, self.mentionTrigger()?.range.location == range.location else { return }
@@ -955,7 +1324,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         let query = trigger.query.lowercased()
         guard let skills = skillCatalog, let mcps = mcpCatalog else {
             showSuggestions(
-                [Suggestion(title: "正在读取 Skill 与 MCP 目录…", detail: "", apply: {})], interactive: false)
+                [Suggestion(title: String(localized: "正在读取 Skill 与 MCP 目录…"), detail: "", apply: {})], interactive: false)
             loadCapabilityCatalog()
             return
         }
@@ -983,9 +1352,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         let attached = draft.skills
         var items = matchedSkills.map { item -> Suggestion in
             let id = item["resourceId"].stringValue
-            let name = item["name"].optionalString ?? "未命名"
+            let name = item["name"].optionalString ?? String(localized: "未命名")
             let detail = item["description"].optionalString ?? item["source"].stringValue
-            let state = attached.contains(where: { $0.id == id }) ? " · 已附加" : ""
+            let state = attached.contains(where: { $0.id == id }) ? String(localized: " · 已附加") : ""
             return Suggestion(
                 title: "#\(name)",
                 detail: "Skill\(state)\(detail.isEmpty ? "" : " · \(detail)")"
@@ -994,7 +1363,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             }
         }
         items += matchedMcps.map { item -> Suggestion in
-            let name = item["name"].optionalString ?? "未命名"
+            let name = item["name"].optionalString ?? String(localized: "未命名")
             return Suggestion(
                 title: "#\(name)",
                 detail: "MCP · \(item["transport"].stringValue) · \(item["source"].stringValue)"
@@ -1005,7 +1374,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         items = Array(items.prefix(8))
         guard !items.isEmpty else {
             showSuggestions(
-                [Suggestion(title: "没有匹配的 Skill 或 MCP", detail: "", apply: {})], interactive: false)
+                [Suggestion(title: String(localized: "没有匹配的 Skill 或 MCP"), detail: "", apply: {})], interactive: false)
             return
         }
         showSuggestions(items)
@@ -1051,48 +1420,186 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private func modelMenu() -> UIMenu {
         let pref = session.preferences(for: conversation)
         let models = session.models[conversation.provider + ":" + conversation.workspace] ?? []
+        // Desktop parity: "Provider 默认" still resolves to the provider's
+        // isDefault model, so its reasoning efforts stay selectable.
+        let defaultModel = models.first { $0["isDefault"].boolValue }
+        let model = pref.model.isEmpty ? defaultModel : models.first { $0["id"] == .string(pref.model) }
         var modelActions: [UIMenuElement] = [
-            UIAction(title: "Provider 默认", state: pref.model.isEmpty ? .on : .off) { [weak self] _ in
-                self?.configure { $0.model = "" }
+            UIAction(
+                title: String(localized: "Provider 默认"),
+                subtitle: defaultModel.map { Self.modelName($0) },
+                state: pref.model.isEmpty ? .on : .off
+            ) { [weak self] _ in
+                self?.configure { $0.model = ""; $0.reasoningEffort = "" }
             }
         ]
+        // A model change clears the effort: the old value may not be one the
+        // new model supports, and an unset effort lets the provider choose.
         modelActions += models.map { model in
             let id = model["id"].stringValue
-            return UIAction(
-                title: model["name"].optionalString ?? model["displayName"].optionalString ?? id,
-                state: pref.model == id ? .on : .off
-            ) { [weak self] _ in self?.configure { $0.model = id } }
-        }
-        modelActions.append(
-            UIAction(title: "输入模型 ID…") { [weak self] _ in
-                self?.askText(title: "模型 ID", value: pref.model) { id in self?.configure { $0.model = id } }
-            })
-        var values: [UIMenuElement] = [UIMenu(title: "模型", children: modelActions)]
-        let model = models.first { $0["id"] == .string(pref.model) }
-        let efforts = model?["supportedReasoningEfforts"].arrayValue ?? []
-        let reasoning = efforts.map { value -> UIMenuElement in
-            let id = value.optionalString ?? value["reasoningEffort"].optionalString ?? value["id"].stringValue
-            return UIAction(title: id, state: pref.reasoningEffort == id ? .on : .off) { [weak self] _ in
-                self?.configure { $0.reasoningEffort = id }
+            return UIAction(title: Self.modelName(model), state: pref.model == id ? .on : .off) { [weak self] _ in
+                self?.configure { $0.model = id; $0.reasoningEffort = "" }
             }
         }
-        if !reasoning.isEmpty { values.append(UIMenu(title: "思考深度", children: reasoning)) }
+        if models.count > 1 {
+            modelActions.append(
+                UIAction(title: String(localized: "搜索模型…"), image: Theme.icon("magnifyingglass")) { [weak self] _ in
+                    self?.presentModelSearch()
+                })
+        }
+        modelActions.append(
+            UIAction(title: String(localized: "输入模型 ID…")) { [weak self] _ in
+                self?.askText(title: String(localized: "模型 ID"), value: pref.model) { id in
+                    self?.configure { $0.model = id; $0.reasoningEffort = "" }
+                }
+            })
+        var values: [UIMenuElement] = [UIMenu(title: String(localized: "模型"), children: modelActions)]
+        let efforts = (model?["supportedReasoningEfforts"].arrayValue ?? []).map {
+            $0.optionalString ?? $0["reasoningEffort"].optionalString ?? $0["id"].stringValue
+        }
+        if !efforts.isEmpty {
+            let fallback = model?["defaultReasoningEffort"].optionalString
+                ?? (efforts.contains("medium") ? "medium" : efforts[0])
+            var reasoning: [UIMenuElement] = [
+                UIAction(
+                    title: String(localized: "默认"), subtitle: fallback, state: pref.reasoningEffort.isEmpty ? .on : .off
+                ) { [weak self] _ in self?.configure { $0.reasoningEffort = "" } }
+            ]
+            reasoning += efforts.map { id in
+                UIAction(title: id, state: pref.reasoningEffort == id ? .on : .off) { [weak self] _ in
+                    self?.configure { $0.reasoningEffort = id }
+                }
+            }
+            values.append(
+                UIMenu(title: String(localized: "思考深度"), subtitle: pref.reasoningEffort.isEmpty ? fallback : pref.reasoningEffort,
+                    children: reasoning))
+        }
         if conversation.provider == "codex" {
-            values.append(UIAction(title: "Fast · 后端暂不支持", attributes: .disabled) { _ in })
+            values.append(UIAction(title: String(localized: "Fast · 后端暂不支持"), attributes: .disabled) { _ in })
         }
         return UIMenu(children: values)
+    }
+    private static func modelName(_ model: JSONValue) -> String {
+        model["name"].optionalString ?? model["displayName"].optionalString ?? model["id"].stringValue
+    }
+    /// Desktop ModelReasoningCard: case-insensitive search over name and id.
+    private func presentModelSearch() {
+        let models = session.models[conversation.provider + ":" + conversation.workspace] ?? []
+        guard !models.isEmpty else {
+            showNotice(title: String(localized: "模型"), message: String(localized: "模型列表尚未加载，可稍后重试或直接输入模型 ID。"))
+            return
+        }
+        let page = ModelSearchViewController(
+            models: models.map { (id: $0["id"].stringValue, name: Self.modelName($0), isDefault: $0["isDefault"].boolValue) },
+            selected: session.preferences(for: conversation).model
+        ) { [weak self] id in
+            self?.configure { $0.model = id; $0.reasoningEffort = "" }
+        }
+        let nav = UINavigationController(rootViewController: page)
+        page.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            systemItem: .close, primaryAction: UIAction { [weak nav] _ in nav?.dismiss(animated: true) })
+        WBUI.presentModal(nav, on: self)
+    }
+    private func showPermissionPicker(_ modes: [String]) {
+        guard !modes.isEmpty else {
+            showNotice(title: String(localized: "权限"), message: String(localized: "当前 Agent 未提供可切换的权限模式。"))
+            return
+        }
+        let sheet = UIAlertController(title: String(localized: "权限模式"), message: nil, preferredStyle: .actionSheet)
+        for mode in modes {
+            sheet.addAction(
+                UIAlertAction(title: Self.permissionStyle(mode).title, style: .default) { [weak self] _ in
+                    self?.configure { $0.permissionMode = mode }
+                })
+        }
+        sheet.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
+        WBUI.presentSheet(sheet, on: self)
+    }
+    /// Desktop lets the agent change until the first message. The backend fixes
+    /// a conversation's provider at creation, so an untouched conversation is
+    /// replaced by a new one in the same workspace and the empty one deleted.
+    private var switchingAgent = false
+    private var canSwitchAgent: Bool {
+        let runtime = session.runtimes[conversation.id]
+        return session.isConnected && runtime?.readyForActions == true && runtime?.messages.isEmpty == true
+            && (session.conversations.first { $0.id == conversation.id }?.lastSequence ?? 0) == 0
+            && session.pendingSends[conversation.id] == nil && (session.queues[conversation.id] ?? []).isEmpty
+    }
+    private func switchAgent() {
+        guard canSwitchAgent, let workspace = session.workspace(for: conversation) else { return }
+        let sheet = UIAlertController(title: String(localized: "更换 Agent"), message: String(localized: "当前对话还没有消息，将改用新的 Agent 重新创建。"), preferredStyle: .actionSheet)
+        for provider in session.providers where provider.available {
+            let profiles: [String?] = provider.id == "acp" && !provider.profiles.isEmpty ? provider.profiles : [nil]
+            for profile in profiles {
+                let current = provider.id == conversation.provider && profile == conversation.providerProfile
+                let action = UIAlertAction(
+                    title: profile.map { "ACP · \($0)" } ?? provider.displayName, style: .default
+                ) { [weak self] _ in self?.recreate(in: workspace, provider: provider.id, profile: profile) }
+                action.isEnabled = !current
+                sheet.addAction(action)
+            }
+        }
+        sheet.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
+        WBUI.presentSheet(sheet, on: self)
+    }
+    private func recreate(in workspace: WorkspaceRecord, provider: String, profile: String?) {
+        guard !switchingAgent else { return }
+        // Sending stays off while the replacement is created, so nothing can
+        // land in the conversation that is about to be deleted.
+        switchingAgent = true
+        reload()
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                switchingAgent = false
+                reload()
+            }
+            guard let api = session.api, canSwitchAgent else { return }
+            do {
+                let next = try await api.createConversation(
+                    workspace: workspace, provider: provider, profile: profile, title: conversation.title)
+                // Another client may have written to the old conversation meanwhile:
+                // keep it and discard the replacement instead.
+                guard canSwitchAgent else {
+                    do { _ = try await api.deleteConversation(id: next.id) } catch { showError(error) }
+                    showNotice(title: String(localized: "更换 Agent"), message: String(localized: "原对话已有新内容，已保留原对话。"))
+                    try await session.refresh()
+                    return
+                }
+                session.rememberAgent(provider: provider, profile: profile)
+                // Carry over what the user already prepared for the first message.
+                session.drafts[next.id] = session.drafts[conversation.id]
+                if let remembered = session.rememberedPreferences(for: provider) {
+                    session.updatePreferences(remembered, for: next)
+                }
+                do { _ = try await api.deleteConversation(id: conversation.id) } catch {
+                    // The new conversation is usable; the empty one just stays listed.
+                    showError(error)
+                }
+                session.drafts[conversation.id] = nil
+                try await session.refresh()
+                guard let manifest = session.conversations.first(where: { $0.id == next.id }) else { return }
+                session.select(manifest)
+                guard let navigation = navigationController, let container = parent else { return }
+                var stack = navigation.viewControllers
+                if let index = stack.firstIndex(where: { $0 === container }) {
+                    stack[index] = ConversationContainerController(session: session, conversation: manifest)
+                    navigation.setViewControllers(stack, animated: true)
+                }
+            } catch { showError(error) }
+        }
     }
     // Icon + tint encode the active option so the icon-only chips stay legible.
     private static func permissionStyle(_ mode: String) -> (title: String, icon: String, color: UIColor) {
         switch mode {
-        case "auto": return ("自动审批", "checkmark.shield.fill", Theme.accent)
-        case "full-access": return ("完全访问", "lock.open.fill", .systemRed)
-        case "ask": return ("按需审批", "hand.raised.fill", .systemOrange)
-        default: return (mode.isEmpty ? "权限" : mode, "hand.raised", .secondaryLabel)
+        case "auto": return (String(localized: "自动审批"), "checkmark.shield.fill", Theme.accent)
+        case "full-access": return (String(localized: "完全访问"), "lock.open.fill", .systemRed)
+        case "ask": return (String(localized: "按需审批"), "hand.raised.fill", .systemOrange)
+        default: return (mode.isEmpty ? String(localized: "权限") : mode, "hand.raised", .secondaryLabel)
         }
     }
     private static func workModeStyle(_ mode: String) -> (title: String, icon: String, color: UIColor) {
-        mode == "plan" ? ("计划", "map.fill", .systemIndigo) : ("执行", "bolt.fill", Theme.accent)
+        mode == "plan" ? (String(localized: "计划"), "map.fill", .systemIndigo) : (String(localized: "执行"), "bolt.fill", Theme.accent)
     }
     private static func coloredIcon(_ icon: String, _ color: UIColor) -> UIImage? {
         Theme.icon(icon, pointSize: 13)?.withTintColor(color, renderingMode: .alwaysOriginal)
@@ -1110,9 +1617,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 guard let self else { return }
                 if id == "full-access" {
                     confirm(
-                        title: "启用完全访问？",
+                        title: String(localized: "启用完全访问？"),
                         message:
-                            "后续任务可获得当前 Agent 支持的最高权限。\n\(capability["permissionConfig"]["description"].stringValue)"
+                            String(localized: "后续任务可获得当前 Agent 支持的最高权限。\n\(capability["permissionConfig"]["description"].stringValue)")
                     ) { self.configure { $0.permissionMode = id } }
                 } else {
                     configure { $0.permissionMode = id }
@@ -1136,29 +1643,35 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private func moreMenu() -> UIMenu {
         let capability = session.provider(for: conversation)?.capabilities ?? .null
         var values: [UIMenuElement] = [
-            UIAction(title: "查看实际配置") { [weak self] _ in
+            UIAction(title: String(localized: "查看实际配置")) { [weak self] _ in
                 guard let self else { return }
                 let runtime = session.runtimes[conversation.id]
                 WBUI.textSheet(
-                    on: self, title: "当前配置",
+                    on: self, title: String(localized: "当前配置"),
                     text:
-                        "状态：\(runtime?.configurationStatus ?? "unknown")\n\n请求权限\n\(runtime?.requestedConfig.prettyPrinted ?? "未知")\n\n实际配置\n\(runtime?.effectiveConfig.prettyPrinted ?? "未知")\n\n\(capability["permissionConfig"]["description"].stringValue)"
+                        String(localized: "状态：\(runtime?.configurationStatus ?? "unknown")\n\n请求权限\n\(runtime?.requestedConfig.prettyPrinted ?? String(localized: "未知"))\n\n实际配置\n\(runtime?.effectiveConfig.prettyPrinted ?? String(localized: "未知"))\n\n\(capability["permissionConfig"]["description"].stringValue)")
                 )
             }
         ]
         let supported = capability["controlActions"].arrayValue.compactMap(\.optionalString)
-        for (action, label) in [("retry", "重试上一轮"), ("fork", "从此处分叉"), ("compact", "压缩上下文")]
+        for (action, label) in [("retry", String(localized: "重试上一轮")), ("fork", String(localized: "从此处分叉")), ("compact", String(localized: "压缩上下文"))]
         where supported.contains(action) {
             values.append(UIAction(title: label) { [weak self] _ in self?.performControl(action) })
         }
         if supported.contains("steer") {
             values.append(
-                UIAction(title: "引导当前任务…") { [weak self] _ in
-                    self?.askText(title: "引导当前任务", placeholder: "补充方向") { self?.steer($0) }
+                UIAction(title: String(localized: "引导当前任务…")) { [weak self] _ in
+                    self?.askText(title: String(localized: "引导当前任务"), placeholder: String(localized: "补充方向")) { self?.steer($0) }
                 })
         }
         if supported.contains("queue") {
-            values.append(UIAction(title: "后端原生队列…") { [weak self] _ in self?.nativeQueue() })
+            values.append(UIAction(title: String(localized: "后端原生队列…")) { [weak self] _ in self?.nativeQueue() })
+        }
+        if canSwitchAgent {
+            values.append(
+                UIAction(title: String(localized: "更换 Agent…"), image: Theme.icon("arrow.triangle.2.circlepath")) { [weak self] _ in
+                    self?.switchAgent()
+                })
         }
         return UIMenu(children: values)
     }
@@ -1211,10 +1724,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             do {
                 let result = try await session.liveControl(["action": "queueList"], conversation: conversation)
                 let sheet = UIAlertController(
-                    title: "后端原生队列", message: result.prettyPrinted, preferredStyle: .actionSheet)
+                    title: String(localized: "后端原生队列"), message: result.prettyPrinted, preferredStyle: .actionSheet)
                 sheet.addAction(
-                    UIAlertAction(title: "添加消息", style: .default) { [weak self] _ in
-                        self?.askText(title: "队列消息") { text in
+                    UIAlertAction(title: String(localized: "添加消息"), style: .default) { [weak self] _ in
+                        self?.askText(title: String(localized: "队列消息")) { text in
                             self?.queueControl([
                                 "action": "queueAdd", "itemId": .string(UUID().uuidString), "text": .string(text),
                             ])
@@ -1222,12 +1735,12 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                     })
                 for item in result["items"].arrayValue {
                     sheet.addAction(
-                        UIAlertAction(title: "移除：\(item["text"].stringValue.prefix(40))", style: .destructive) {
+                        UIAlertAction(title: String(localized: "移除：\(item["text"].stringValue.prefix(40))"), style: .destructive) {
                             [weak self] _ in self?.queueControl(["action": "queueRemove", "itemId": item["itemId"]])
                         })
                 }
                 sheet.addAction(
-                    UIAlertAction(title: "清空", style: .destructive) { [weak self] _ in
+                    UIAlertAction(title: String(localized: "清空"), style: .destructive) { [weak self] _ in
                         self?.queueControl(["action": "queueClear"])
                     })
                 WBUI.presentSheet(sheet, on: self)
@@ -1241,16 +1754,16 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         }
     }
     private func showQueue() {
-        let sheet = UIAlertController(title: "候选消息", message: "当前任务结束后按顺序发送；后台或断线后暂停。", preferredStyle: .actionSheet)
+        let sheet = UIAlertController(title: String(localized: "候选消息"), message: String(localized: "当前任务结束后按顺序发送；后台或断线后暂停。"), preferredStyle: .actionSheet)
         if session.pausedQueues.contains(conversation.id) {
             sheet.addAction(
-                UIAlertAction(title: "恢复发送", style: .default) { [weak self] _ in
+                UIAlertAction(title: String(localized: "恢复发送"), style: .default) { [weak self] _ in
                     guard let self else { return }
                     session.resumeQueue(conversation)
                 })
         } else {
             sheet.addAction(
-                UIAlertAction(title: "暂停", style: .default) { [weak self] _ in
+                UIAlertAction(title: String(localized: "暂停"), style: .default) { [weak self] _ in
                     guard let self else { return }
                     session.pausedQueues.insert(conversation.id)
                     session.changed()
@@ -1258,17 +1771,17 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         }
         for item in session.queues[conversation.id] ?? [] {
             sheet.addAction(
-                UIAlertAction(title: "编辑：\(item.draft.text.prefix(35))", style: .default) { [weak self] _ in
+                UIAlertAction(title: String(localized: "编辑：\(item.draft.text.prefix(35))"), style: .default) { [weak self] _ in
                     guard let self else { return }
                     guard draft.isEmpty else {
-                        showNotice(title: "输入框已有草稿", message: "先发送或保存当前草稿，再编辑候选消息。")
+                        showNotice(title: String(localized: "输入框已有草稿"), message: String(localized: "先发送或保存当前草稿，再编辑候选消息。"))
                         return
                     }
                     session.removeQueued(item.id, conversationId: conversation.id)
                     setDraft(item.draft)
                 })
             sheet.addAction(
-                UIAlertAction(title: "删除：\(item.draft.text.prefix(35))", style: .destructive) { [weak self] _ in
+                UIAlertAction(title: String(localized: "删除：\(item.draft.text.prefix(35))"), style: .destructive) { [weak self] _ in
                     guard let self else { return }
                     session.removeQueued(item.id, conversationId: conversation.id)
                 })
@@ -1277,23 +1790,23 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     }
     private func showUnknown(_ pending: PendingSend) {
         let sheet = UIAlertController(
-            title: "消息提交结果待核对", message: "\(pending.draft.text.prefix(300))\n\n网络中断可能发生在后端接收之后。核对历史不会再次发送消息。",
+            title: String(localized: "消息提交结果待核对"), message: String(localized: "\(pending.draft.text.prefix(300))\n\n网络中断可能发生在后端接收之后。核对历史不会再次发送消息。"),
             preferredStyle: .actionSheet)
         sheet.addAction(
-            UIAlertAction(title: "同步并核对", style: .default) { [weak self] _ in
+            UIAlertAction(title: String(localized: "同步并核对"), style: .default) { [weak self] _ in
                 Task { [weak self] in
                     guard let self else { return }
                     do { try await session.reconcile(conversation.id) } catch { showError(error) }
                 }
             })
         sheet.addAction(
-            UIAlertAction(title: "恢复为草稿", style: .destructive) { [weak self] _ in
+            UIAlertAction(title: String(localized: "恢复为草稿"), style: .destructive) { [weak self] _ in
                 guard let self else { return }
                 guard draft.isEmpty else {
-                    showNotice(title: "输入框已有草稿", message: "先处理当前草稿，再恢复待核对消息。")
+                    showNotice(title: String(localized: "输入框已有草稿"), message: String(localized: "先处理当前草稿，再恢复待核对消息。"))
                     return
                 }
-                confirm(title: "恢复原消息？", message: "之后手动发送可能产生重复任务。请先核对后端记录。") {
+                confirm(title: String(localized: "恢复原消息？"), message: String(localized: "之后手动发送可能产生重复任务。请先核对后端记录。")) {
                     self.session.restoreUnknownAsDraft(self.conversation.id)
                 }
             })
@@ -1346,9 +1859,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                                 ] as CFDictionary),
                             let jpeg = UIImage(cgImage: thumbnail).jpegData(compressionQuality: 0.8)
                         else {
-                            throw TodexError.invalid("无法读取图片，或图片超过 32 MB")
+                            throw TodexError.invalid(String(localized: "无法读取图片，或图片超过 32 MB"))
                         }
-                        try addAttachment(jpeg, name: "图片.jpg", mime: "image/jpeg")
+                        try addAttachment(jpeg, name: String(localized: "图片.jpg"), mime: "image/jpeg")
                     } catch { showError(error) }
                 }
             }
@@ -1356,13 +1869,13 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     }
     private func addAttachment(_ data: Data, name: String, mime: String) throws {
         guard draft.attachments.count < 6, data.count + draft.attachments.reduce(0, { $0 + $1.data.count }) <= 2_500_000
-        else { throw TodexError.invalid("附件总大小需小于 2.5 MB，最多 6 个") }
+        else { throw TodexError.invalid(String(localized: "附件总大小需小于 2.5 MB，最多 6 个")) }
         if mime.hasPrefix("image/") {
             guard session.provider(for: conversation)?.capabilities["imageInput"].boolValue == true else {
-                throw TodexError.invalid("当前 Agent 未提供图片输入能力")
+                throw TodexError.invalid(String(localized: "当前 Agent 未提供图片输入能力"))
             }
         } else {
-            guard String(data: data, encoding: .utf8) != nil else { throw TodexError.invalid("文本附件须使用 UTF-8 编码") }
+            guard String(data: data, encoding: .utf8) != nil else { throw TodexError.invalid(String(localized: "文本附件须使用 UTF-8 编码")) }
         }
         var value = draft
         let isImage = mime.hasPrefix("image/")
@@ -1521,7 +2034,7 @@ nonisolated final class ComposerCapsuleAttachment: NSTextAttachment {
 /// sync; `onFinish` runs after dismissal and `onSend` after a successful send.
 final class ComposerEditorViewController: UIViewController, UITextViewDelegate {
     private let editor = UITextView()
-    private let placeholder = Theme.label("描述你的任务", color: .placeholderText)
+    private let placeholder = Theme.label(String(localized: "描述你的任务"), color: .placeholderText)
     private let canSend: () -> Bool
     private let onChange: (String) -> Void
     private let onFinish: () -> Void
@@ -1542,21 +2055,21 @@ final class ComposerEditorViewController: UIViewController, UITextViewDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "编辑消息"
+        title = String(localized: "编辑消息")
         view.backgroundColor = Theme.background
         editor.font = .preferredFont(forTextStyle: .body)
         editor.adjustsFontForContentSizeCategory = true
         editor.backgroundColor = .clear
         editor.delegate = self
         editor.alwaysBounceVertical = true
-        editor.accessibilityLabel = "消息输入框"
+        editor.accessibilityLabel = String(localized: "消息输入框")
         editor.accessibilityIdentifier = "chat.composer.fullscreen"
         editor.textContainerInset = .init(top: 10, left: 6, bottom: 10, right: 6)
         let dismiss = UIToolbar()
         dismiss.items = [
             .flexibleSpace(),
             UIBarButtonItem(
-                title: "收起键盘", image: nil,
+                title: String(localized: "收起键盘"), image: nil,
                 primaryAction: UIAction { [weak editor] _ in editor?.resignFirstResponder() }),
         ]
         dismiss.sizeToFit()
@@ -1576,7 +2089,7 @@ final class ComposerEditorViewController: UIViewController, UITextViewDelegate {
         let send = UIBarButtonItem(
             image: Theme.icon("arrow.up", pointSize: 15), style: .prominent,
             target: self, action: #selector(sendTapped))
-        send.accessibilityLabel = "发送"
+        send.accessibilityLabel = String(localized: "发送")
         send.isEnabled = canSend()
         sendItem = send
         navigationItem.rightBarButtonItems = [
@@ -1603,5 +2116,72 @@ final class ComposerEditorViewController: UIViewController, UITextViewDelegate {
     }
     private func finish() {
         dismiss(animated: true, completion: onFinish)
+    }
+}
+
+/// Composer text view whose paste can be claimed by the chat (images and long
+/// text become attachments). Anything unclaimed pastes normally.
+final class ComposerTextView: UITextView {
+    var onPaste: ((UIPasteboard) -> Bool)?
+    override func paste(_ sender: Any?) {
+        if onPaste?(UIPasteboard.general) == true { return }
+        super.paste(sender)
+    }
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        // Plain text views refuse to paste image-only content; allow it here.
+        if action == #selector(paste(_:)), UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
+    }
+}
+
+/// Searchable model list (desktop ModelReasoningCard): matches name or id
+/// case-insensitively; the provider default is labeled.
+final class ModelSearchViewController: UITableViewController, UISearchResultsUpdating {
+    typealias Model = (id: String, name: String, isDefault: Bool)
+    private let models: [Model]
+    private let selected: String
+    private let onSelect: (String) -> Void
+    private var filtered: [Model]
+    init(models: [Model], selected: String, onSelect: @escaping (String) -> Void) {
+        self.models = models
+        self.selected = selected
+        self.onSelect = onSelect
+        filtered = models
+        super.init(style: .insetGrouped)
+        title = String(localized: "选择模型")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        let search = UISearchController(searchResultsController: nil)
+        search.searchResultsUpdater = self
+        search.obscuresBackgroundDuringPresentation = false
+        search.searchBar.placeholder = String(localized: "搜索模型名称或 ID")
+        navigationItem.searchController = search
+        navigationItem.hidesSearchBarWhenScrolling = false
+    }
+    func updateSearchResults(for searchController: UISearchController) {
+        let query = searchController.searchBar.text?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+        filtered =
+            query.isEmpty
+            ? models : models.filter { $0.name.lowercased().contains(query) || $0.id.lowercased().contains(query) }
+        tableView.reloadData()
+    }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { filtered.count }
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let model = filtered[indexPath.row]
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        var content = cell.defaultContentConfiguration()
+        content.text = model.name + (model.isDefault ? String(localized: " · 默认") : "")
+        content.secondaryText = model.id == model.name ? nil : model.id
+        cell.contentConfiguration = content
+        cell.accessoryType = model.id == selected ? .checkmark : .none
+        return cell
+    }
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        onSelect(filtered[indexPath.row].id)
+        // An active search controller is itself presented; close the whole sheet.
+        navigationItem.searchController?.isActive = false
+        navigationController?.dismiss(animated: true)
     }
 }

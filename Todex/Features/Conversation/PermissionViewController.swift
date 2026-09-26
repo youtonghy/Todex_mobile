@@ -59,7 +59,7 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
         form = PermissionForm(permission.payload)
         options = PermissionOption.advertised(in: permission.payload)
         super.init(nibName: nil, bundle: nil)
-        title = "审批请求"
+        title = String(localized: "审批请求")
         modalPresentationStyle = .pageSheet
         Self.pruneSubmissions()
     }
@@ -75,7 +75,7 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
         view.backgroundColor = Theme.background
         view.tintColor = Theme.accent
         navigationItem.rightBarButtonItem = UIBarButtonItem(
-            title: "完成", style: .prominent,
+            title: String(localized: "完成"), style: .prominent,
             target: self, action: #selector(done))
         sheetPresentationController?.detents = [.large()]
         sheetPresentationController?.prefersGrabberVisible = true
@@ -141,7 +141,7 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
 
     private func buildContent() {
         let payload = permission.payload
-        let heading = Theme.label(payload["title"].optionalString ?? "需要你确认", style: .title2)
+        let heading = Theme.label(payload["title"].optionalString ?? String(localized: "需要你确认"), style: .title2)
         heading.accessibilityTraits.insert(.header)
         content.addArrangedSubview(heading)
         addDetails(payload["details"])
@@ -157,15 +157,15 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
         }
         if case .url(let url) = form.mode {
             content.addArrangedSubview(Theme.label(url.absoluteString, style: .callout))
-            let open = Theme.button("打开验证页面", icon: "safari") { [weak self] in
+            let open = Theme.button(String(localized: "打开验证页面"), icon: "safari") { [weak self] in
                 guard let self, self.ensureCurrent() else { return }
                 self.view.endEditing(true)
                 self.present(SFSafariViewController(url: url), animated: true)
             }
-            open.accessibilityHint = "打开显示的地址；完成操作后返回此处确认"
+            open.accessibilityHint = String(localized: "打开显示的地址；完成操作后返回此处确认")
             openURLButton = open
             content.addArrangedSubview(open)
-            content.addArrangedSubview(Theme.label("在页面完成操作后，返回并点击“已完成，继续”。", style: .footnote, color: .secondaryLabel))
+            content.addArrangedSubview(Theme.label(String(localized: "在页面完成操作后，返回并点击“已完成，继续”。"), style: .footnote, color: .secondaryLabel))
         }
         for field in form.fields {
             let input = PermissionInputView(field: field)
@@ -173,20 +173,20 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
             content.addArrangedSubview(input)
         }
         if payload["kind"].stringValue == "plan", options.contains(where: { $0.kind == "reject_once" }) {
-            let label = Theme.label("修改意见（拒绝计划时发送，可选）", style: .headline)
+            let label = Theme.label(String(localized: "修改意见（拒绝计划时发送，可选）"), style: .headline)
             content.addArrangedSubview(label)
-            let editor = PermissionInputView.makeEditor(label: label.text ?? "修改意见", initial: "")
+            let editor = PermissionInputView.makeEditor(label: label.text ?? String(localized: "修改意见"), initial: "")
             editor.accessibilityIdentifier = "permission.plan.feedback"
             editor.delegate = self
             feedback = editor
             content.addArrangedSubview(editor)
         }
 
-        let actionHeading = Theme.label("请选择操作", style: .headline)
+        let actionHeading = Theme.label(String(localized: "请选择操作"), style: .headline)
         actionHeading.accessibilityTraits.insert(.header)
         content.addArrangedSubview(actionHeading)
         if options.isEmpty {
-            content.addArrangedSubview(Theme.label("后端没有提供可用操作。请关闭此页并核对会话记录。", style: .callout))
+            content.addArrangedSubview(Theme.label(String(localized: "后端没有提供可用操作。请关闭此页并核对会话记录。"), style: .callout))
         }
         for option in options {
             let title = option.title(for: permission.payload["kind"].stringValue, isURL: form.isURL)
@@ -195,12 +195,12 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
             button.titleLabel?.adjustsFontForContentSizeCategory = true
             button.configuration?.baseForegroundColor = option.isRejection ? .systemRed : Theme.accent
             button.accessibilityIdentifier = "permission.option.\(option.id)"
-            button.accessibilityHint = "确认后提交此操作"
+            button.accessibilityHint = String(localized: "确认后提交此操作")
             actionButtons.append((option, button))
             content.addArrangedSubview(button)
         }
-        let close = Theme.button("关闭", icon: "xmark") { [weak self] in self?.done() }
-        close.accessibilityHint = "关闭审批页，不提交回答"
+        let close = Theme.button(String(localized: "关闭"), icon: "xmark") { [weak self] in self?.done() }
+        close.accessibilityHint = String(localized: "关闭审批页，不提交回答")
         closeButton = close
         content.addArrangedSubview(close)
     }
@@ -208,11 +208,11 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
     private func addDetails(_ details: JSONValue) {
         guard !details.isNull else { return }
         let summaries: [(String, String)] = [
-            ("command", "命令"), ("cwd", "工作目录"), ("reason", "原因"), ("message", "说明"),
-            ("path", "路径"), ("filePath", "文件"), ("files", "文件"), ("changes", "文件变更"),
-            ("patch", "补丁"), ("diff", "差异"), ("permissions", "请求的权限"),
-            ("grantRoot", "授权目录"), ("toolCall", "工具调用"), ("rawInput", "输入"),
-            ("plan", "计划"), ("content", "内容"), ("summary", "摘要"),
+            ("command", String(localized: "命令")), ("cwd", String(localized: "工作目录")), ("reason", String(localized: "原因")), ("message", String(localized: "说明")),
+            ("path", String(localized: "路径")), ("filePath", String(localized: "文件")), ("files", String(localized: "文件")), ("changes", String(localized: "文件变更")),
+            ("patch", String(localized: "补丁")), ("diff", String(localized: "差异")), ("permissions", String(localized: "请求的权限")),
+            ("grantRoot", String(localized: "授权目录")), ("toolCall", String(localized: "工具调用")), ("rawInput", String(localized: "输入")),
+            ("plan", String(localized: "计划")), ("content", String(localized: "内容")), ("summary", String(localized: "摘要")),
         ]
         var hasSummary = false
         for (key, label) in summaries {
@@ -232,10 +232,10 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
         }
         let raw = readOnlyText(details.optionalString ?? details.prettyPrinted)
         raw.isHidden = hasSummary || !form.fields.isEmpty
-        let toggle = Theme.button("查看完整请求", icon: "doc.text") { [weak raw] in
+        let toggle = Theme.button(String(localized: "查看完整请求"), icon: "doc.text") { [weak raw] in
             raw?.isHidden.toggle()
         }
-        toggle.accessibilityHint = "展开或收起后端提供的完整请求内容"
+        toggle.accessibilityHint = String(localized: "展开或收起后端提供的完整请求内容")
         content.addArrangedSubview(toggle)
         content.addArrangedSubview(raw)
     }
@@ -266,16 +266,16 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
     }
 
     private var currentFailure: String? {
-        guard session.selectedID == requestKey.backend else { return "后端已切换，此审批已失效。" }
-        guard session.isConnected else { return "连接已断开。请重新连接并从当前记录打开审批。" }
+        guard session.selectedID == requestKey.backend else { return String(localized: "后端已切换，此审批已失效。") }
+        guard session.isConnected else { return String(localized: "连接已断开。请重新连接并从当前记录打开审批。") }
         guard let runtime = session.runtimes[conversationId], runtime.readyForActions else {
-            return "会话正在回放或记录存在缺口。请同步完成后重新打开审批。"
+            return String(localized: "会话正在回放或记录存在缺口。请同步完成后重新打开审批。")
         }
         guard
             runtime.pendingPermissions.contains(where: {
                 $0.id == permission.id && $0.turnId == permission.turnId && $0.payload == permission.payload
             })
-        else { return "此审批已处理、已撤回或内容已更新。请从当前记录打开新的请求。" }
+        else { return String(localized: "此审批已处理、已撤回或内容已更新。请从当前记录打开新的请求。") }
         return nil
     }
 
@@ -293,16 +293,16 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
         switch state {
         case .sending:
             sending = true
-            statusLabel.text = "正在提交，请稍候…"
+            statusLabel.text = String(localized: "正在提交，请稍候…")
         case .unknown(let message):
             sending = false
-            statusLabel.text = "提交结果未知，已锁定此请求以避免重复发送。请关闭此页并核对会话记录。\n\(message)"
+            statusLabel.text = String(localized: "提交结果未知，已锁定此请求以避免重复发送。请关闭此页并核对会话记录。\n\(message)")
         case .completed:
             sending = false
-            statusLabel.text = "回答已提交，正在等待会话记录更新。"
+            statusLabel.text = String(localized: "回答已提交，正在等待会话记录更新。")
         case nil:
             sending = false
-            statusLabel.text = invalidation ?? "请核对请求内容。只有明确确认操作后才会提交。"
+            statusLabel.text = invalidation ?? String(localized: "请核对请求内容。只有明确确认操作后才会提交。")
         }
         isModalInPresentation = sending
         navigationController?.isModalInPresentation = sending
@@ -329,12 +329,12 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
             let title = option.title(for: permission.payload["kind"].stringValue, isURL: form.isURL)
             let message =
                 form.isURL && option.kind == "answer"
-                ? "请确认你已在显示的验证页面完成操作。确认后将继续本轮任务。"
-                : "将提交“\(title)”。请确认这符合你的意愿。"
-            let alert = UIAlertController(title: "确认操作", message: message, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "返回修改", style: .cancel))
+                ? String(localized: "请确认你已在显示的验证页面完成操作。确认后将继续本轮任务。")
+                : String(localized: "将提交“\(title)”。请确认这符合你的意愿。")
+            let alert = UIAlertController(title: String(localized: "确认操作"), message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: String(localized: "返回修改"), style: .cancel))
             alert.addAction(
-                UIAlertAction(title: "确认", style: option.isRejection ? .destructive : .default) { [weak self] _ in
+                UIAlertAction(title: String(localized: "确认"), style: option.isRejection ? .destructive : .default) { [weak self] _ in
                     self?.submit(option, decision: decision)
                 })
             // No preferredAction: keyboard/assistive focus must not default to approval.
@@ -347,7 +347,7 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
     private func makeDecision(_ option: PermissionOption) throws -> JSONValue {
         var decision: JSONValue = ["outcome": .string(option.kind), "optionId": .string(option.id)]
         if option.kind == "answer" {
-            guard form.canAnswer else { throw TodexError.invalid(form.unsupportedReason ?? "此请求不支持回答。") }
+            guard form.canAnswer else { throw TodexError.invalid(form.unsupportedReason ?? String(localized: "此请求不支持回答。")) }
             if case .choice = form.mode { return decision }
             if case .url = form.mode {
                 decision["data"] = ["completed": true]
@@ -368,12 +368,12 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
                 decision["data"] = ["answers": .object(values.mapValues { ["answers": $0] })]
             case .elicitation(let schema):
                 let data = JSONValue.object(values)
-                try PermissionSchema.validate(schema, value: data, label: "回答")
+                try PermissionSchema.validate(schema, value: data, label: String(localized: "回答"))
                 decision["data"] = data
             case .extensionUI:
                 decision["data"] = .object(values)
             case .none, .choice, .url:
-                throw TodexError.invalid("此请求不支持表单回答。")
+                throw TodexError.invalid(String(localized: "此请求不支持表单回答。"))
             }
         } else if permission.payload["kind"].stringValue == "plan", option.kind == "reject_once",
             let text = feedback?.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -463,25 +463,25 @@ private struct PermissionOption: Equatable {
 
     func title(for requestKind: String, isURL: Bool) -> String {
         if kind == "answer", requestKind == "question" { return name }
-        if kind == "answer", isURL { return "已完成，继续" }
+        if kind == "answer", isURL { return String(localized: "已完成，继续") }
         let translations = [
-            "Allow once": "仅本次允许", "Allow for session": "本会话内允许",
-            "Allow always": "始终允许", "Approve": "批准计划", "Request changes": "拒绝并提出修改意见",
-            "Reject": "拒绝", "Decline": "拒绝", "Cancel": "取消请求",
-            "Reject and stop turn": "拒绝并停止本轮", "Respond": "提交回答",
-            "Submit": "提交回答", "Answer": "提交回答",
+            "Allow once": String(localized: "仅本次允许"), "Allow for session": String(localized: "本会话内允许"),
+            "Allow always": String(localized: "始终允许"), "Approve": String(localized: "批准计划"), "Request changes": String(localized: "拒绝并提出修改意见"),
+            "Reject": String(localized: "拒绝"), "Decline": String(localized: "拒绝"), "Cancel": String(localized: "取消请求"),
+            "Reject and stop turn": String(localized: "拒绝并停止本轮"), "Respond": String(localized: "提交回答"),
+            "Submit": String(localized: "提交回答"), "Answer": String(localized: "提交回答"),
         ]
         if let title = translations[name] { return title }
         let action =
             switch kind {
-            case "allow_once": "本次允许"
-            case "allow_always": "持续允许"
-            case "reject_once": "拒绝"
-            case "reject_always": "持续拒绝"
-            case "abort_turn": "拒绝并停止本轮"
-            default: "提交回答"
+            case "allow_once": String(localized: "本次允许")
+            case "allow_always": String(localized: "持续允许")
+            case "reject_once": String(localized: "拒绝")
+            case "reject_always": String(localized: "持续拒绝")
+            case "abort_turn": String(localized: "拒绝并停止本轮")
+            default: String(localized: "提交回答")
             }
-        return "\(action)：\(name)"
+        return String(localized: "\(action)：\(name)")
     }
 }
 
@@ -543,7 +543,7 @@ private struct PermissionForm {
                 field.kind = .answers
                 field.secret = question["isSecret"].boolValue
                 field.multiline = !field.secret
-                field.placeholder = "输入回答，或补充已选选项"
+                field.placeholder = String(localized: "输入回答，或补充已选选项")
                 if !question["options"].isNull {
                     guard case .array(let choices) = question["options"] else {
                         unsupported()
@@ -566,7 +566,7 @@ private struct PermissionForm {
             let method = details["method"].stringValue
             var field = PermissionField(
                 id: method == "confirm" ? "confirmed" : "value",
-                label: details["message"].optionalString ?? details["title"].optionalString ?? "你的回答")
+                label: details["message"].optionalString ?? details["title"].optionalString ?? String(localized: "你的回答"))
             switch method {
             case "confirm": field.kind = .boolean
             case "input", "editor":
@@ -593,7 +593,7 @@ private struct PermissionForm {
                     ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
                     let host = url.host, !host.isEmpty, url.user == nil, url.password == nil
                 else {
-                    unsupportedReason = "验证地址无效，无法确认完成。你仍可选择后端提供的拒绝操作。"
+                    unsupportedReason = String(localized: "验证地址无效，无法确认完成。你仍可选择后端提供的拒绝操作。")
                     return
                 }
                 mode = .url(url)
@@ -634,13 +634,13 @@ private struct PermissionForm {
                     field.description = property["description"].stringValue
                     field.schema = property
                     let constraints: [(String, String)] = [
-                        ("minimum", "最小值"), ("maximum", "最大值"),
-                        ("minLength", "最少字符数"), ("maxLength", "最多字符数"),
-                        ("minItems", "最少项目数"), ("maxItems", "最多项目数"),
+                        ("minimum", String(localized: "最小值")), ("maximum", String(localized: "最大值")),
+                        ("minLength", String(localized: "最少字符数")), ("maxLength", String(localized: "最多字符数")),
+                        ("minItems", String(localized: "最少项目数")), ("maxItems", String(localized: "最多项目数")),
                     ]
                     for (key, label) in constraints where property[key].doubleValue != nil {
                         field.description +=
-                            (field.description.isEmpty ? "" : "\n") + "\(label)：\(property[key].prettyPrinted)"
+                            (field.description.isEmpty ? "" : "\n") + String(localized: "\(label)：\(property[key].prettyPrinted)")
                     }
                     if let raw = property.objectValue["type"], raw.optionalString == nil {
                         unsupported()
@@ -675,7 +675,7 @@ private struct PermissionForm {
                     case "object", "array", "null":
                         field.kind = .json
                         field.multiline = true
-                        field.placeholder = "输入符合字段要求的 JSON 值"
+                        field.placeholder = String(localized: "输入符合字段要求的 JSON 值")
                     default:
                         unsupported()
                         return
@@ -689,7 +689,7 @@ private struct PermissionForm {
     }
 
     private mutating func unsupported() {
-        unsupportedReason = "这项请求包含无法安全填写的表单格式。请关闭此页，或选择后端提供的拒绝操作。"
+        unsupportedReason = String(localized: "这项请求包含无法安全填写的表单格式。请关闭此页，或选择后端提供的拒绝操作。")
     }
 }
 
@@ -719,12 +719,12 @@ private final class PermissionInputView: UIStackView, UITextViewDelegate, UIText
         self.field = field
         choices =
             field.choices
-            ?? (field.kind == .boolean ? [.init(label: "是", value: true), .init(label: "否", value: false)] : [])
+            ?? (field.kind == .boolean ? [.init(label: String(localized: "是"), value: true), .init(label: String(localized: "否"), value: false)] : [])
         super.init(frame: .zero)
         axis = .vertical
         spacing = 10
         accessibilityIdentifier = "permission.field.\(field.id)"
-        let title = field.label + (field.required ? "（必填）" : "（可选）")
+        let title = field.label + (field.required ? String(localized: "（必填）") : String(localized: "（可选）"))
         let label = Theme.label(title, style: .headline)
         label.accessibilityTraits.insert(.header)
         addArrangedSubview(label)
@@ -750,7 +750,7 @@ private final class PermissionInputView: UIStackView, UITextViewDelegate, UIText
                 })
             button.contentHorizontalAlignment = .leading
             button.titleLabel?.adjustsFontForContentSizeCategory = true
-            button.accessibilityLabel = "\(field.label)：\(choice.label)"
+            button.accessibilityLabel = String(localized: "\(field.label)：\(choice.label)")
             button.accessibilityHint = choice.description
             button.accessibilityIdentifier = "permission.field.\(field.id).choice.\(index)"
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
@@ -759,7 +759,7 @@ private final class PermissionInputView: UIStackView, UITextViewDelegate, UIText
         }
         if choices.isEmpty || field.kind == .answers {
             if field.kind == .answers, !choices.isEmpty {
-                addArrangedSubview(Theme.label("补充或自定义回答", style: .subheadline, color: .secondaryLabel))
+                addArrangedSubview(Theme.label(String(localized: "补充或自定义回答"), style: .subheadline, color: .secondaryLabel))
             }
             if field.multiline && !field.secret {
                 let editor = Self.makeEditor(label: title, initial: field.initial)
@@ -818,7 +818,7 @@ private final class PermissionInputView: UIStackView, UITextViewDelegate, UIText
         toolbar.items = [
             .flexibleSpace(),
             UIBarButtonItem(
-                title: "收起键盘", image: nil, primaryAction: UIAction { [weak editor] _ in editor?.resignFirstResponder() }
+                title: String(localized: "收起键盘"), image: nil, primaryAction: UIAction { [weak editor] _ in editor?.resignFirstResponder() }
             ),
         ]
         toolbar.sizeToFit()
@@ -831,7 +831,7 @@ private final class PermissionInputView: UIStackView, UITextViewDelegate, UIText
         toolbar.items = [
             .flexibleSpace(),
             UIBarButtonItem(
-                title: "收起键盘", image: nil, primaryAction: UIAction { [weak self] _ in self?.endEditing(true) }),
+                title: String(localized: "收起键盘"), image: nil, primaryAction: UIAction { [weak self] _ in self?.endEditing(true) }),
         ]
         toolbar.sizeToFit()
         return toolbar
@@ -842,7 +842,7 @@ private final class PermissionInputView: UIStackView, UITextViewDelegate, UIText
             let isSelected = selected == index
             button.configuration?.image = UIImage(systemName: isSelected ? "checkmark.circle.fill" : "circle")
             button.accessibilityTraits = isSelected ? [.button, .selected] : [.button]
-            button.accessibilityValue = isSelected ? "已选择" : "未选择"
+            button.accessibilityValue = isSelected ? String(localized: "已选择") : String(localized: "未选择")
         }
     }
 
@@ -905,17 +905,17 @@ private final class PermissionInputView: UIStackView, UITextViewDelegate, UIText
                 let separator = Locale.current.decimalSeparator ?? "."
                 let normalized = separator == "." ? trimmed : trimmed.replacingOccurrences(of: separator, with: ".")
                 guard let number = Double(normalized), number.isFinite else {
-                    throw TodexError.invalid("「\(field.label)」需要有效数字。")
+                    throw TodexError.invalid(String(localized: "「\(field.label)」需要有效数字。"))
                 }
                 if field.kind == .integer,
                     number.rounded(.towardZero) != number || abs(number) > 9_007_199_254_740_991
                 {
-                    throw TodexError.invalid("「\(field.label)」需要可精确表示的整数（绝对值不超过 9007199254740991）。")
+                    throw TodexError.invalid(String(localized: "「\(field.label)」需要可精确表示的整数（绝对值不超过 9007199254740991）。"))
                 }
                 value = .number(number)
             case .json:
                 do { value = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)) } catch {
-                    throw TodexError.invalid("「\(field.label)」需要有效的 JSON 值。")
+                    throw TodexError.invalid(String(localized: "「\(field.label)」需要有效的 JSON 值。"))
                 }
             default: value = .string(text)
             }
@@ -924,14 +924,14 @@ private final class PermissionInputView: UIStackView, UITextViewDelegate, UIText
         return value
     }
 
-    private func missing() -> TodexError { .invalid("请填写或选择「\(field.label)」。") }
+    private func missing() -> TodexError { .invalid(String(localized: "请填写或选择「\(field.label)」。")) }
 }
 
 private enum PermissionSchema {
     // Validate backend constraints, including Unicode scalar length and the depth limit.
     // Integers additionally stay within JSONValue's exact Double representation.
     static func validate(_ schema: JSONValue, value: JSONValue, label: String, depth: Int = 0) throws {
-        let invalid = TodexError.invalid("「\(label)」不符合请求的字段类型、范围或必填要求。")
+        let invalid = TodexError.invalid(String(localized: "「\(label)」不符合请求的字段类型、范围或必填要求。"))
         guard depth <= 16 else { throw invalid }
         if case .array(let choices) = schema["enum"], !choices.contains(value) { throw invalid }
         if let constant = schema.objectValue["const"], constant != value { throw invalid }
