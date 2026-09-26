@@ -155,6 +155,52 @@ public struct ProviderDescriptor: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
+/// A stored workspace the backend could not validate (directory removed,
+/// outside the allowed roots). `GET`/`PUT /v2/workspaces` list these apart
+/// from the usable records so clients can grey them out.
+public struct RejectedWorkspace: Codable, Sendable, Identifiable, Equatable {
+    public var id: String
+    public var name: String
+    public var path: String
+    public var code: String
+    public var message: String
+
+    public init(id: String, name: String, path: String, code: String = "", message: String = "") {
+        self.id = id
+        self.name = name
+        self.path = path
+        self.code = code
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, path, code, message }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        path = try c.decode(String.self, forKey: .path)
+        code = try c.decodeIfPresent(String.self, forKey: .code) ?? ""
+        message = try c.decodeIfPresent(String.self, forKey: .message) ?? ""
+    }
+}
+
+/// Response of `GET`/`PUT /v2/workspaces`; `rejected` is omitted when empty.
+public struct WorkspaceCatalog: Sendable, Equatable {
+    public var workspaces: [WorkspaceRecord]
+    public var rejected: [RejectedWorkspace]
+
+    public init(workspaces: [WorkspaceRecord] = [], rejected: [RejectedWorkspace] = []) {
+        self.workspaces = workspaces
+        self.rejected = rejected
+    }
+
+    public init(response: JSONValue) throws {
+        workspaces = try response["workspaces"].decoded([WorkspaceRecord].self)
+        rejected = response["rejected"].isNull ? [] : try response["rejected"].decoded([RejectedWorkspace].self)
+    }
+}
+
 /// The kanban task wire record shared with the desktop and web clients.
 /// Timestamps are Unix milliseconds; `deletedAt` marks a tombstone so task
 /// deletions propagate to other devices instead of resurrecting on merge.

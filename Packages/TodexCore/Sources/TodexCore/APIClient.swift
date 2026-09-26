@@ -40,10 +40,10 @@ public final class APIClient: Sendable {
         }
         let url = try http.url(path: path, query: query)
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            throw TodexError.invalid("接口地址无效")
+            throw TodexError.invalid(String(localized: "接口地址无效", bundle: .module))
         }
         components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
-        guard let encodedURL = components.url else { throw TodexError.invalid("接口地址无效") }
+        guard let encodedURL = components.url else { throw TodexError.invalid(String(localized: "接口地址无效", bundle: .module)) }
         var request = URLRequest(url: encodedURL)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -62,10 +62,10 @@ public final class APIClient: Sendable {
     private func receiveGET(_ request: URLRequest, textResponse: Bool = false) async throws -> JSONValue {
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else {
-            throw TodexError.invalid("后端响应无效")
+            throw TodexError.invalid(String(localized: "后端响应无效", bundle: .module))
         }
         guard data.count <= 20 * 1024 * 1024 else {
-            throw TodexError.invalid("后端响应过大")
+            throw TodexError.invalid(String(localized: "后端响应过大", bundle: .module))
         }
         guard (200..<300).contains(response.statusCode) else {
             let value = try? JSONDecoder().decode(JSONValue.self, from: data)
@@ -79,13 +79,13 @@ public final class APIClient: Sendable {
         }
         if textResponse {
             guard let text = String(data: data, encoding: .utf8) else {
-                throw TodexError.invalid("健康检查未返回有效文本")
+                throw TodexError.invalid(String(localized: "健康检查未返回有效文本", bundle: .module))
             }
             return .string(text)
         }
         if data.isEmpty { return .null }
         guard let value = try? JSONDecoder().decode(JSONValue.self, from: data) else {
-            throw TodexError.invalid("后端未返回有效 JSON")
+            throw TodexError.invalid(String(localized: "后端未返回有效 JSON", bundle: .module))
         }
         return value
     }
@@ -126,6 +126,11 @@ public final class APIClient: Sendable {
     public func workspaces() async throws -> [WorkspaceRecord] {
         let value = try await http.request(path: "/v2/workspaces")
         return try value["workspaces"].decoded([WorkspaceRecord].self)
+    }
+
+    /// Usable workspaces plus the stored records whose path the backend rejects.
+    public func workspaceCatalog() async throws -> WorkspaceCatalog {
+        try WorkspaceCatalog(response: try await http.request(path: "/v2/workspaces"))
     }
 
     /// The backend merges the supplied records by owned, canonical workspace id.
@@ -308,6 +313,16 @@ public final class APIClient: Sendable {
     public func agentProviderModels(agent: String, id: String) async throws -> JSONValue {
         try await http.request(
             path: "/v2/agent-providers/\(HTTPClient.segment(agent))/\(HTTPClient.segment(id))/models")
+    }
+
+    /// Model catalog for an unsaved editor form. Masked secrets resolve against
+    /// the stored profile or the live additive node of the same id.
+    public func previewAgentProviderModels(agent: String, id: String, settingsConfig: JSONValue) async throws
+        -> JSONValue
+    {
+        try await http.request(
+            .post, path: "/v2/agent-providers/\(HTTPClient.segment(agent))/\(HTTPClient.segment(id))/models",
+            body: ["settingsConfig": settingsConfig])
     }
 
     public func skills(provider: String, workspace: String) async throws -> JSONValue {

@@ -22,11 +22,11 @@ public final class TransportCryptoSession {
         let material: TransportKeyMaterial
         switch connection.encryption {
         case .none:
-            throw TodexError.invalid("未启用加密时不应创建加密会话")
+            throw TodexError.invalid(String(localized: "未启用加密时不应创建加密会话", bundle: .module))
         case .x25519:
             material = try .x25519(serverPublicKey: publicKey, privateKey: .init())
         case .mlkem768:
-            guard publicKey.count == 1184 else { throw TodexError.invalid("ML-KEM-768 公钥长度无效") }
+            guard publicKey.count == 1184 else { throw TodexError.invalid(String(localized: "ML-KEM-768 公钥长度无效", bundle: .module)) }
             let encapsulation = try MLKEM768.PublicKey(rawRepresentation: publicKey).encapsulate()
             material = TransportKeyMaterial(
                 key: CryptoEncoding.derive(
@@ -64,7 +64,7 @@ public final class TransportCryptoSession {
     }
 
     public func encrypt(_ plaintext: String) throws -> String {
-        guard sendCounter < UInt64.max else { throw TodexError.invalid("加密帧计数已耗尽，请重新连接") }
+        guard sendCounter < UInt64.max else { throw TodexError.invalid(String(localized: "加密帧计数已耗尽，请重新连接", bundle: .module)) }
         let nonce = Self.nonce(direction: 2, counter: sendCounter)
         // Reserve before encryption so an error can never reuse a nonce.
         sendCounter += 1
@@ -78,21 +78,21 @@ public final class TransportCryptoSession {
     public func decrypt(_ frame: String) throws -> String {
         let wrapped = try JSONDecoder().decode(Frame.self, from: Data(frame.utf8))
         guard wrapped.type == "todex.crypto.v1", wrapped.protocol == encryption.rawValue else {
-            throw TodexError.invalid("加密帧类型或协议不匹配")
+            throw TodexError.invalid(String(localized: "加密帧类型或协议不匹配", bundle: .module))
         }
         let nonce = try CryptoEncoding.decode(wrapped.nonce, count: 24)
         guard nonce[0] == 1, nonce[1..<8].allSatisfy({ $0 == 0 }), nonce[16..<24].allSatisfy({ $0 == 0 }) else {
-            throw TodexError.invalid("加密帧 nonce 方向或格式无效")
+            throw TodexError.invalid(String(localized: "加密帧 nonce 方向或格式无效", bundle: .module))
         }
-        guard receiveCounter < UInt64.max else { throw TodexError.invalid("加密帧计数已耗尽，请重新连接") }
+        guard receiveCounter < UInt64.max else { throw TodexError.invalid(String(localized: "加密帧计数已耗尽，请重新连接", bundle: .module)) }
         let counter = nonce[8..<16].enumerated().reduce(UInt64(0)) { $0 | (UInt64($1.element) << ($1.offset * 8)) }
-        guard counter == receiveCounter else { throw TodexError.invalid("加密帧重复或乱序") }
+        guard counter == receiveCounter else { throw TodexError.invalid(String(localized: "加密帧重复或乱序", bundle: .module)) }
         let plaintext = try XChaChaAEAD.open(
             CryptoEncoding.decode(wrapped.ciphertext), key: key, nonce: nonce, aad: Self.aad)
         // Authentication consumes the counter even if the payload is not UTF-8,
         // matching the backend; failed authentication never advances it.
         receiveCounter += 1
-        guard let text = String(data: plaintext, encoding: .utf8) else { throw TodexError.invalid("加密帧不是有效 UTF-8") }
+        guard let text = String(data: plaintext, encoding: .utf8) else { throw TodexError.invalid(String(localized: "加密帧不是有效 UTF-8", bundle: .module)) }
         return text
     }
 
@@ -135,13 +135,13 @@ enum CryptoEncoding {
 
     static func decode(_ value: String, count: Int? = nil) throws -> Data {
         guard !value.isEmpty, value.utf8.allSatisfy(isBase64URL), value.utf8.count % 4 != 1 else {
-            throw TodexError.invalid("无效的 base64url 数据")
+            throw TodexError.invalid(String(localized: "无效的 base64url 数据", bundle: .module))
         }
         let padded =
             value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
             + String(repeating: "=", count: (4 - value.utf8.count % 4) % 4)
         guard let data = Data(base64Encoded: padded), count == nil || data.count == count, encode(data) == value else {
-            throw TodexError.invalid("无效的 base64url 数据或长度")
+            throw TodexError.invalid(String(localized: "无效的 base64url 数据或长度", bundle: .module))
         }
         return data
     }
@@ -155,10 +155,10 @@ enum CryptoEncoding {
     }
 
     static func sharedSecret(privateKey: Curve25519.KeyAgreement.PrivateKey, publicKey: Data) throws -> SymmetricKey {
-        guard publicKey.count == 32 else { throw TodexError.invalid("X25519 公钥长度无效") }
+        guard publicKey.count == 32 else { throw TodexError.invalid(String(localized: "X25519 公钥长度无效", bundle: .module)) }
         let shared = try privateKey.sharedSecretFromKeyAgreement(with: .init(rawRepresentation: publicKey))
         return try shared.withUnsafeBytes { bytes in
-            guard bytes.contains(where: { $0 != 0 }) else { throw TodexError.invalid("X25519 公钥无效") }
+            guard bytes.contains(where: { $0 != 0 }) else { throw TodexError.invalid(String(localized: "X25519 公钥无效", bundle: .module)) }
             return SymmetricKey(data: bytes)
         }
     }
@@ -172,7 +172,7 @@ enum XChaChaAEAD {
 
     static func seal(_ plaintext: Data, key: SymmetricKey, nonce: Data, aad: Data) throws -> Data {
         guard initialized, key.bitCount == 256, nonce.count == 24, plaintext.count <= Int.max - 16 else {
-            throw TodexError.invalid("XChaCha20 加密参数无效")
+            throw TodexError.invalid(String(localized: "XChaCha20 加密参数无效", bundle: .module))
         }
         var output = [UInt8](repeating: 0, count: plaintext.count + 16)
         var length: UInt64 = 0
@@ -181,13 +181,13 @@ enum XChaChaAEAD {
                 &output, &length, Array(plaintext), UInt64(plaintext.count), Array(aad), UInt64(aad.count), nil,
                 Array(nonce), keyBytes.bindMemory(to: UInt8.self).baseAddress!)
         }
-        guard result == 0, length == output.count else { throw TodexError.invalid("加密失败") }
+        guard result == 0, length == output.count else { throw TodexError.invalid(String(localized: "加密失败", bundle: .module)) }
         return Data(output)
     }
 
     static func open(_ ciphertext: Data, key: SymmetricKey, nonce: Data, aad: Data) throws -> Data {
         guard initialized, key.bitCount == 256, nonce.count == 24, ciphertext.count >= 16 else {
-            throw TodexError.invalid("XChaCha20 密文或参数无效")
+            throw TodexError.invalid(String(localized: "XChaCha20 密文或参数无效", bundle: .module))
         }
         var output = [UInt8](repeating: 0, count: max(1, ciphertext.count - 16))
         defer { output.withUnsafeMutableBytes { bytes in sodium_memzero(bytes.baseAddress!, bytes.count) } }
@@ -197,7 +197,7 @@ enum XChaChaAEAD {
                 &output, &length, nil, Array(ciphertext), UInt64(ciphertext.count), Array(aad), UInt64(aad.count),
                 Array(nonce), keyBytes.bindMemory(to: UInt8.self).baseAddress!)
         }
-        guard result == 0, length == ciphertext.count - 16 else { throw TodexError.invalid("密文认证失败") }
+        guard result == 0, length == ciphertext.count - 16 else { throw TodexError.invalid(String(localized: "密文认证失败", bundle: .module)) }
         return Data(output.prefix(Int(length)))
     }
 }

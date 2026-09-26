@@ -28,14 +28,23 @@ public struct TimelineMessage: Identifiable, Sendable, Equatable {
 
 public struct PendingPermission: Identifiable, Sendable {
     public var id: String
+    /// Empty for session-scoped requests, which outlive any single turn.
     public var turnId: String
     public var payload: JSONValue
+    /// "session" requests (e.g. Pi extension dialogs) stay pending across turn
+    /// boundaries; "turn" requests are cleared when their turn ends.
+    public var scope: String
+    /// Provider runtime that owns the request; its stop invalidates the request.
+    public var runtimeId: String
 
-    public init(id: String, turnId: String, payload: JSONValue) {
+    public init(id: String, turnId: String, payload: JSONValue, scope: String = "turn", runtimeId: String = "") {
         self.id = id
         self.turnId = turnId
         self.payload = payload
+        self.scope = scope
+        self.runtimeId = runtimeId
     }
+    public var isSessionScoped: Bool { scope == "session" }
 }
 
 /// A single value projection shared by REST replay and live delivery. As in the
@@ -58,6 +67,8 @@ public struct ConversationRuntime: Sendable {
     public private(set) var effectiveConfig: JSONValue = .null
     public private(set) var requestedConfig: JSONValue = .null
     public private(set) var configurationStatus = "unknown"
+    /// Why the provider rejected the latest configure request; empty otherwise.
+    public private(set) var configurationError = ""
     public private(set) var compaction: JSONValue = ["status": "idle", "recommended": false, "updatedAt": ""]
     public private(set) var subagents: [JSONValue] = []
     public private(set) var memoryEntries: [JSONValue] = []
@@ -82,6 +93,7 @@ public struct ConversationRuntime: Sendable {
     private var assistantInterrupted = false
     private var latestTurnId = ""
     private var startedTurns: Set<String> = []
+    private var retiredRuntimeIds: Set<String> = []
     private var messageCategories: [String: String] = [:]
     private var configurationRequestId = ""
     private var cumulativeUsage: [String: [String: Double]] = [:]
@@ -182,35 +194,57 @@ public struct ConversationRuntime: Sendable {
             assistantSegment = 0
             assistantInterrupted = false
             status = "running"
-            pendingPermissions.removeAll()
+            pendingPermissions.removeAll { !$0.isSessionScoped }
             requestedConfig = Self.objectOrNull(payload["requestedPermissions"])
             effectiveConfig = Self.objectOrNull(payload["effectivePermissions"])
             if !effectiveConfig.isNull { effectiveConfig["source"] = "locally-validated" }
             configurationStatus = payload["configurationStatus"] == "validated" ? "validated" : "unknown"
             configurationRequestId = ""
+            configurationError = ""
         }
-        let turnId = explicitTurn.isEmpty ? activeTurnId : explicitTurn
+        let permissionEvent = ["permission.requested", "permission.resolved", "tool.awaitingApproval"].contains(type)
+        // Mirrors the shared TS runtime: session-scoped requests are not bound
+        // to a turn, so they neither need an active turn nor end with one.
+        let sessionScoped = permissionEvent && Self.permissionScope(payload) == "session"
+        let turnId = sessionScoped ? "" : explicitTurn.isEmpty ? activeTurnId : explicitTurn
         let current = explicitTurn.isEmpty || explicitTurn == latestTurnId
         projectMessage(event, type: type, turnId: turnId)
         projectUsage(event, type: type, turnId: turnId, current: current)
 
         if type == "permission.requested" || type == "tool.awaitingApproval" {
             let id = Self.string(payload["permissionId"], payload["requestId"])
-            if current, !activeTurnId.isEmpty, turnId == activeTurnId, !id.isEmpty {
+            let runtimeId = Self.string(payload["runtimeId"], payload["details"]["runtimeId"])
+            let liveRuntime = runtimeId.isEmpty || !retiredRuntimeIds.contains(runtimeId)
+            if sessionScoped, !id.isEmpty, liveRuntime {
+                pendingPermissions.removeAll { $0.id == id && $0.isSessionScoped }
+                pendingPermissions.append(
+                    PendingPermission(id: id, turnId: "", payload: payload, scope: "session", runtimeId: runtimeId))
+            } else if !sessionScoped, current, liveRuntime, !activeTurnId.isEmpty, turnId == activeTurnId, !id.isEmpty {
                 pendingPermissions.removeAll { $0.id == id && $0.turnId == turnId }
-                pendingPermissions.append(PendingPermission(id: id, turnId: turnId, payload: payload))
+                pendingPermissions.append(
+                    PendingPermission(id: id, turnId: turnId, payload: payload, runtimeId: runtimeId))
                 status = "waitingPermission"
             }
-        } else if type == "permission.resolved", current {
+        } else if type == "permission.resolved", current || sessionScoped {
             let id = Self.string(payload["permissionId"], payload["requestId"])
-            pendingPermissions.removeAll { $0.id == id && (explicitTurn.isEmpty || $0.turnId == explicitTurn) }
-            if pendingPermissions.isEmpty, status == "waitingPermission" {
-                status = activeTurnId.isEmpty ? "idle" : "running"
+            pendingPermissions.removeAll {
+                $0.id == id && ($0.isSessionScoped || explicitTurn.isEmpty || $0.turnId == explicitTurn)
+            }
+            settleWaitingStatus()
+        } else if type == "provider.runtime", payload["status"] == "stopped" {
+            // A stopped provider runtime can no longer answer its requests.
+            let runtimeId = Self.string(payload["runtimeId"])
+            if !runtimeId.isEmpty {
+                retiredRuntimeIds.insert(runtimeId)
+                pendingPermissions.removeAll { $0.runtimeId == runtimeId }
+                settleWaitingStatus()
             }
         }
 
         if Self.terminalTypes.contains(type) {
-            pendingPermissions.removeAll { explicitTurn.isEmpty || $0.turnId == explicitTurn }
+            pendingPermissions.removeAll {
+                !$0.isSessionScoped && (explicitTurn.isEmpty || $0.turnId == explicitTurn)
+            }
             let terminalType = type == "turn.completed" && payload["stopReason"] == "error" ? "turn.failed" : type
             finishMessages(turnId: turnId, type: terminalType)
             if current {
@@ -230,6 +264,16 @@ public struct ConversationRuntime: Sendable {
             }
         }
         projectAuxiliary(event, type: type, turnId: turnId)
+    }
+
+    /// Session-scoped requests never hold the turn in waitingPermission.
+    private mutating func settleWaitingStatus() {
+        guard status == "waitingPermission", !pendingPermissions.contains(where: { !$0.isSessionScoped }) else { return }
+        status = activeTurnId.isEmpty ? "idle" : "running"
+    }
+
+    private static func permissionScope(_ payload: JSONValue) -> String {
+        (payload["scope"].optionalString ?? payload["details"]["scope"].optionalString) == "session" ? "session" : "turn"
     }
 
     private mutating func finishMessages(turnId: String, type: String) {
@@ -488,11 +532,15 @@ public struct ConversationRuntime: Sendable {
             requestedConfig = Self.merge(requestedConfig, .object(requested))
             configurationRequestId = Self.string(payload["requestId"])
             configurationStatus = "pending"
+            configurationError = ""
         }
         let requestID = Self.string(payload["requestId"])
         if !requestID.isEmpty, requestID == configurationRequestId {
             if type == "control.rejected" {
                 configurationStatus = "rejected"
+                configurationError = Self.string(
+                    payload["error"]["message"], payload["error"], payload["message"], payload["reason"],
+                    .string(String(localized: "Agent 未接受新的模型或思考深度配置", bundle: .module)))
             } else if type == "control.unknown" || (type == "control.completed" && configurationStatus == "pending") {
                 // An ACK has no effective configuration readback.
                 configurationStatus = "unknown"
@@ -528,7 +576,7 @@ public struct ConversationRuntime: Sendable {
         compaction["summary"] = event.payload["summary"]
         compaction["error"] =
             phase == "failed"
-            ? .string(Self.string(event.payload["error"], event.payload["message"], "上下文压缩失败")) : .null
+            ? .string(Self.string(event.payload["error"], event.payload["message"], .string(String(localized: "上下文压缩失败", bundle: .module)))) : .null
     }
 
     private mutating func projectAuxiliary(_ event: ConversationEvent, type: String, turnId: String) {

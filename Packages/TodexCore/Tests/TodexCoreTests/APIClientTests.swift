@@ -38,6 +38,41 @@ struct APIClientTests {
     }
 
     @Test
+    func workspaceCatalogKeepsRejectedRecordsApart() throws {
+        let workspace = try JSONValue(encoding: WorkspaceRecord(id: "w", name: "项目", path: "/work/project"))
+        let plain = try WorkspaceCatalog(response: ["workspaces": [workspace], "updatedAt": 1])
+        #expect(plain.workspaces.map(\.id) == ["w"] && plain.rejected.isEmpty)
+        let catalog = try WorkspaceCatalog(
+            response: [
+                "workspaces": [workspace], "updatedAt": 1,
+                "rejected": [
+                    [
+                        "id": "gone", "name": "旧目录", "path": "/work/gone", "code": "WORKSPACE_PATH_NOT_FOUND",
+                        "message": "missing",
+                    ]
+                ],
+            ])
+        #expect(catalog.rejected == [RejectedWorkspace(
+            id: "gone", name: "旧目录", path: "/work/gone", code: "WORKSPACE_PATH_NOT_FOUND", message: "missing")])
+    }
+
+    @Test
+    func backendLabelColorMatchesDesktopDerivation() throws {
+        // Values computed with desktop `backendLabelColor` for the same ids.
+        #expect(BackendConnection.defaultLabelColor(for: "stable") == "#ef4444")
+        #expect(BackendConnection.defaultLabelColor(for: "simulator-fixture") == "#3b82f6")
+        #expect(BackendConnection.defaultLabelColor(for: "后端-一") == "#f97316")
+        #expect(BackendConnection(id: "stable", color: "#8B5CF6").color == "#8b5cf6")
+        #expect(BackendConnection(id: "stable").color == "#ef4444")
+        // "teal" from older builds is not a hex color and resolves to the default.
+        let legacy = try JSONValue(encoding: ["id": "stable", "name": "n", "serverURL": "http://h", "color": "teal"])
+        #expect(try legacy.decoded(BackendConnection.self).color == "#ef4444")
+        var edited = BackendConnection(id: "stable")
+        edited.color = "purple"
+        #expect(edited.labelColor == "#ef4444")
+    }
+
+    @Test
     func workspaceDefaultsEncodeAllRequiredWireFields() throws {
         let workspace = WorkspaceRecord(name: "项目", path: "/work/project")
         let wire = try JSONValue(encoding: workspace)
@@ -540,6 +575,15 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
         ) { try await $0.importLiveAgentProvider(agent: "codex", id: id, name: "已导入") },
         .init(name: "agentProviderModels", method: "GET", path: "/v2/agent-providers/codex/\(escaped)/models") {
             try await $0.agentProviderModels(agent: "codex", id: id)
+        },
+        .init(
+            name: "previewAgentProviderModels", method: "POST", path: "/v2/agent-providers/pi/\(escaped)/models",
+            body: ["settingsConfig": ["baseUrl": "https://example.test/v1", "apiKey": "__TODEX_MASKED__"]],
+            response: ["models": [["id": "m-1", "name": "Model 1"]]]
+        ) {
+            try await $0.previewAgentProviderModels(
+                agent: "pi", id: id,
+                settingsConfig: ["baseUrl": "https://example.test/v1", "apiKey": "__TODEX_MASKED__"])
         },
         .init(
             name: "skills", method: "GET", path: "/v2/catalog/skills",

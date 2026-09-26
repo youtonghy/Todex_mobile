@@ -44,7 +44,7 @@ public actor RealtimeClient {
     }
 
     public func connect() async throws {
-        guard !eventQueue.isFinished else { throw TodexError.invalid("事件流已结束，请创建新的连接") }
+        guard !eventQueue.isFinished else { throw TodexError.invalid(String(localized: "事件流已结束，请创建新的连接", bundle: .module)) }
         resetConnection()
         let revision = generation
         do {
@@ -54,7 +54,11 @@ public actor RealtimeClient {
             try Self.validatePolicy(policy, connection: connection)
             try Task.checkCancellation()
             guard revision == generation else { throw CancellationError() }
-            if connection.encryption != .none { crypto = try TransportCryptoSession(connection: connection) }
+            if connection.encryption != .none {
+                do { crypto = try TransportCryptoSession(connection: connection) } catch {
+                    throw TodexError.configuration(String(localized: "加密公钥无法使用：\(error.localizedDescription)", bundle: .module))
+                }
+            }
             var components = URLComponents(url: try connection.normalizedURL(), resolvingAgainstBaseURL: false)!
             components.scheme = components.scheme == "https" ? "wss" : "ws"
             components.path = "/v2/ws"
@@ -66,7 +70,7 @@ public actor RealtimeClient {
                 query = query.isEmpty ? auth : "\(query)&\(auth)"
             }
             components.percentEncodedQuery = query.isEmpty ? nil : query
-            guard let url = components.url else { throw TodexError.invalid("WebSocket 地址无效") }
+            guard let url = components.url else { throw TodexError.invalid(String(localized: "WebSocket 地址无效", bundle: .module)) }
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
             request.httpShouldHandleCookies = false
             let socket = makeSocket(request)
@@ -74,7 +78,7 @@ public actor RealtimeClient {
             receiver = Task { [weak self] in await self?.receive(revision: revision, socket: socket) }
             let pong = try await sendCommand(
                 type: "server.ping", payload: [:], timeout: 15, id: UUID().uuidString, verifying: true)
-            guard pong["pong"] == .bool(true), revision == generation else { throw TodexError.invalid("后端握手验证失败") }
+            guard pong["pong"] == .bool(true), revision == generation else { throw TodexError.invalid(CoreMessage.handshakeFailed) }
             try Task.checkCancellation()
             connected = true
             guard emit(["type": "connection.ready", "payload": [:]]) else { throw TodexError.disconnected }
@@ -115,7 +119,7 @@ public actor RealtimeClient {
             request.timeout.cancel()
             request.continuation.resume(
                 throwing: request.command.isReadOnly
-                    ? (reason ?? TodexError.disconnected) : TodexError.unknownOutcome("连接中断，未收到操作确认"))
+                    ? (reason ?? TodexError.disconnected) : TodexError.unknownOutcome(String(localized: "连接中断，未收到操作确认", bundle: .module)))
         }
     }
 
@@ -132,13 +136,13 @@ public actor RealtimeClient {
         guard let socket, connected || (verifying && type == "server.ping") else { throw TodexError.disconnected }
         guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, id.utf8.count <= 256, !type.isEmpty,
             timeout.isFinite, timeout > 0, timeout <= 3600
-        else { throw TodexError.invalid("请求 ID 或超时无效") }
-        guard !usedRequestIDs.contains(id) else { throw TodexError.invalid("此连接已使用该请求 ID，请勿重复提交") }
-        guard usedRequestIDs.count < 65_536 else { throw TodexError.invalid("连接请求计数已耗尽，请重新连接") }
+        else { throw TodexError.invalid(String(localized: "请求 ID 或超时无效", bundle: .module)) }
+        guard !usedRequestIDs.contains(id) else { throw TodexError.invalid(String(localized: "此连接已使用该请求 ID，请勿重复提交", bundle: .module)) }
+        guard usedRequestIDs.count < 65_536 else { throw TodexError.invalid(String(localized: "连接请求计数已耗尽，请重新连接", bundle: .module)) }
         let command = RealtimeCommand(id: id, type: type, payload: payload)
         let data = try JSONEncoder().encode(
             JSONValue.object(["id": .string(id), "type": .string(type), "payload": payload]))
-        guard data.count <= 4 * 1024 * 1024 else { throw TodexError.invalid("消息和附件编码后不能超过 4 MiB") }
+        guard data.count <= 4 * 1024 * 1024 else { throw TodexError.invalid(String(localized: "消息和附件编码后不能超过 4 MiB", bundle: .module)) }
         let plaintext = String(decoding: data, as: UTF8.self)
         let revision = generation
         let token = UUID()
@@ -180,7 +184,7 @@ public actor RealtimeClient {
                 guard revision == generation, !Task.isCancelled else { return }
                 let text = try crypto?.decrypt(raw) ?? raw
                 let frame = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
-                guard let response = RealtimeResponse(frame) else { throw TodexError.invalid("后端事件格式无效") }
+                guard let response = RealtimeResponse(frame) else { throw TodexError.invalid(String(localized: "后端事件格式无效", bundle: .module)) }
                 if let id = response.requestID, let request = pending[id],
                     let resolution = response.resolution(for: request.command)
                 {
@@ -192,7 +196,9 @@ public actor RealtimeClient {
                     }
                 }
                 guard emit(frame) else { return }
-                if response.requestID == nil && ["server.error", "error"].contains(response.type) {
+                if response.requestID == nil && ["server.error", "error"].contains(response.type)
+                    && !Self.isScopedStreamError(response.payload)
+                {
                     // Legacy dispatch errors omit the request id. Do not guess
                     // which mutation failed; close and mark all unresolved ones unknown.
                     failed(response.error, revision: revision)
@@ -213,7 +219,7 @@ public actor RealtimeClient {
             // The original FIFO prefix is preserved. A reserved control slot
             // guarantees delivery without advancing cursors past the lost frame.
             eventQueue.finish(with: [
-                "type": "connection.closed", "payload": ["code": "EVENT_BUFFER_OVERFLOW", "message": "接收队列已满，需要补齐事件"],
+                "type": "connection.closed", "payload": ["code": "EVENT_BUFFER_OVERFLOW", "message": .string(String(localized: "接收队列已满，需要补齐事件", bundle: .module))],
             ])
             return false
         case .terminated:
@@ -225,7 +231,9 @@ public actor RealtimeClient {
     private func failed(_ error: any Error, revision: UUID) {
         guard revision == generation else { return }
         resetConnection(reason: error)
-        var payload: JSONValue = ["message": .string(error.localizedDescription)]
+        var payload: JSONValue = [
+            "message": .string(error.localizedDescription), "retryable": .bool(!TodexError.stopsReconnect(error)),
+        ]
         if case TodexError.server(let code, _) = error { payload["code"] = .string(code) }
         emit(["type": "connection.closed", "payload": payload])
     }
@@ -240,12 +248,12 @@ public actor RealtimeClient {
         guard let request = take(id, token: token, revision: revision) else { return }
         request.continuation.resume(
             throwing: request.command.isReadOnly
-                ? TodexError.invalid("等待后端响应超时") : TodexError.unknownOutcome("等待操作确认超时"))
+                ? TodexError.invalid(String(localized: "等待后端响应超时", bundle: .module)) : TodexError.unknownOutcome(String(localized: "等待操作确认超时", bundle: .module)))
     }
     private func cancelRequest(_ id: String, token: UUID, revision: UUID) {
         guard let request = take(id, token: token, revision: revision) else { return }
         request.continuation.resume(
-            throwing: request.command.isReadOnly ? CancellationError() : TodexError.unknownOutcome("已停止等待，操作可能已提交"))
+            throwing: request.command.isReadOnly ? CancellationError() : TodexError.unknownOutcome(String(localized: "已停止等待，操作可能已提交", bundle: .module)))
     }
     private func sendFailed(revision: UUID, error: any Error) {
         guard revision == generation else { return }
@@ -254,20 +262,28 @@ public actor RealtimeClient {
         failed(error, revision: revision)
     }
 
+    /// Unidentified errors the backend attributes to one subscription stream
+    /// rather than to a command: a forwarding task that died (it names the
+    /// conversation) or a lag notice the backend recovers from by replaying.
+    /// The socket and every other request stay healthy.
+    static func isScopedStreamError(_ payload: JSONValue) -> Bool {
+        !payload["conversationId"].stringValue.isEmpty || payload["code"] == "EVENT_STREAM_LAGGED"
+    }
+
     static func validatePolicy(_ response: HTTPResult, connection: BackendConnection) throws {
         if response.statusCode != 404 {
             let value = try response.json()
             guard case .object = value, let name = value["requiredProtocol"].optionalString,
                 let required = EncryptionProtocol(rawValue: name)
-            else { throw TodexError.invalid("后端加密要求无效") }
+            else { throw TodexError.invalid(CoreMessage.invalidPolicy) }
             guard required == .none || required == connection.encryption else {
-                throw TodexError.invalid("后端要求 \(name) 加密，请导入对应公钥")
+                throw TodexError.configuration(String(localized: "后端要求 \(name) 加密，请导入对应公钥", bundle: .module))
             }
         }
         if connection.encryption != .none
             && connection.publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
-            throw TodexError.invalid("尚未导入加密公钥，请先完成密钥传输验证")
+            throw TodexError.configuration(String(localized: "尚未导入加密公钥，请先完成密钥传输验证", bundle: .module))
         }
     }
 
@@ -275,7 +291,7 @@ public actor RealtimeClient {
         guard let response = response as? HTTPURLResponse, response.statusCode != 101 else { return error }
         let message =
             [401, 403].contains(response.statusCode)
-            ? "后端拒绝认证，请检查令牌与配对状态" : "WebSocket 握手失败（HTTP \(response.statusCode)）"
+            ? String(localized: "后端拒绝认证，请检查令牌与配对状态", bundle: .module) : String(localized: "WebSocket 握手失败（HTTP \(response.statusCode)）", bundle: .module)
         return TodexError.server(code: String(response.statusCode), message: message)
     }
 }
@@ -343,7 +359,7 @@ struct RealtimeResponse: Sendable {
         if Self.errorTypes.contains(type) { return .failure(error) }
         if ["terminal.audit", "codex.audit"].contains(type) {
             guard payload["decision"] == "deny", payload["action"] == .string(command.type) else { return nil }
-            return .failure(.server(code: payload["reason_code"].optionalString ?? "UNAUTHORIZED", message: "后端拒绝此操作"))
+            return .failure(.server(code: payload["reason_code"].optionalString ?? "UNAUTHORIZED", message: String(localized: "后端拒绝此操作", bundle: .module)))
         }
         switch command.type {
         case "codex.local.start":
@@ -364,7 +380,7 @@ struct RealtimeResponse: Sendable {
             "codex.local.interrupt":
             guard type == "codex.control.response" else { return nil }
             guard let result = payload.objectValue["result"] else {
-                return .failure(.unknownOutcome("Codex 响应缺少 result"))
+                return .failure(.unknownOutcome(String(localized: "Codex 响应缺少 result", bundle: .module)))
             }
             return .success(result)
         case "codex.local.approval.respond":
@@ -396,7 +412,7 @@ struct RealtimeResponse: Sendable {
             nested["code"].optionalString ?? payload["code"].optionalString ?? Self.numericCode(nested["code"])
             ?? Self.numericCode(payload["code"]) ?? "ERROR"
         let message =
-            nested["message"].optionalString ?? payload["message"].optionalString ?? nested.optionalString ?? "后端操作失败"
+            nested["message"].optionalString ?? payload["message"].optionalString ?? nested.optionalString ?? String(localized: "后端操作失败", bundle: .module)
         return .server(code: code, message: message)
     }
     private static let errorTypes: Set<String> = [
@@ -511,9 +527,9 @@ private final class FoundationRealtimeSocket: RealtimeSocket {
             switch try await task.receive() {
             case .string(let value): return value
             case .data(let value):
-                guard let text = String(data: value, encoding: .utf8) else { throw TodexError.invalid("收到非 UTF-8 消息") }
+                guard let text = String(data: value, encoding: .utf8) else { throw TodexError.invalid(String(localized: "收到非 UTF-8 消息", bundle: .module)) }
                 return text
-            @unknown default: throw TodexError.invalid("收到未知消息格式")
+            @unknown default: throw TodexError.invalid(String(localized: "收到未知消息格式", bundle: .module))
             }
         } catch { throw RealtimeClient.socketError(error, response: task.response) }
     }

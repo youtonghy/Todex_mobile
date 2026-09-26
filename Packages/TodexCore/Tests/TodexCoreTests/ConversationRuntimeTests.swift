@@ -338,6 +338,34 @@ struct ConversationRuntimeTests {
         #expect(runtime.status == "cancelled")
     }
 
+    @Test func sessionScopedPermissionsOutliveTurnsUntilResolvedOrRuntimeStops() throws {
+        // conversation-runtime.test.cjs: scope "session" is not bound to a turn.
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(
+            try event(1, "permission.requested", #"{"permissionId":"ui","scope":"session","runtimeId":"pi-1"}"#))
+        #expect(runtime.pendingPermissions.map(\.id) == ["ui"])
+        #expect(runtime.pendingPermissions.first?.turnId == "")
+        #expect(runtime.status == "idle")
+        runtime.ingest(try event(2, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(try event(3, "permission.requested", #"{"turnId":"t","permissionId":"cmd"}"#))
+        #expect(runtime.status == "waitingPermission")
+        runtime.ingest(try event(4, "turn.completed", #"{"turnId":"t"}"#))
+        #expect(runtime.pendingPermissions.map(\.id) == ["ui"])
+        runtime.ingest(try event(5, "turn.started", #"{"turnId":"t2"}"#))
+        #expect(runtime.pendingPermissions.map(\.id) == ["ui"])
+        #expect(runtime.status == "running")
+        runtime.ingest(try event(6, "provider.runtime", #"{"provider":"pi","runtimeId":"pi-1","status":"stopped"}"#))
+        #expect(runtime.pendingPermissions.isEmpty)
+        runtime.ingest(
+            try event(7, "permission.requested", #"{"permissionId":"late","scope":"session","runtimeId":"pi-1"}"#))
+        #expect(runtime.pendingPermissions.isEmpty)
+        runtime.ingest(
+            try event(8, "permission.requested", #"{"permissionId":"ui2","details":{"scope":"session"}}"#))
+        runtime.ingest(try event(9, "permission.resolved", #"{"permissionId":"ui2","scope":"session"}"#))
+        #expect(runtime.pendingPermissions.isEmpty)
+        #expect(runtime.status == "running")
+    }
+
     @Test func configurationRequiresReadbackAndPreservesTheLastEffectiveValueOnRejection() throws {
         var runtime = ConversationRuntime(conversationId: "c")
         runtime.ingest(
@@ -361,8 +389,11 @@ struct ConversationRuntimeTests {
         #expect(runtime.effectiveConfig["model"] == "old")
         runtime.ingest(try event(5, "control.rejected", #"{"turnId":"t","requestId":"unrelated"}"#))
         #expect(runtime.configurationStatus == "unknown")
-        runtime.ingest(try event(6, "control.rejected", #"{"turnId":"t","requestId":"r"}"#))
+        #expect(runtime.configurationError.isEmpty)
+        runtime.ingest(
+            try event(6, "control.rejected", #"{"turnId":"t","requestId":"r","error":{"message":"model unavailable"}}"#))
         #expect(runtime.configurationStatus == "rejected")
+        #expect(runtime.configurationError == "model unavailable")
         #expect(runtime.effectiveConfig["model"] == "old")
         runtime.ingest(
             try event(

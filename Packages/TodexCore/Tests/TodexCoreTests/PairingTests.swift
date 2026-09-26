@@ -284,6 +284,29 @@ struct PairingTests {
         #expect(stalled.requests.count == 1)
     }
 
+    @Test(arguments: [
+        (404, "", "create", "当前后端不支持设备验证，请更新后端。"),
+        (404, #"{"code":"NOT_FOUND","message":"pairing request no longer exists"}"#, "poll", "设备验证申请无效或已过期，请重新申请"),
+        (429, #"{"code":"RESOURCE_EXHAUSTED","message":"queue full"}"#, "create", "设备申请过于频繁或队列已满，请稍后重试"),
+        (401, "{}", "poll", "设备验证请求未被接受，请重新申请"),
+        (403, #"{"code":"UNAUTHORIZED","message":"denied"}"#, "create", "设备验证请求未被接受，请重新申请"),
+        (502, "", "create", "设备验证失败（HTTP %@），请检查后端状态"),
+        (400, #"{"code":"INVALID_REQUEST","message":"bad key"}"#, "create", "bad key"),
+    ])
+    func bootstrapHTTPFailuresAreActionable(_ status: Int, _ body: String, _ action: String, _ expected: String)
+        async throws
+    {
+        let client = PairingURLProtocol.client { _ in (status, Data(body.utf8)) }
+        do {
+            _ = try await PairingBootstrap.post(client: client, action: action, body: [:])
+            Issue.record("expected HTTP \(status) to fail")
+        } catch {
+            // Expected text is a catalog key (server messages pass through).
+            let format = String(localized: String.LocalizationValue(expected), bundle: CoreLocalization.bundle)
+            #expect(error.localizedDescription == (expected.contains("%@") ? String(format: format, String(status)) : format))
+        }
+    }
+
     private func link() throws -> JSONValue {
         [
             "kind": "todex-pairing-link", "version": 1, "serverUrl": "http://example.com:7345",

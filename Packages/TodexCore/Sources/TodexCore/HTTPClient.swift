@@ -43,7 +43,7 @@ public final class HTTPClient: Sendable {
         guard path.hasPrefix("/"), !path.hasPrefix("//"), !path.contains("?"), !path.contains("#"),
             !path.contains("\\"),
             !path.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 })
-        else { throw TodexError.invalid("接口路径无效") }
+        else { throw TodexError.invalid(String(localized: "接口路径无效", bundle: .module)) }
         let bytes = Array(path.utf8)
         var escaped = ""
         var index = 0
@@ -51,7 +51,7 @@ public final class HTTPClient: Sendable {
             let byte = bytes[index]
             if byte == 37 {
                 guard index + 2 < bytes.count, Self.isHex(bytes[index + 1]), Self.isHex(bytes[index + 2]) else {
-                    throw TodexError.invalid("接口路径转义无效")
+                    throw TodexError.invalid(String(localized: "接口路径转义无效", bundle: .module))
                 }
                 escaped += String(decoding: bytes[index...index + 2], as: UTF8.self)
                 index += 3
@@ -66,7 +66,7 @@ public final class HTTPClient: Sendable {
                 return decoded == "." || decoded == ".."
             }),
             var components = URLComponents(url: try connection.normalizedURL(), resolvingAgainstBaseURL: false)
-        else { throw TodexError.invalid("接口路径无效") }
+        else { throw TodexError.invalid(String(localized: "接口路径无效", bundle: .module)) }
         components.percentEncodedPath = escaped
         // URLQueryItem leaves '+' literal, which form decoding turns into a space.
         components.percentEncodedQuery =
@@ -74,7 +74,7 @@ public final class HTTPClient: Sendable {
             ? nil
             : query.sorted { $0.key < $1.key }.map { "\(Self.segment($0.key))=\(Self.segment($0.value))" }.joined(
                 separator: "&")
-        guard let url = components.url else { throw TodexError.invalid("接口地址无效") }
+        guard let url = components.url else { throw TodexError.invalid(String(localized: "接口地址无效", bundle: .module)) }
         return url
     }
 
@@ -98,7 +98,7 @@ public final class HTTPClient: Sendable {
     ) async throws -> HTTPResult {
         try Task.checkCancellation()
         guard timeout.isFinite, timeout > 0, timeout <= 3600, maximumBytes > 0 else {
-            throw TodexError.invalid("HTTP 请求限制无效")
+            throw TodexError.invalid(String(localized: "HTTP 请求限制无效", bundle: .module))
         }
         let requestURL = try url(path: path, query: query)
         var request = URLRequest(
@@ -132,11 +132,11 @@ public final class HTTPClient: Sendable {
                     let (bytes, response) = try await session.bytes(
                         for: preparedRequest, delegate: NoRedirectDelegate())
                     defer { bytes.task.cancel() }
-                    guard let http = response as? HTTPURLResponse else { throw TodexError.invalid("后端响应无效") }
-                    guard http.expectedContentLength <= maximumBytes else { throw TodexError.invalid("后端响应过大") }
+                    guard let http = response as? HTTPURLResponse else { throw TodexError.invalid(String(localized: "后端响应无效", bundle: .module)) }
+                    guard http.expectedContentLength <= maximumBytes else { throw TodexError.invalid(String(localized: "后端响应过大", bundle: .module)) }
                     var data = Data()
                     for try await byte in bytes {
-                        guard data.count < maximumBytes else { throw TodexError.invalid("后端响应过大") }
+                        guard data.count < maximumBytes else { throw TodexError.invalid(String(localized: "后端响应过大", bundle: .module)) }
                         data.append(byte)
                     }
                     try Task.checkCancellation()
@@ -154,7 +154,7 @@ public final class HTTPClient: Sendable {
         } catch {
             // Once handed to URLSession, cancellation/timeout/invalid responses
             // cannot prove a mutation was not applied. Never retry here.
-            if method != .get { throw TodexError.unknownOutcome("未收到后端完整确认") }
+            if method != .get { throw TodexError.unknownOutcome(String(localized: "未收到后端完整确认", bundle: .module)) }
             if Task.isCancelled { throw CancellationError() }
             throw error
         }
@@ -187,8 +187,8 @@ struct HTTPResult: Sendable {
             throw TodexError.server(code: code, message: message)
         }
         guard String(data: data, encoding: .utf8) != nil, let value else {
-            if method != .get { throw TodexError.unknownOutcome("后端返回的确认不是有效 JSON") }
-            throw TodexError.invalid("后端未返回有效 JSON")
+            if method != .get { throw TodexError.unknownOutcome(String(localized: "后端返回的确认不是有效 JSON", bundle: .module)) }
+            throw TodexError.invalid(String(localized: "后端未返回有效 JSON", bundle: .module))
         }
         return value
     }

@@ -218,6 +218,41 @@ struct RealtimeClientTests {
         await socket.waitForCancel()
     }
 
+    @Test func subscriptionScopedStreamErrorsKeepTheSocketAndPendingMutations() async throws {
+        let fixture = NetworkHTTPFixture { _ in .json(["requiredProtocol": "none"]) }
+        defer { fixture.close() }
+        let socket = ScriptedRealtimeSocket()
+        let client = RealtimeClient(
+            connection: fixture.client().connection, http: fixture.client(), makeSocket: { _ in socket })
+        try await client.connect()
+        let work = Task { try await client.command(type: "conversation.prompt", payload: [:], id: "prompt") }
+        await socket.waitForSent(2)
+        // v2.rs: lag notices carry no conversation; dead forwarders name one.
+        try socket.push(["type": "server.error", "payload": ["code": "EVENT_STREAM_LAGGED", "message": "lagged"]])
+        try socket.push([
+            "type": "server.error", "payload": ["code": "CONFLICT", "message": "gap", "conversationId": "c"],
+        ])
+        // A ping round trip is a receive-loop barrier for both frames.
+        _ = try await client.command(type: "server.ping", payload: [:])
+        #expect(!socket.isCancelled)
+        try socket.push(["type": "server.result", "id": "prompt", "payload": ["accepted": true]])
+        #expect(try await work.value == ["accepted": true])
+        var iterator = client.events.makeAsyncIterator()
+        var types: [String] = []
+        while types.count < 5, let frame = await iterator.next() { types.append(frame["type"].stringValue) }
+        #expect(!types.contains("connection.closed"))
+        #expect(types.filter { $0 == "server.error" }.count == 2)
+        await client.disconnect()
+    }
+
+    @Test func permanentConnectionFailuresAreMarkedNotRetryable() {
+        #expect(TodexError.stopsReconnect(TodexError.configuration("key")))
+        #expect(TodexError.stopsReconnect(TodexError.server(code: "401", message: "")))
+        #expect(!TodexError.stopsReconnect(TodexError.server(code: "500", message: "")))
+        #expect(!TodexError.stopsReconnect(TodexError.invalid("timeout")))
+        #expect(!TodexError.stopsReconnect(URLError(.networkConnectionLost)))
+    }
+
     @Test func staleSendCallbackCannotCloseANewConnectionWithTheSameRequestID() async throws {
         let fixture = NetworkHTTPFixture { _ in .json(["requiredProtocol": "none"]) }
         defer { fixture.close() }

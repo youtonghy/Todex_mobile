@@ -14,36 +14,36 @@ public struct PairingImporter: Sendable {
     public init() {}
 
     public mutating func ingest(_ raw: String, current: BackendConnection) throws -> BackendConnection? {
-        guard raw.utf8.count <= Self.maximumBytes else { throw TodexError.invalid("配对内容过大") }
+        guard raw.utf8.count <= Self.maximumBytes else { throw TodexError.invalid(String(localized: "配对内容过大", bundle: .module)) }
         let envelope = try JSONDecoder().decode(Envelope.self, from: Data(raw.utf8))
-        guard envelope.version == 1 else { throw TodexError.invalid("不支持的配对版本") }
+        guard envelope.version == 1 else { throw TodexError.invalid(String(localized: "不支持的配对版本", bundle: .module)) }
         if envelope.kind == "todex-pairing-link" {
             let connection = try Self.importLink(Data(raw.utf8), current: current)
             self = Self()
             return connection
         }
-        guard envelope.kind == "todex-pairing-chunk" else { throw TodexError.invalid("不是有效的 TodeX 配对二维码") }
+        guard envelope.kind == "todex-pairing-chunk" else { throw TodexError.invalid(String(localized: "不是有效的 TodeX 配对二维码", bundle: .module)) }
         let chunk = try JSONDecoder().decode(Chunk.self, from: Data(raw.utf8))
         guard (1...128).contains(chunk.total), (1...chunk.total).contains(chunk.index),
             !chunk.data.isEmpty, chunk.data.utf8.count <= 4096, chunk.data.utf8.allSatisfy(CryptoEncoding.isBase64URL)
         else {
-            throw TodexError.invalid("配对分片内容或序号无效")
+            throw TodexError.invalid(String(localized: "配对分片内容或序号无效", bundle: .module))
         }
         _ = try CryptoEncoding.decode(chunk.checksum, count: 32)
         guard checksum == nil || (checksum == chunk.checksum && totalCount == chunk.total) else {
-            throw TodexError.invalid("配对分片不属于同一批次")
+            throw TodexError.invalid(String(localized: "配对分片不属于同一批次", bundle: .module))
         }
-        if let previous = chunks[chunk.index], previous != chunk.data { throw TodexError.invalid("同一序号的配对分片内容冲突") }
+        if let previous = chunks[chunk.index], previous != chunk.data { throw TodexError.invalid(String(localized: "同一序号的配对分片内容冲突", bundle: .module)) }
         var candidate = chunks
         candidate[chunk.index] = chunk.data
         guard candidate.values.reduce(0, { $0 + $1.utf8.count }) <= Self.maximumBytes else {
-            throw TodexError.invalid("配对分片内容过大")
+            throw TodexError.invalid(String(localized: "配对分片内容过大", bundle: .module))
         }
         if candidate.count == chunk.total {
             let encoded = (1...chunk.total).compactMap { candidate[$0] }.joined()
             let payload = try CryptoEncoding.decode(encoded)
             guard CryptoEncoding.encode(Data(SHA256.hash(data: payload))) == chunk.checksum else {
-                throw TodexError.invalid("配对分片校验失败")
+                throw TodexError.invalid(String(localized: "配对分片校验失败", bundle: .module))
             }
             let connection = try Self.importLink(payload, current: current)
             self = Self()
@@ -56,9 +56,9 @@ public struct PairingImporter: Sendable {
     }
 
     private static func importLink(_ data: Data, current: BackendConnection) throws -> BackendConnection {
-        guard String(data: data, encoding: .utf8) != nil else { throw TodexError.invalid("配对链接不是有效 UTF-8") }
+        guard String(data: data, encoding: .utf8) != nil else { throw TodexError.invalid(String(localized: "配对链接不是有效 UTF-8", bundle: .module)) }
         let link = try JSONDecoder().decode(Link.self, from: data)
-        guard link.kind == "todex-pairing-link", link.version == 1 else { throw TodexError.invalid("无效的配对链接") }
+        guard link.kind == "todex-pairing-link", link.version == 1 else { throw TodexError.invalid(String(localized: "无效的配对链接", bundle: .module)) }
         let server = try BackendConnection.normalize(link.serverUrl)
         let protocolID = try parseProtocol(link.protocol?.id)
         let selected = try parseProtocol(link.preferredEncryption) ?? protocolID ?? .none
@@ -67,7 +67,7 @@ public struct PairingImporter: Sendable {
             key = ""
         } else {
             guard protocolID == selected, let importedKey = link.protocol?.publicKey else {
-                throw TodexError.invalid("配对加密方式和公钥不匹配")
+                throw TodexError.invalid(String(localized: "配对加密方式和公钥不匹配", bundle: .module))
             }
             let bytes = try CryptoEncoding.decode(importedKey, count: selected == .x25519 ? 32 : 1184)
             if selected == .x25519 {
@@ -91,7 +91,7 @@ public struct PairingImporter: Sendable {
 
     private static func parseProtocol(_ value: String?) throws -> EncryptionProtocol? {
         guard let value else { return nil }
-        guard let result = EncryptionProtocol(rawValue: value) else { throw TodexError.invalid("不支持的配对加密协议") }
+        guard let result = EncryptionProtocol(rawValue: value) else { throw TodexError.invalid(String(localized: "不支持的配对加密协议", bundle: .module)) }
         return result
     }
 
@@ -174,7 +174,7 @@ public actor DevicePairingSession {
             interval.rounded() == interval, (1...60_000).contains(interval),
             let encodedServerKey = response["serverPublicKey"].optionalString
         else {
-            throw TodexError.invalid("设备验证申请无效或已过期，请重新申请")
+            throw TodexError.invalid(String(localized: "设备验证申请无效或已过期，请重新申请", bundle: .module))
         }
         let serverKey = try CryptoEncoding.decode(encodedServerKey, count: 32)
         let material = try PairingMaterial(
@@ -203,7 +203,7 @@ public actor DevicePairingSession {
             material = nil
             return .expired
         }
-        guard !polling else { throw TodexError.invalid("设备验证正在查询，请稍候") }
+        guard !polling else { throw TodexError.invalid(String(localized: "设备验证正在查询，请稍候", bundle: .module)) }
         polling = true
         defer { polling = false }
         let body = proofBody(cancel: false)
@@ -228,7 +228,7 @@ public actor DevicePairingSession {
             _ = try material.unwrap(result)
             return .approved
         default:
-            throw TodexError.invalid("设备验证响应状态无效")
+            throw TodexError.invalid(String(localized: "设备验证响应状态无效", bundle: .module))
         }
     }
 
@@ -267,24 +267,49 @@ enum PairingBootstrap {
     static func post(client: HTTPClient, action: String, body: JSONValue, timeout: Duration = .seconds(10)) async throws
         -> JSONValue
     {
-        guard ["create", "poll", "cancel"].contains(action) else { throw TodexError.invalid("设备验证操作无效") }
+        guard ["create", "poll", "cancel"].contains(action) else { throw TodexError.invalid(String(localized: "设备验证操作无效", bundle: .module)) }
         return try await withThrowingTaskGroup(of: JSONValue.self) { group in
             group.addTask {
-                let result = try await client.request(
-                    .post, path: "/v2/device-pairing/\(action)", body: body, authenticated: false)
+                let result: JSONValue
+                do {
+                    result = try await client.request(
+                        .post, path: "/v2/device-pairing/\(action)", body: body, authenticated: false)
+                } catch { throw describe(error, action: action) }
                 try Task.checkCancellation()
                 guard case .object = result, try JSONEncoder().encode(result).count <= 16_384 else {
-                    throw TodexError.invalid("设备验证响应无效或过大")
+                    throw TodexError.invalid(String(localized: "设备验证响应无效或过大", bundle: .module))
                 }
                 return result
             }
             group.addTask {
                 try await Task.sleep(for: timeout)
-                throw TodexError.invalid("设备验证请求超时，请检查后端连接")
+                throw TodexError.invalid(String(localized: "设备验证请求超时，请检查后端连接", bundle: .module))
             }
             defer { group.cancelAll() }
             guard let result = try await group.next() else { throw CancellationError() }
             return result
+        }
+    }
+
+    /// Desktop devicePairing parity: HTTP failures become actionable text. A
+    /// bare 404 (no JSON body) means the route is missing on an older backend;
+    /// a NOT_FOUND on poll/cancel means this request is gone, not the feature.
+    static func describe(_ error: any Error, action: String) -> any Error {
+        guard case TodexError.server(let code, _) = error else { return error }
+        switch code.uppercased() {
+        case "404":
+            return TodexError.invalid(String(localized: "当前后端不支持设备验证，请更新后端。", bundle: .module))
+        case "NOT_FOUND":
+            return TodexError.invalid(
+                action == "create" ? String(localized: "当前后端不支持设备验证，请更新后端。", bundle: .module) : String(localized: "设备验证申请无效或已过期，请重新申请", bundle: .module))
+        case "429", "RESOURCE_EXHAUSTED":
+            return TodexError.invalid(String(localized: "设备申请过于频繁或队列已满，请稍后重试", bundle: .module))
+        case "401", "403", "UNAUTHENTICATED", "UNAUTHORIZED":
+            return TodexError.invalid(String(localized: "设备验证请求未被接受，请重新申请", bundle: .module))
+        case let status where Int(status).map({ (300..<600).contains($0) }) == true:
+            return TodexError.invalid(String(localized: "设备验证失败（HTTP \(status)），请检查后端状态", bundle: .module))
+        default:
+            return error
         }
     }
 }
@@ -320,17 +345,17 @@ struct PairingMaterial: Sendable {
         guard let nonceText = response["nonce"].optionalString,
             let ciphertextText = response["ciphertext"].optionalString,
             nonceText.utf8.count <= 16_384, ciphertextText.utf8.count <= 16_384
-        else { throw TodexError.invalid("设备验证密文无效") }
+        else { throw TodexError.invalid(String(localized: "设备验证密文无效", bundle: .module)) }
         let nonce = try CryptoEncoding.decode(nonceText, count: 24)
         var plaintext = try XChaChaAEAD.open(
             CryptoEncoding.decode(ciphertextText), key: wrapKey, nonce: nonce, aad: transcript)
         defer { plaintext.resetBytes(in: 0..<plaintext.count) }
         // JSONDecoder accepts alternate text encodings; the protocol requires UTF-8.
-        guard String(data: plaintext, encoding: .utf8) != nil else { throw TodexError.invalid("设备验证密文不是 UTF-8") }
+        guard String(data: plaintext, encoding: .utf8) != nil else { throw TodexError.invalid(String(localized: "设备验证密文不是 UTF-8", bundle: .module)) }
         let payload = try JSONDecoder().decode(Credential.self, from: plaintext)
         guard payload.deviceID.range(of: "^dev_[A-Za-z0-9_-]{16}$", options: .regularExpression) != nil,
             payload.deviceID == deviceID
-        else { throw TodexError.invalid("设备验证结果与本机设备密钥不匹配") }
+        else { throw TodexError.invalid(String(localized: "设备验证结果与本机设备密钥不匹配", bundle: .module)) }
         return payload.deviceID
     }
 
