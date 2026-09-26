@@ -9,9 +9,9 @@ struct WorkbenchTab: Codable, Identifiable {
         case terminal, files, browser, git
         var title: String {
             switch self {
-            case .terminal: "终端"
-            case .files: "文件"
-            case .browser: "网页"
+            case .terminal: String(localized: "终端")
+            case .files: String(localized: "文件")
+            case .browser: String(localized: "网页")
             case .git: "Git"
             }
         }
@@ -48,7 +48,11 @@ final class WorkbenchViewController: UIViewController {
     private let events: AsyncStream<JSONValue>
     private let insertReference: @MainActor (String) -> Void
     private let addReference: @MainActor (MessageAttachment) -> Void
-    private let refreshWorkspaces: @MainActor () async throws -> Void
+    private let agentBusy: @MainActor () -> Bool
+    private let sendToAgent: @MainActor (String) async throws -> Bool
+    private let openWorktree: @MainActor (String) async throws -> Void
+    /// Connection latency shown in terminal headers (desktop WorkbenchPanel chip).
+    private var latencyText = String(localized: "检测中")
     private var eventTask: Task<Void, Never>?
     private var tabs: [WorkbenchTab] = []
     private var selected: String?
@@ -61,7 +65,7 @@ final class WorkbenchViewController: UIViewController {
     private let tabScroll = UIScrollView()
     private let content = UIView()
     private let notice = UILabel()
-    private let empty = Theme.label("暂无打开的标签", style: .subheadline, color: .secondaryLabel)
+    private let empty = Theme.label(String(localized: "暂无打开的标签"), style: .subheadline, color: .secondaryLabel)
     private(set) var sharingScope: SharingScope = .conversation
 
     init(
@@ -69,7 +73,9 @@ final class WorkbenchViewController: UIViewController {
         command: @escaping @MainActor (String, JSONValue, TimeInterval) async throws -> JSONValue,
         events: AsyncStream<JSONValue>, insertReference: @escaping @MainActor (String) -> Void,
         addReference: @escaping @MainActor (MessageAttachment) -> Void,
-        refreshWorkspaces: @escaping @MainActor () async throws -> Void
+        agentBusy: @escaping @MainActor () -> Bool,
+        sendToAgent: @escaping @MainActor (String) async throws -> Bool,
+        openWorktree: @escaping @MainActor (String) async throws -> Void
     ) {
         self.connection = connection
         self.workspace = workspace
@@ -78,11 +84,13 @@ final class WorkbenchViewController: UIViewController {
         self.events = events
         self.insertReference = insertReference
         self.addReference = addReference
-        self.refreshWorkspaces = refreshWorkspaces
+        self.agentBusy = agentBusy
+        self.sendToAgent = sendToAgent
+        self.openWorktree = openWorktree
         super.init(nibName: nil, bundle: nil)
         sharingScope =
             SharingScope(rawValue: UserDefaults.standard.string(forKey: preferenceKey) ?? "") ?? .conversation
-        title = "操作台"
+        title = String(localized: "操作台")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit { eventTask?.cancel() }
@@ -95,20 +103,28 @@ final class WorkbenchViewController: UIViewController {
         ].map { Data($0.utf8).base64EncodedString() }.joined(separator: ".")
     }
     private var preferenceKey: String { "workbenchSharing" }
-    private var layoutKey: String {
-        "todex.workbench.layout.v1.\(identity).\(sharingScope.rawValue)."
+    /// Persistence scope shared by workbench state (tabs, sidebar), keyed by the
+    /// 工作台共享方式 setting: per conversation or per workspace.
+    private var stateScope: String {
+        "\(identity).\(sharingScope.rawValue)."
             + (sharingScope == .conversation ? Data(conversationId.utf8).base64EncodedString() : "shared")
+    }
+    private var layoutKey: String { "todex.workbench.layout.v1.\(stateScope)" }
+    /// Sidebar collapsed flag remembered under the same scope as the workbench layout.
+    var sidebarCollapsed: Bool {
+        get { UserDefaults.standard.bool(forKey: "todex.workbench.sidebarCollapsed.v1.\(stateScope)") }
+        set { UserDefaults.standard.set(newValue, forKey: "todex.workbench.sidebarCollapsed.v1.\(stateScope)") }
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
         let add = Theme.iconButton("plus")
-        add.accessibilityLabel = "新标签"
+        add.accessibilityLabel = String(localized: "新标签")
         add.addAction(
             UIAction { [weak self] _ in self?.showAddMenu() }, for: .primaryActionTriggered)
         let more = Theme.iconButton("ellipsis", pointSize: 11)
-        more.accessibilityLabel = "工作台选项"
+        more.accessibilityLabel = String(localized: "工作台选项")
         more.showsMenuAsPrimaryAction = true
         more.menu = UIMenu(children: [
             UIDeferredMenuElement.uncached { [weak self] provide in
@@ -161,7 +177,7 @@ final class WorkbenchViewController: UIViewController {
                 self?.receive(event)
             }
             guard !Task.isCancelled else { return }
-            self?.markStreamGap("实时事件流已结束；终端输出可能缺失。重新连接后经「终端选项」核对 PTY。")
+            self?.markStreamGap(String(localized: "实时事件流已结束；终端输出可能缺失。重新连接后经「终端选项」核对 PTY。"))
         }
         NotificationCenter.default.addObserver(
             self, selector: #selector(becameActive), name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -190,9 +206,23 @@ final class WorkbenchViewController: UIViewController {
             var ids = Set<String>()
             tabs = layout.tabs.filter { !$0.id.isEmpty && ids.insert($0.id).inserted }.prefix(20).map { $0 }
             selected = layout.selected
+            // Layouts written before URL scrubbing may still hold query tokens.
+            if tabs.contains(where: { $0.url != nil && $0.url != $0.url.flatMap(Self.persistableURL) }) { save() }
         } else {
-            tabs = [WorkbenchTab(kind: .files, title: "文件", path: workspace.path)]
+            tabs = [WorkbenchTab(kind: .files, title: String(localized: "文件"), path: workspace.path)]
             selected = tabs.first?.id
+        }
+        // A sharing-scope switch replaces the tab set: controllers of the old
+        // scope must stop receiving events and restarting PTYs they no longer show.
+        let kept = Set(tabs.map(\.id))
+        for (id, child) in controllers where !kept.contains(id) {
+            (child as? WorkbenchTerminalViewController)?.cancelAutoRestart()
+            if child !== sharedGit, child.parent === self {
+                child.willMove(toParent: nil)
+                child.view.removeFromSuperview()
+                child.removeFromParent()
+            }
+            controllers.removeValue(forKey: id)
         }
         for tab in tabs where tab.kind == .terminal { controller(for: tab).loadViewIfNeeded() }
         if !tabs.contains(where: { $0.id == selected }) { selected = tabs.first?.id }
@@ -200,8 +230,24 @@ final class WorkbenchViewController: UIViewController {
         showSelected()
     }
     private func save() {
-        guard let data = try? JSONEncoder().encode(Layout(tabs: tabs, selected: selected)) else { return }
+        let persisted = tabs.map { tab in
+            var tab = tab
+            tab.url = tab.url.flatMap(Self.persistableURL)
+            return tab
+        }
+        guard let data = try? JSONEncoder().encode(Layout(tabs: persisted, selected: selected)) else { return }
         UserDefaults.standard.set(data, forKey: layoutKey)
+    }
+    /// Desktop parity (workbenchLayout.ts safeTarget): keep only origin + path.
+    /// Query strings and fragments routinely carry tokens and must not reach
+    /// UserDefaults; the live tab keeps its full URL in memory.
+    private static func persistableURL(_ raw: String) -> String? {
+        guard var components = URLComponents(string: raw), components.host != nil else { return nil }
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        return components.string
     }
     private func select(_ id: String) {
         selected = id
@@ -248,7 +294,7 @@ final class WorkbenchViewController: UIViewController {
                 let close = UIButton(
                     configuration: closeConfig,
                     primaryAction: UIAction { [weak self] _ in self?.requestClose(tab.id) })
-                close.accessibilityLabel = "关闭 \(tab.title)"
+                close.accessibilityLabel = String(localized: "关闭 \(tab.title)")
                 cell.addArrangedSubview(close)
             }
             cell.widthAnchor.constraint(lessThanOrEqualToConstant: 190).isActive = true
@@ -295,14 +341,17 @@ final class WorkbenchViewController: UIViewController {
         switch tab.kind {
         case .terminal:
             child = WorkbenchTerminalViewController(
-                tab: tab, connection: connection, workspace: workspace, command: command, update: update)
+                tab: tab, connection: connection, workspace: workspace, command: command, latency: latencyText,
+                update: update)
         case .files:
             child = WorkbenchFilesViewController(
                 tab: tab, connection: connection, workspacePath: workspace.path,
                 insertReference: insertReference, addReference: addReference, update: update,
-                openFile: { [weak self] path in self?.addTab(.files, path: path) })
+                openFile: { [weak self] path in self?.addTab(.files, path: path) },
+                openInBrowser: { [weak self] path in self?.addTab(.browser, path: path) })
         case .browser:
-            child = WorkbenchBrowserViewController(tab: tab, connection: connection, update: update)
+            child = WorkbenchBrowserViewController(
+                tab: tab, connection: connection, insertReference: insertReference, update: update)
         case .git:
             child = git()
         }
@@ -315,26 +364,48 @@ final class WorkbenchViewController: UIViewController {
         if let sharedGit { return sharedGit }
         let controller = WorkbenchGitViewController(
             connection: connection, workspace: workspace, conversationId: conversationId,
-            command: command, insertReference: insertReference, refreshWorkspaces: refreshWorkspaces)
+            command: command, insertReference: insertReference, agentBusy: agentBusy, sendToAgent: sendToAgent,
+            openWorktree: openWorktree)
         controller.loadViewIfNeeded()
         sharedGit = controller
         return controller
     }
     func gitMenu(host: UIViewController) -> UIMenu { git().gitMenu(host: host) }
+    /// The shared Git surface, for header status polling by the conversation container.
+    var gitController: WorkbenchGitViewController { git() }
+    /// Pushes the connection latency label into every terminal header.
+    func updateLatency(_ text: String) {
+        guard text != latencyText else { return }
+        latencyText = text
+        controllers.values.compactMap { $0 as? WorkbenchTerminalViewController }.forEach { $0.setLatency(text) }
+    }
     private func addTab(_ kind: WorkbenchTab.Kind, path: String? = nil) {
         guard tabs.count < 20 else {
-            WBUI.message(on: self, title: "标签已满", text: "最多打开 20 个标签，请先关闭部分标签。")
+            WBUI.message(on: self, title: String(localized: "标签已满"), text: String(localized: "最多打开 20 个标签，请先关闭部分标签。"))
             return
         }
+        // Browser tabs opened with a path preview that workspace HTML file.
         let tab = WorkbenchTab(
             kind: kind, title: path.map { ($0 as NSString).lastPathComponent } ?? kind.title,
-            path: workspace.path, filePath: kind == .files ? path : nil,
+            path: workspace.path, filePath: [.files, .browser].contains(kind) ? path : nil,
             terminalId: kind == .terminal ? "terminal_\(UUID().uuidString)" : nil)
         tabs.append(tab)
         selected = tab.id
         renderTabs()
         showSelected()
         save()
+    }
+    /// Chat `/diff`: focus the Git tab (desktop openGitDiff), creating one if needed.
+    func openGit() {
+        loadViewIfNeeded()
+        if let tab = tabs.first(where: { $0.kind == .git }) {
+            selected = tab.id
+            renderTabs()
+            showSelected()
+            save()
+        } else {
+            addTab(.git)
+        }
     }
     func openFile(_ path: String) {
         loadViewIfNeeded()
@@ -349,7 +420,7 @@ final class WorkbenchViewController: UIViewController {
         }
     }
     private func showAddMenu() {
-        let sheet = UIAlertController(title: "新建标签", message: nil, preferredStyle: .actionSheet)
+        let sheet = UIAlertController(title: String(localized: "新建标签"), message: nil, preferredStyle: .actionSheet)
         for kind in WorkbenchTab.Kind.allCases {
             sheet.addAction(UIAlertAction(title: kind.title, style: .default) { [weak self] _ in self?.addTab(kind) })
         }
@@ -358,19 +429,19 @@ final class WorkbenchViewController: UIViewController {
     private func optionsMenuElements() -> [UIMenuElement] {
         var elements: [UIMenuElement] = [
             UIMenu(
-                title: "共享范围", options: .displayInline,
+                title: String(localized: "共享范围"), options: .displayInline,
                 children: [
-                    UIAction(title: "当前对话", state: sharingScope == .conversation ? .on : .off) {
+                    UIAction(title: String(localized: "当前对话"), state: sharingScope == .conversation ? .on : .off) {
                         [weak self] _ in self?.setSharingScope(.conversation)
                     },
-                    UIAction(title: "工作区共享", state: sharingScope == .workspace ? .on : .off) {
+                    UIAction(title: String(localized: "工作区共享"), state: sharingScope == .workspace ? .on : .off) {
                         [weak self] _ in self?.setSharingScope(.workspace)
                     },
                 ])
         ]
         if selected != nil {
             elements.append(
-                UIAction(title: "关闭当前标签", image: Theme.icon("xmark", pointSize: 13)) {
+                UIAction(title: String(localized: "关闭当前标签"), image: Theme.icon("xmark", pointSize: 13)) {
                     [weak self] _ in
                     guard let self, let selected = self.selected else { return }
                     self.requestClose(selected)
@@ -381,18 +452,19 @@ final class WorkbenchViewController: UIViewController {
     private func requestClose(_ id: String) {
         guard tabs.contains(where: { $0.id == id }) else { return }
         if let file = controllers[id] as? WorkbenchFilesViewController, file.isSaving {
-            WBUI.message(on: self, title: "保存进行中", text: "请等待保存结果后关闭标签。")
+            WBUI.message(on: self, title: String(localized: "保存进行中"), text: String(localized: "请等待保存结果后关闭标签。"))
             return
         }
         if let git = controllers[id] as? WorkbenchGitViewController, git.hasUnresolvedOperation {
-            WBUI.message(on: self, title: "Git 操作仍需核对", text: "请等待操作结束；结果未知时先核对实际状态并解除写保护，再关闭此标签。")
+            WBUI.message(on: self, title: String(localized: "Git 操作仍需核对"), text: String(localized: "请等待操作结束；结果未知时先核对实际状态并解除写保护，再关闭此标签。"))
             return
         }
         let remove: @MainActor () -> Void = { [weak self] in
             guard let self else { return }
             let removedIndex = self.tabs.firstIndex { $0.id == id } ?? 0
             self.tabs.removeAll { $0.id == id }
-            self.controllers.removeValue(forKey: id)
+            // Closing the tab ends auto-restart even when the PTY is kept.
+            (self.controllers.removeValue(forKey: id) as? WorkbenchTerminalViewController)?.cancelAutoRestart()
             if self.selected == id {
                 self.selected =
                     removedIndex < self.tabs.count ? self.tabs[removedIndex].id : self.tabs.last?.id
@@ -402,9 +474,9 @@ final class WorkbenchViewController: UIViewController {
             self.save()
         }
         if let terminal = controllers[id] as? WorkbenchTerminalViewController {
-            let sheet = UIAlertController(title: "关闭终端标签", message: "离开标签不会自动结束后端 PTY。", preferredStyle: .actionSheet)
+            let sheet = UIAlertController(title: String(localized: "关闭终端标签"), message: String(localized: "离开标签不会自动结束后端 PTY。"), preferredStyle: .actionSheet)
             sheet.addAction(
-                UIAlertAction(title: "停止 PTY 并关闭", style: .destructive) { [weak self, weak terminal] _ in
+                UIAlertAction(title: String(localized: "停止 PTY 并关闭"), style: .destructive) { [weak self, weak terminal] _ in
                     Task { @MainActor in
                         do {
                             try await terminal?.stop()
@@ -412,10 +484,10 @@ final class WorkbenchViewController: UIViewController {
                         } catch { if let self { WBUI.error(error, on: self) } }
                     }
                 })
-            sheet.addAction(UIAlertAction(title: "保留 PTY，仅关闭标签", style: .default) { _ in remove() })
+            sheet.addAction(UIAlertAction(title: String(localized: "保留 PTY，仅关闭标签"), style: .default) { _ in remove() })
             WBUI.presentSheet(sheet, on: self)
         } else if let file = controllers[id] as? WorkbenchFilesViewController, file.hasUnsavedChanges {
-            WBUI.confirm(on: self, title: "放弃未保存编辑？", message: "关闭标签会丢失当前文件的本地编辑。", action: "放弃并关闭", perform: remove)
+            WBUI.confirm(on: self, title: String(localized: "放弃未保存编辑？"), message: String(localized: "关闭标签会丢失当前文件的本地编辑。"), action: String(localized: "放弃并关闭"), perform: remove)
         } else {
             remove()
         }
@@ -427,7 +499,7 @@ final class WorkbenchViewController: UIViewController {
         if ["EVENT_STREAM_LAGGED", "EVENT_STREAM_CLOSED", "STREAM_LAGGED", "STREAM_CLOSED"].contains(code)
             || ["connection.disconnected", "connection.closed", "connection.gap"].contains(type)
         {
-            markStreamGap("实时连接中断或丢失事件；PTY 不支持历史重放，缺失输出无法补回。")
+            markStreamGap(String(localized: "实时连接中断或丢失事件；PTY 不支持历史重放，缺失输出无法补回。"))
         }
         if type == "connection.ready" {
             controllers.values.compactMap { $0 as? WorkbenchTerminalViewController }.forEach { $0.refreshStatus() }
@@ -445,9 +517,15 @@ final class WorkbenchViewController: UIViewController {
         notice.isHidden = false
         controllers.values.compactMap { $0 as? WorkbenchTerminalViewController }.forEach { $0.markGap(text) }
     }
-    @objc private func enteredBackground() { markStreamGap("应用进入后台；期间可能缺失终端输出。返回后将核对 PTY 状态。") }
+    @objc private func enteredBackground() {
+        markStreamGap(String(localized: "应用进入后台；期间可能缺失终端输出。返回后将核对 PTY 状态。"))
+        controllers.values.compactMap { $0 as? WorkbenchTerminalViewController }.forEach { $0.suspendAutoRestart() }
+    }
     @objc private func becameActive() {
-        controllers.values.compactMap { $0 as? WorkbenchTerminalViewController }.forEach { $0.refreshStatus() }
+        controllers.values.compactMap { $0 as? WorkbenchTerminalViewController }.forEach {
+            $0.resumeAutoRestart()
+            $0.refreshStatus()
+        }
     }
     @objc private func sharingChanged() {
         let scope = SharingScope(rawValue: UserDefaults.standard.string(forKey: preferenceKey) ?? "") ?? .conversation
@@ -468,7 +546,7 @@ extension WorkbenchViewController: UIContextMenuInteractionDelegate {
         return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
             guard let self else { return nil }
             return UIMenu(children: [
-                UIAction(title: "关闭标签", image: UIImage(systemName: "xmark")) { _ in
+                UIAction(title: String(localized: "关闭标签"), image: UIImage(systemName: "xmark")) { _ in
                     self.requestClose(id)
                 }
             ])
@@ -554,30 +632,30 @@ enum WBUI {
     }
     static func message(on host: UIViewController, title: String, text: String) {
         let alert = UIAlertController(title: title, message: text, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "知道了", style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "知道了"), style: .cancel))
         presentModal(alert, on: host)
     }
     static func error(_ error: any Error, on host: UIViewController) {
-        message(on: host, title: "操作未完成", text: error.localizedDescription)
+        message(on: host, title: String(localized: "操作未完成"), text: error.localizedDescription)
     }
     static func confirm(
-        on host: UIViewController, title: String, message: String, action: String = "确认",
+        on host: UIViewController, title: String, message: String, action: String = String(localized: "确认"),
         perform: @escaping @MainActor () -> Void
     ) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
         alert.addAction(UIAlertAction(title: action, style: .destructive) { _ in perform() })
         presentModal(alert, on: host)
     }
     static func presentSheet(_ sheet: UIAlertController, on host: UIViewController) {
-        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
+        sheet.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
         sheet.popoverPresentationController?.sourceView = host.view
         sheet.popoverPresentationController?.sourceRect = CGRect(x: host.view.bounds.midX, y: 44, width: 1, height: 1)
         presentModal(sheet, on: host)
     }
     static func form(
         on host: UIViewController, title: String, message: String? = nil, fields: [(String, String)],
-        submit: String = "继续", action: @escaping @MainActor ([String]) -> Void
+        submit: String = String(localized: "继续"), action: @escaping @MainActor ([String]) -> Void
     ) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         fields.forEach { label, value in
@@ -589,7 +667,7 @@ enum WBUI {
                 $0.autocorrectionType = .no
             }
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
         alert.addAction(
             UIAlertAction(title: submit, style: .default) { [weak alert] _ in
                 action(alert?.textFields?.map { $0.text ?? "" } ?? [])

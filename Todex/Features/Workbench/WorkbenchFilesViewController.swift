@@ -14,6 +14,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     private let addReference: @MainActor (MessageAttachment) -> Void
     private let update: @MainActor (WorkbenchTab) -> Void
     private let openFileTab: @MainActor (String) -> Void
+    private let openInBrowser: @MainActor (String) -> Void
     private let table = UITableView(frame: .zero, style: .insetGrouped)
     private let search = UISearchBar()
     private let info = UILabel()
@@ -23,7 +24,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     private var markdownView: WKWebView?
     private var markdownLoaded = false
     private var markdownPending: String?
-    private let modes = UISegmentedControl(items: ["预览", "源码"])
+    private let modes = UISegmentedControl(items: [String(localized: "预览"), String(localized: "源码")])
     private var searchActive = false
     private var entries: [JSONValue] = []
     private var parentPath: String?
@@ -43,7 +44,8 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         insertReference: @escaping @MainActor (String) -> Void,
         addReference: @escaping @MainActor (MessageAttachment) -> Void,
         update: @escaping @MainActor (WorkbenchTab) -> Void,
-        openFile: @escaping @MainActor (String) -> Void
+        openFile: @escaping @MainActor (String) -> Void,
+        openInBrowser: @escaping @MainActor (String) -> Void
     ) {
         self.descriptor = descriptor
         self.http = HTTPClient(connection: connection)
@@ -52,6 +54,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         self.addReference = addReference
         self.update = update
         self.openFileTab = openFile
+        self.openInBrowser = openInBrowser
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -67,7 +70,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         table.dataSource = self
         table.delegate = self
         table.keyboardDismissMode = .onDrag
-        search.placeholder = "搜索相对路径（含隐藏文件时输入 .）"
+        search.placeholder = String(localized: "搜索相对路径（含隐藏文件时输入 .）")
         search.delegate = self
         search.autocapitalizationType = .none
         search.autocorrectionType = .no
@@ -96,10 +99,10 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         modes.selectedSegmentIndex = 0
         modes.addTarget(self, action: #selector(modeChanged), for: .valueChanged)
         let back = Theme.iconButton("chevron.left")
-        back.accessibilityLabel = "返回"
+        back.accessibilityLabel = String(localized: "返回")
         back.addAction(UIAction { [weak self] _ in self?.back() }, for: .primaryActionTriggered)
         let more = Theme.iconButton("ellipsis", pointSize: 11)
-        more.accessibilityLabel = "文件选项"
+        more.accessibilityLabel = String(localized: "文件选项")
         more.showsMenuAsPrimaryAction = true
         more.menu = UIMenu(children: [
             UIDeferredMenuElement.uncached { [weak self] provide in
@@ -134,33 +137,39 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         if descriptor.filePath != nil {
             elements.append(
                 UIAction(
-                    title: "编辑", image: Theme.icon("pencil", pointSize: 13),
+                    title: String(localized: "编辑"), image: Theme.icon("pencil", pointSize: 13),
                     attributes: originalText != nil && !editingText ? [] : .disabled
                 ) { [weak self] _ in self?.beginEditing() })
             elements.append(
                 UIAction(
-                    title: "保存", image: Theme.icon("square.and.arrow.down", pointSize: 13),
+                    title: String(localized: "保存"), image: Theme.icon("square.and.arrow.down", pointSize: 13),
                     attributes: hasUnsavedChanges && !isSaving ? [] : .disabled
                 ) { [weak self] _ in self?.saveFile() })
         } else {
             elements.append(
-                UIAction(title: "搜索…", image: Theme.icon("magnifyingglass", pointSize: 13)) {
+                UIAction(title: String(localized: "搜索…"), image: Theme.icon("magnifyingglass", pointSize: 13)) {
                     [weak self] _ in
                     self?.showSearch()
                 })
         }
+        if let path = descriptor.filePath, Self.isWebPage(path) {
+            elements.append(
+                UIAction(title: String(localized: "在网页中预览"), image: Theme.icon("globe", pointSize: 13)) {
+                    [weak self] _ in self?.openInBrowser(path)
+                })
+        }
         elements.append(
-            UIAction(title: "引用", image: Theme.icon("at", pointSize: 13)) {
+            UIAction(title: String(localized: "引用"), image: Theme.icon("at", pointSize: 13)) {
                 [weak self] _ in self?.referenceCurrent()
             })
         elements.append(
             UIMenu(
                 title: "", options: .displayInline,
                 children: [
-                    UIAction(title: "目录浏览", image: Theme.icon("folder", pointSize: 13)) {
+                    UIAction(title: String(localized: "目录浏览"), image: Theme.icon("folder", pointSize: 13)) {
                         [weak self] _ in self?.chooseDirectoryMode()
                     },
-                    UIAction(title: "刷新", image: Theme.icon("arrow.clockwise", pointSize: 13)) {
+                    UIAction(title: String(localized: "刷新"), image: Theme.icon("arrow.clockwise", pointSize: 13)) {
                         [weak self] _ in
                         guard let self else { return }
                         self.discardIfNeeded { [weak self] in
@@ -174,6 +183,10 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
                     },
                 ]))
         return elements
+    }
+    /// Desktop routes these workspace files to a browser tab (helpers.ts browser-file).
+    private static func isWebPage(_ path: String) -> Bool {
+        ["html", "htm", "xhtml"].contains((path as NSString).pathExtension.lowercased())
     }
     private func showSearch() {
         searchActive = true
@@ -203,7 +216,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         showFileUI(false)
         let path = descriptor.path
         let query = search.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        info.text = "正在读取 \(path)…"
+        info.text = String(localized: "正在读取 \(path)…")
         descriptor.title = (path as NSString).lastPathComponent
         update(descriptor)
         task = Task { [weak self] in
@@ -216,17 +229,17 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
                 let (dir, items) = try await (directory, listing)
                 guard self.revision == currentRevision, !Task.isCancelled else { return }
                 guard case .array = dir["entries"], case .array = items["entries"] else {
-                    throw TodexError.invalid("目录响应缺少 entries")
+                    throw TodexError.invalid(String(localized: "目录响应缺少 entries"))
                 }
                 self.parentPath = dir["parent"].optionalString
                 self.entries = self.directoriesOnly ? dir["entries"].arrayValue : items["entries"].arrayValue
                 let limit = self.directoriesOnly ? 300 : 100
                 self.info.text =
-                    "\(path)\n\(self.entries.count) 项" + (self.entries.count >= limit ? " · 达到后端上限，请搜索更具体的路径" : "")
+                    String(localized: "\(path)\n\(self.entries.count) 项") + (self.entries.count >= limit ? String(localized: " · 达到后端上限，请搜索更具体的路径") : "")
                 self.table.reloadData()
             } catch {
                 guard self.revision == currentRevision, !Task.isCancelled else { return }
-                self.info.text = "读取失败：\(error.localizedDescription)"
+                self.info.text = String(localized: "读取失败：\(error.localizedDescription)")
             }
         }
     }
@@ -249,14 +262,14 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         markdownPending = nil
         editor.isHidden = false
         showFileUI(true)
-        info.text = "正在读取 \(path)…"
+        info.text = String(localized: "正在读取 \(path)…")
         task = Task { [weak self] in
             guard let self else { return }
             do {
                 let value = try await self.http.request(.get, path: "/v2/workspace/file", query: ["path": path])
                 guard self.revision == currentRevision, !Task.isCancelled else { return }
                 guard value["path"].optionalString != nil, value["mimeType"].optionalString != nil else {
-                    throw TodexError.invalid("文件响应无效")
+                    throw TodexError.invalid(String(localized: "文件响应无效"))
                 }
                 self.file = value
                 self.originalText = value["text"].optionalString
@@ -268,7 +281,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
                 self.showFileUI(true)
             } catch {
                 guard self.revision == currentRevision, !Task.isCancelled else { return }
-                self.info.text = "预览失败：\(error.localizedDescription)"
+                self.info.text = String(localized: "预览失败：\(error.localizedDescription)")
             }
         }
     }
@@ -299,7 +312,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             imageView.isHidden = false
             editor.isHidden = true
         } else {
-            editor.text = "此格式没有可用的文本或原生图片预览。后端未提供可编辑文本。"
+            editor.text = String(localized: "此格式没有可用的文本或原生图片预览。后端未提供可编辑文本。")
         }
     }
     /// Preview mode shows plain text first, then swaps in the highlighted
@@ -329,6 +342,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             let config = WKWebViewConfiguration()
             config.websiteDataStore = .nonPersistent()
             config.userContentController.add(WeakMarkdownHandler(self), name: "chat")
+            config.userContentController.addUserScript(ChatWebStrings.userScript())
             let web = WKWebView(frame: .zero, configuration: config)
             web.isOpaque = false
             web.backgroundColor = Theme.background
@@ -391,7 +405,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             }
         case "copy":
             UIPasteboard.general.string = body["text"]
-            UIAccessibility.post(notification: .announcement, argument: "已复制")
+            UIAccessibility.post(notification: .announcement, argument: String(localized: "已复制"))
         case "link":
             openMarkdownLink(body["url"] ?? "")
         default: break
@@ -425,12 +439,12 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         guard !isSaving, hasUnsavedChanges, let path = descriptor.filePath, let expected = originalText else { return }
         let text = editor.text ?? ""
         guard text.utf8.count <= 1024 * 1024 else {
-            WBUI.message(on: self, title: "文件过大", text: "文本编辑上限为 1 MiB。")
+            WBUI.message(on: self, title: String(localized: "文件过大"), text: String(localized: "文本编辑上限为 1 MiB。"))
             return
         }
         isSaving = true
         editor.isEditable = false
-        info.text = "保存中…"
+        info.text = String(localized: "保存中…")
         saveTask = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -442,25 +456,25 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
                 let result = try await self.http.request(
                     .put, path: "/v2/workspace/file",
                     body: ["path": .string(path), "text": .string(text), "expectedText": .string(expected)])
-                guard result["saved"] == .bool(true) else { throw TodexError.unknownOutcome("后端没有确认文件保存") }
+                guard result["saved"] == .bool(true) else { throw TodexError.unknownOutcome(String(localized: "后端没有确认文件保存")) }
                 self.originalText = text
                 self.file?["text"] = .string(text)
-                self.info.text = "已保存 · \(path)"
+                self.info.text = String(localized: "已保存 · \(path)")
             } catch TodexError.server(let code, let message) where code == "CONFLICT" || code == "409" {
-                self.info.text = "保存冲突 · 本地编辑已保留"
+                self.info.text = String(localized: "保存冲突 · 本地编辑已保留")
                 self.offerConflict(path: path, message: message)
             } catch {
-                self.info.text = "保存未确认 · 本地编辑已保留"
+                self.info.text = String(localized: "保存未确认 · 本地编辑已保留")
                 WBUI.error(error, on: self)
             }
         }
     }
     private func offerConflict(path: String, message: String) {
         let alert = UIAlertController(
-            title: "文件已被修改", message: message + "\n读取最新版本后可手动合并；不会覆盖远端。", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "保留编辑", style: .cancel))
+            title: String(localized: "文件已被修改"), message: message + String(localized: "\n读取最新版本后可手动合并；不会覆盖远端。"), preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "保留编辑"), style: .cancel))
         alert.addAction(
-            UIAlertAction(title: "比较并合并", style: .default) { [weak self] _ in self?.mergeConflict(path: path) })
+            UIAlertAction(title: String(localized: "比较并合并"), style: .default) { [weak self] _ in self?.mergeConflict(path: path) })
         WBUI.presentModal(alert, on: self)
     }
     private func mergeConflict(path: String) {
@@ -469,28 +483,28 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             do {
                 let latest = try await self.http.request(.get, path: "/v2/workspace/file", query: ["path": path])
                 guard self.descriptor.filePath == path, let remote = latest["text"].optionalString else {
-                    throw TodexError.invalid("最新文件不再是可编辑文本")
+                    throw TodexError.invalid(String(localized: "最新文件不再是可编辑文本"))
                 }
                 let local = self.editor.text ?? ""
                 let merged = "<<<<<<< 本地编辑\n\(local)\n=======\n\(remote)\n>>>>>>> 远端最新版本"
                 WBUI.textSheet(
-                    on: self, title: "手动合并（删除冲突标记）", text: merged, editable: true,
+                    on: self, title: String(localized: "手动合并（删除冲突标记）"), text: merged, editable: true,
                     actions: [
                         (
-                            "采用合并结果，稍后保存",
-                            { [weak self] text in
+                            String(localized: "采用合并结果，稍后保存"),
+                            { @MainActor [weak self] text in
                                 guard let self, self.descriptor.filePath == path else { return }
                                 guard !text.contains("<<<<<<< 本地编辑"), !text.contains(">>>>>>> 远端最新版本"),
                                     !text.components(separatedBy: "\n").contains("=======")
                                 else {
-                                    WBUI.message(on: self, title: "仍有冲突标记", text: "未采用该版本；原本地编辑仍保留，请再次保存并完成合并。")
+                                    WBUI.message(on: self, title: String(localized: "仍有冲突标记"), text: String(localized: "未采用该版本；原本地编辑仍保留，请再次保存并完成合并。"))
                                     return
                                 }
                                 self.originalText = remote
                                 self.editor.text = text
                                 self.editingText = true
                                 self.file = latest
-                                self.info.text = "合并结果尚未保存；保存时仍会校验远端版本。"
+                                self.info.text = String(localized: "合并结果尚未保存；保存时仍会校验远端版本。")
                                 self.showFileUI(true)
                             }
                         )
@@ -504,7 +518,7 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
             addSelectionReference(editor.selectedRange)
         } else {
             insertReference("@\(path)")
-            info.text = "已插入引用到对话草稿 · \(path)"
+            info.text = String(localized: "已插入引用到对话草稿 · \(path)")
         }
     }
     private func addSelectionReference(_ selectedRange: NSRange) {
@@ -526,17 +540,17 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         let name =
             reference.lineStart.map {
                 "\(baseName):\($0)\(reference.lineEnd != $0 ? "-\(reference.lineEnd ?? $0)" : "")"
-            } ?? "\(baseName) 摘录"
+            } ?? String(localized: "\(baseName) 摘录")
         addReference(
             MessageAttachment(name: name, mimeType: "text/plain", data: Data(excerpt.utf8), reference: reference))
         editor.selectedRange = NSRange(location: selectedRange.location, length: 0)
-        info.text = "已添加引用到对话"
+        info.text = String(localized: "已添加引用到对话")
     }
     func textView(
         _ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]
     ) -> UIMenu? {
         guard textView === editor, descriptor.filePath != nil, range.length > 0 else { return nil }
-        let add = UIAction(title: "添加到对话", image: Theme.icon("text.quote", pointSize: 13)) {
+        let add = UIAction(title: String(localized: "添加到对话"), image: Theme.icon("text.quote", pointSize: 13)) {
             [weak self] _ in
             self?.addSelectionReference(range)
         }
@@ -544,11 +558,11 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
     }
     private func discardIfNeeded(_ action: @escaping @MainActor () -> Void) {
         guard !isSaving else {
-            WBUI.message(on: self, title: "保存进行中", text: "请等待后端确认。")
+            WBUI.message(on: self, title: String(localized: "保存进行中"), text: String(localized: "请等待后端确认。"))
             return
         }
         if hasUnsavedChanges {
-            WBUI.confirm(on: self, title: "放弃未保存编辑？", message: "本地编辑不会自动保存。", action: "放弃编辑", perform: action)
+            WBUI.confirm(on: self, title: String(localized: "放弃未保存编辑？"), message: String(localized: "本地编辑不会自动保存。"), action: String(localized: "放弃编辑"), perform: action)
         } else {
             action()
         }
@@ -567,9 +581,9 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         }
     }
     private func chooseDirectoryMode() {
-        let sheet = UIAlertController(title: "文件浏览", message: "每次只读取当前目录；搜索可查找其子目录文件。", preferredStyle: .actionSheet)
+        let sheet = UIAlertController(title: String(localized: "文件浏览"), message: String(localized: "每次只读取当前目录；搜索可查找其子目录文件。"), preferredStyle: .actionSheet)
         sheet.addAction(
-            UIAlertAction(title: "工作区目录（文件与文件夹）", style: .default) { [weak self] _ in
+            UIAlertAction(title: String(localized: "工作区目录（文件与文件夹）"), style: .default) { [weak self] _ in
                 self?.discardIfNeeded { [weak self] in
                     guard let self else { return }
                     self.descriptor.path = self.workspacePath
@@ -579,16 +593,16 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
                 }
             })
         sheet.addAction(
-            UIAlertAction(title: "仅浏览目录", style: .default) { [weak self] _ in
+            UIAlertAction(title: String(localized: "仅浏览目录"), style: .default) { [weak self] _ in
                 self?.discardIfNeeded { [weak self] in
                     self?.directoriesOnly = true
                     self?.loadDirectory()
                 }
             })
         sheet.addAction(
-            UIAlertAction(title: "输入后端文件绝对路径", style: .default) { [weak self] _ in
+            UIAlertAction(title: String(localized: "输入后端文件绝对路径"), style: .default) { [weak self] _ in
                 guard let self else { return }
-                WBUI.form(on: self, title: "打开文件", fields: [("绝对路径", "")]) { [weak self] values in
+                WBUI.form(on: self, title: String(localized: "打开文件"), fields: [(String(localized: "绝对路径"), "")]) { [weak self] values in
                     guard let self, let path = values.first, path.hasPrefix("/") else { return }
                     self.discardIfNeeded { [weak self] in self?.loadFile(path) }
                 }
@@ -640,13 +654,19 @@ final class WorkbenchFilesViewController: UIViewController, UITableViewDataSourc
         let path = absolutePath(entry)
         return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
             var actions = [
-                UIAction(title: "引用路径", image: UIImage(systemName: "at")) { _ in self?.insertReference("@\(path)") }
+                UIAction(title: String(localized: "引用路径"), image: UIImage(systemName: "at")) { _ in self?.insertReference("@\(path)") }
             ]
             if entry["kind"].stringValue == "file" {
                 actions.append(
-                    UIAction(title: "在新标签打开", image: UIImage(systemName: "plus.square.on.square")) { _ in
+                    UIAction(title: String(localized: "在新标签打开"), image: UIImage(systemName: "plus.square.on.square")) { _ in
                         self?.openFileTab(path)
                     })
+                if Self.isWebPage(path) {
+                    actions.append(
+                        UIAction(title: String(localized: "在网页中预览"), image: UIImage(systemName: "globe")) { _ in
+                            self?.openInBrowser(path)
+                        })
+                }
             }
             return UIMenu(children: actions)
         })
