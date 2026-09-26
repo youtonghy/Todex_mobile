@@ -9,6 +9,8 @@ final class SettingsViewController: SettingsListController {
     private let onSave: @MainActor ([BackendConnection], String?) -> Void
     private let onConnect: @MainActor (BackendConnection) -> Void
     private var connectionNotice = ""
+    private var sessionObserver: UUID?
+    private var connectionStateKey = ""
 
     init(
         connections: [BackendConnection], selectedID: String?, session: AppSession? = nil,
@@ -20,7 +22,7 @@ final class SettingsViewController: SettingsListController {
         self.selectedID = connections.contains(where: { $0.id == selectedID }) ? selectedID : connections.first?.id
         self.onSave = onSave
         self.onConnect = onConnect
-        super.init(title: "设置")
+        super.init(title: String(localized: "设置"))
     }
 
     override func viewDidLoad() {
@@ -37,7 +39,24 @@ final class SettingsViewController: SettingsListController {
                 }
             })
         navigationItem.rightBarButtonItem?.accessibilityIdentifier = "settings.done"
+        connectionStateKey = currentConnectionStateKey
+        sessionObserver = session?.observe { [weak self] in
+            // Only connection state is shown live; ignore streaming churn.
+            guard let self, currentConnectionStateKey != connectionStateKey else { return }
+            connectionStateKey = currentConnectionStateKey
+            render()
+        }
         render()
+    }
+
+    isolated deinit { if let sessionObserver { session?.removeObserver(sessionObserver) } }
+
+    private var currentConnectionStateKey: String {
+        guard let session else { return "" }
+        return [
+            session.connection?.id ?? "", session.status, session.lastError ?? "", "\(session.isConnected)",
+            session.lastConnectionError.map { String(describing: $0) } ?? "",
+        ].joined(separator: "|")
     }
 
     private var selected: BackendConnection? { connections.first { $0.id == selectedID } }
@@ -54,13 +73,13 @@ final class SettingsViewController: SettingsListController {
     private func render() {
         var backends = connections.map { connection in
             SettingsRow(
-                title: connection.name.isEmpty ? "未命名后端" : connection.name,
+                title: connection.name.isEmpty ? String(localized: "未命名后端") : connection.name,
                 detail: connection.serverURL.isEmpty
-                    ? "请填写后端地址"
+                    ? String(localized: "请填写后端地址")
                     : connection.tenantId.isEmpty
                         ? connection.serverURL : "\(connection.serverURL) · \(connection.tenantId)",
                 symbol: "circle.fill", id: "settings.backend.\(connection.id)",
-                color: Self.labelColor(connection.color), checked: connection.id == selectedID
+                color: Self.labelColor(connection.labelColor), checked: connection.id == selectedID
             ) { [weak self] in
                 self?.selectedID = connection.id
                 self?.connectionNotice = ""
@@ -69,37 +88,37 @@ final class SettingsViewController: SettingsListController {
             }
         }
         backends.append(
-            SettingsRow(title: "添加后端", symbol: "plus", id: "settings.backend.add", color: Theme.accent) { [weak self] in
+            SettingsRow(title: String(localized: "添加后端"), symbol: "plus", id: "settings.backend.add", color: Theme.accent) { [weak self] in
                 guard let self else { return }
-                let connection = BackendConnection(name: "新后端", serverURL: "")
+                let connection = BackendConnection(name: String(localized: "新后端"), serverURL: "")
                 connections.append(connection)
                 selectedID = connection.id
                 persist()
                 render()
                 edit(connection, field: "serverURL")
             })
-        sections = [SettingsSection(title: "后端连接", footer: "选择后端后可编辑配置；更改自动保存。", rows: backends)]
+        sections = [SettingsSection(title: String(localized: "后端连接"), footer: String(localized: "选择后端后可编辑配置；更改自动保存。"), rows: backends)]
         if let connection = selected {
             var rows: [SettingsRow] = [
-                field("名称", value: connection.name, key: "name", connection: connection),
+                field(String(localized: "名称"), value: connection.name, key: "name", connection: connection),
                 SettingsRow(
-                    title: "标签颜色", detail: Self.colors.first { $0.0 == connection.color }?.1 ?? connection.color,
-                    symbol: "circle.fill", id: "settings.backend.color", color: Self.labelColor(connection.color)
+                    title: String(localized: "标签颜色"), detail: Self.colors.first { $0.0 == connection.labelColor }?.1 ?? connection.labelColor,
+                    symbol: "circle.fill", id: "settings.backend.color", color: Self.labelColor(connection.labelColor)
                 ) { [weak self] in
-                    self?.choose(title: "标签颜色", choices: Self.colors, selected: connection.color) { [weak self] color in
+                    self?.choose(title: String(localized: "标签颜色"), choices: Self.colors, selected: connection.labelColor) { [weak self] color in
                         self?.update(connection.id) { $0.color = color }
                     }
                 },
-                field("后端地址", value: connection.serverURL, key: "serverURL", connection: connection),
+                field(String(localized: "后端地址"), value: connection.serverURL, key: "serverURL", connection: connection),
                 SettingsRow(
-                    title: "本机设备",
-                    detail: DeviceIdentity(secretKeyBase64URL: connection.deviceSecret)?.deviceID ?? "未验证",
+                    title: String(localized: "本机设备"),
+                    detail: DeviceIdentity(secretKeyBase64URL: connection.deviceSecret)?.deviceID ?? String(localized: "未验证"),
                     symbol: "iphone.gen3", id: "settings.backend.device"),
                 field("Tenant", value: connection.tenantId, key: "tenantId", connection: connection),
-                SettingsRow(title: "传输加密", detail: connection.encryption.rawValue, id: "settings.backend.encryption") {
+                SettingsRow(title: String(localized: "传输加密"), detail: connection.encryption.rawValue, id: "settings.backend.encryption") {
                     [weak self] in
                     self?.choose(
-                        title: "传输加密", choices: EncryptionProtocol.allCases.map { ($0.rawValue, $0.rawValue) },
+                        title: String(localized: "传输加密"), choices: EncryptionProtocol.allCases.map { ($0.rawValue, $0.rawValue) },
                         selected: connection.encryption.rawValue
                     ) { [weak self] value in
                         guard let encryption = EncryptionProtocol(rawValue: value) else { return }
@@ -110,28 +129,29 @@ final class SettingsViewController: SettingsListController {
             if connection.encryption != .none {
                 rows.append(
                     field(
-                        "加密公钥", value: connection.publicKey.isEmpty ? "未设置" : "已设置 · 点按编辑", key: "publicKey",
+                        String(localized: "加密公钥"), value: connection.publicKey.isEmpty ? String(localized: "未设置") : String(localized: "已设置 · 点按编辑"), key: "publicKey",
                         connection: connection))
             }
             rows.append(
-                SettingsRow(title: "配对与设备验证", detail: "JSON、二维码图片、相机扫码与分片二维码", symbol: "qrcode", id: "settings.pairing")
+                SettingsRow(title: String(localized: "配对与设备验证"), detail: String(localized: "JSON、二维码图片、相机扫码与分片二维码"), symbol: "qrcode", id: "settings.pairing")
                 { [weak self] in
                     self?.openPairing(connection)
                 })
             rows.append(
                 SettingsRow(
-                    title: "保存并连接", detail: connectionNotice, symbol: "network", id: "settings.backend.connect",
+                    title: String(localized: "保存并连接"), detail: connectionNotice, symbol: "network", id: "settings.backend.connect",
                     color: Theme.accent
                 ) { [weak self] in self?.connect(connection.id) })
+            if let row = connectionStatusRow(for: connection) { rows.append(row) }
             rows.append(
-                SettingsRow(title: "CLI 管理", detail: "读取此后端的 CLI 版本与升级进度", symbol: "terminal", id: "settings.cli") {
+                SettingsRow(title: String(localized: "CLI 管理"), detail: String(localized: "读取此后端的 CLI 版本与升级进度"), symbol: "terminal", id: "settings.cli") {
                     [weak self] in
                     self?.navigationController?.pushViewController(
                         CLIViewController(connection: connection), animated: true)
                 })
             rows.append(
                 SettingsRow(
-                    title: "Agent 账户", detail: "管理 Codex、Claude Code、Pi、OpenCode 的供应商与模型",
+                    title: String(localized: "Agent 账户"), detail: String(localized: "管理 Codex、Claude Code、Grok Build、Pi、OpenCode 的供应商与模型"),
                     symbol: "person.crop.circle.badge.switch", id: "settings.agentProviders"
                 ) { [weak self] in
                     self?.navigationController?.pushViewController(
@@ -139,25 +159,24 @@ final class SettingsViewController: SettingsListController {
                 })
             rows.append(
                 SettingsRow(
-                    title: "使用统计", detail: "所有已同步对话的 token 用量汇总", symbol: "chart.bar",
+                    title: String(localized: "使用统计"), detail: String(localized: "本机为此后端保存的最近 2000 条 token 用量，含已关闭的对话"), symbol: "chart.bar",
                     id: "settings.usage"
                 ) { [weak self] in
                     guard let self, let session = self.session else { return }
-                    let records = session.runtimes.values.flatMap(\.usageRecords)
                     self.navigationController?.pushViewController(
-                        UsageViewController(records: records), animated: true)
+                        UsageViewController(records: session.usageRecords, session: session), animated: true)
                 })
             rows.append(
-                SettingsRow(title: "关于", detail: "应用与后端版本", symbol: "info.circle", id: "settings.about") {
+                SettingsRow(title: String(localized: "关于"), detail: String(localized: "应用与后端版本、连接状态"), symbol: "info.circle", id: "settings.about") {
                     [weak self] in
                     guard let self else { return }
                     self.navigationController?.pushViewController(
                         AboutViewController(session: self.session, connection: connection), animated: true)
                 })
             rows.append(
-                SettingsRow(title: "删除此后端", symbol: "trash", id: "settings.backend.delete", color: .systemRed) {
+                SettingsRow(title: String(localized: "删除此后端"), symbol: "trash", id: "settings.backend.delete", color: .systemRed) {
                     [weak self] in
-                    self?.confirm(title: "删除后端？", message: "移除本机保存的“\(connection.name)”连接配置。", destructive: true) {
+                    self?.confirm(title: String(localized: "删除后端？"), message: String(localized: "移除本机保存的“\(connection.name)”连接配置。"), destructive: true) {
                         [weak self] in
                         guard let self else { return }
                         connections.removeAll { $0.id == connection.id }
@@ -167,20 +186,20 @@ final class SettingsViewController: SettingsListController {
                     }
                 })
             sections.append(
-                SettingsSection(title: "当前后端", footer: "Token 由主程序通过 Keychain 保存。传输加密启用时，连接还需要对应的公钥。", rows: rows))
+                SettingsSection(title: String(localized: "当前后端"), footer: String(localized: "Token 由主程序通过 Keychain 保存。传输加密启用时，连接还需要对应的公钥。"), rows: rows))
         }
         let appearance = UserDefaults.standard.string(forKey: "appearance") ?? "system"
         let sharing = UserDefaults.standard.string(forKey: "workbenchSharing") ?? "conversation"
         sections.append(
             SettingsSection(
-                title: "显示与工作台",
+                title: String(localized: "显示与工作台"),
                 rows: [
                     SettingsRow(
-                        title: "外观", detail: ["system": "跟随系统", "light": "浅色", "dark": "深色"][appearance] ?? "跟随系统",
+                        title: String(localized: "外观"), detail: ["system": String(localized: "跟随系统"), "light": String(localized: "浅色"), "dark": String(localized: "深色")][appearance] ?? String(localized: "跟随系统"),
                         symbol: "circle.lefthalf.filled", id: "settings.appearance"
                     ) { [weak self] in
                         self?.choose(
-                            title: "外观", choices: [("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")],
+                            title: String(localized: "外观"), choices: [("system", String(localized: "跟随系统")), ("light", String(localized: "浅色")), ("dark", String(localized: "深色"))],
                             selected: appearance
                         ) { [weak self] value in
                             UserDefaults.standard.set(value, forKey: "appearance")
@@ -190,12 +209,23 @@ final class SettingsViewController: SettingsListController {
                             self?.render()
                         }
                     },
+                    // Desktop offers 自动/中文/English/日本語/한국어 in-app; iOS keeps
+                    // the per-app language in system Settings, where this row leads.
                     SettingsRow(
-                        title: "工作台共享方式", detail: sharing == "workspace" ? "同一工作区共享终端、浏览器和文件标签" : "每个对话独立保存工作台",
+                        title: String(localized: "语言"),
+                        detail: Locale.current.localizedString(
+                            forIdentifier: Bundle.main.preferredLocalizations.first ?? "zh-Hans") ?? "",
+                        symbol: "globe", id: "settings.language"
+                    ) {
+                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                        UIApplication.shared.open(url)
+                    },
+                    SettingsRow(
+                        title: String(localized: "工作台共享方式"), detail: sharing == "workspace" ? String(localized: "同一工作区共享终端、浏览器和文件标签") : String(localized: "每个对话独立保存工作台"),
                         symbol: "rectangle.3.group", id: "settings.workbenchSharing"
                     ) { [weak self] in
                         self?.choose(
-                            title: "工作台共享方式", choices: [("conversation", "每个对话独立"), ("workspace", "同一工作区共享")],
+                            title: String(localized: "工作台共享方式"), choices: [("conversation", String(localized: "每个对话独立")), ("workspace", String(localized: "同一工作区共享"))],
                             selected: sharing
                         ) { [weak self] value in
                             UserDefaults.standard.set(value, forKey: "workbenchSharing")
@@ -208,11 +238,11 @@ final class SettingsViewController: SettingsListController {
         let notificationsEnabled = CompletionNotifications.isEnabled()
         sections.append(
             SettingsSection(
-                title: "通知",
-                footer: "任务正常完成并收到回复时发送系统通知；应用在前台时不提醒。",
+                title: String(localized: "通知"),
+                footer: String(localized: "任务正常完成并收到回复时发送系统通知；正在查看的对话不提醒。"),
                 rows: [
                     SettingsRow(
-                        title: "任务完成提醒", detail: notificationsEnabled ? "已开启" : "已关闭",
+                        title: String(localized: "任务完成提醒"), detail: notificationsEnabled ? String(localized: "已开启") : String(localized: "已关闭"),
                         symbol: "bell.badge", id: "settings.completionNotifications",
                         checked: notificationsEnabled
                     ) { [weak self] in
@@ -220,6 +250,35 @@ final class SettingsViewController: SettingsListController {
                     },
                 ]))
         redraw()
+    }
+
+    /// Live status of the session's backend with a categorized diagnostic
+    /// (TodeX_protocol connectionError parity) when the last attempt failed.
+    private func connectionStatusRow(for connection: BackendConnection) -> SettingsRow? {
+        guard let session, session.connection?.id == connection.id else { return nil }
+        guard !session.isConnected, !session.isConnecting, let error = session.lastConnectionError else {
+            let detail = [session.status, session.isConnected ? nil : session.lastError].compactMap { $0 }
+                .joined(separator: " · ")
+            return SettingsRow(
+                title: String(localized: "连接状态"), detail: detail, symbol: session.isConnected ? "checkmark.circle" : "circle.dashed",
+                id: "settings.backend.status", color: session.isConnected ? .systemGreen : .label)
+        }
+        let diagnostic = ConnectionDiagnostic.classify(error)
+        return SettingsRow(
+            title: diagnostic.title, detail: "\(session.status) · \(diagnostic.suggestion)",
+            symbol: "exclamationmark.triangle", id: "settings.backend.diagnostic",
+            color: diagnostic.retryable ? .systemOrange : .systemRed
+        ) { [weak self] in
+            let text = [
+                String(localized: "分类：\(diagnostic.title)"),
+                String(localized: "建议：\(diagnostic.suggestion)"),
+                String(localized: "自动重连：\(diagnostic.retryable ? String(localized: "会继续重试") : String(localized: "已停止，需要修正配置后重新连接"))"),
+                String(localized: "状态：\(session.status)"),
+                String(localized: "技术细节：\(diagnostic.technicalDetails)"),
+            ].joined(separator: "\n\n")
+            self?.navigationController?.pushViewController(
+                SettingsTextController(title: String(localized: "连接诊断"), text: text), animated: true)
+        }
     }
 
     private func setCompletionNotifications(_ enabled: Bool) {
@@ -239,11 +298,11 @@ final class SettingsViewController: SettingsListController {
 
     private func promptNotificationSettings() {
         let alert = UIAlertController(
-            title: "通知权限未开启",
-            message: "系统拒绝了 TodeX 的通知权限。请在系统设置中允许通知后再开启。",
+            title: String(localized: "通知权限未开启"),
+            message: String(localized: "系统拒绝了 TodeX 的通知权限。请在系统设置中允许通知后再开启。"),
             preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "打开系统设置", style: .default) { _ in
+        alert.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "打开系统设置"), style: .default) { _ in
             if let url = URL(string: UIApplication.openSettingsURLString) {
                 UIApplication.shared.open(url)
             }
@@ -252,7 +311,7 @@ final class SettingsViewController: SettingsListController {
     }
 
     private func field(_ title: String, value: String, key: String, connection: BackendConnection) -> SettingsRow {
-        SettingsRow(title: title, detail: value.isEmpty ? "未填写" : value, id: "settings.backend.\(key)") { [weak self] in
+        SettingsRow(title: title, detail: value.isEmpty ? String(localized: "未填写") : value, id: "settings.backend.\(key)") { [weak self] in
             self?.edit(connection, field: key)
         }
     }
@@ -260,7 +319,7 @@ final class SettingsViewController: SettingsListController {
     private func edit(_ connection: BackendConnection, field: String) {
         if field == "publicKey" {
             let editor = SettingsTextController(
-                title: "加密公钥", text: connection.publicKey, editable: true, actionTitle: "保存"
+                title: String(localized: "加密公钥"), text: connection.publicKey, editable: true, actionTitle: String(localized: "保存")
             ) { [weak self] text in
                 self?.update(connection.id) { $0.publicKey = text.trimmingCharacters(in: .whitespacesAndNewlines) }
                 self?.navigationController?.popViewController(animated: true)
@@ -276,9 +335,9 @@ final class SettingsViewController: SettingsListController {
             }
         let title =
             switch field {
-            case "name": "名称"
+            case "name": String(localized: "名称")
             case "tenantId": "Tenant"
-            default: "后端地址"
+            default: String(localized: "后端地址")
             }
         editField(
             title: title, value: value, id: "settings.backend.\(field).input", secure: false,
@@ -306,10 +365,10 @@ final class SettingsViewController: SettingsListController {
             if connection.encryption != .none
                 && connection.publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
-                throw TodexError.invalid("请填写加密公钥，或导入后端配对信息")
+                throw TodexError.invalid(String(localized: "请填写加密公钥，或导入后端配对信息"))
             }
             update(id) { $0 = connection }
-            connectionNotice = "已提交连接请求；连接状态将在工作区显示。"
+            connectionNotice = String(localized: "已提交连接请求；连接状态将在工作区显示。")
             render()
             onConnect(connection)
         } catch { showError(error) }
@@ -321,7 +380,7 @@ final class SettingsViewController: SettingsListController {
             guard let self, selectedID == connection.id,
                 let current = connections.first(where: { $0.id == connection.id }),
                 current.serverURL == expectedURL
-            else { throw TodexError.invalid("后端配置已改变，请重新打开配对页面") }
+            else { throw TodexError.invalid(String(localized: "后端配置已改变，请重新打开配对页面")) }
             update(connection.id) { $0 = updated }
             expectedURL = updated.serverURL
         } onApproved: { [weak self] in
@@ -330,17 +389,7 @@ final class SettingsViewController: SettingsListController {
         navigationController?.pushViewController(pairing, animated: true)
     }
 
-    private static let colors = [
-        ("#3b82f6", "蓝色"), ("#8b5cf6", "紫色"), ("#ec4899", "粉色"), ("#ef4444", "红色"), ("#f97316", "橙色"),
-        ("#eab308", "黄色"), ("#22c55e", "绿色"), ("#06b6d4", "青色"), ("teal", "青绿"),
-    ]
+    private static let colors = LabelPalette.colors
 
-    private static func labelColor(_ color: String) -> UIColor {
-        guard color.hasPrefix("#"), color.count == 7, let hex = UInt32(color.dropFirst(), radix: 16) else {
-            return Theme.accent
-        }
-        return UIColor(
-            red: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255,
-            blue: CGFloat(hex & 255) / 255, alpha: 1)
-    }
+    private static func labelColor(_ color: String) -> UIColor { UIColor(labelHex: color) ?? Theme.accent }
 }

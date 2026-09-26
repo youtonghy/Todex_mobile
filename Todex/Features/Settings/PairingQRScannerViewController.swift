@@ -34,7 +34,7 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
         self.onScan = onScan
         self.onReset = onReset
         super.init(nibName: nil, bundle: nil)
-        title = "扫描配对二维码"
+        title = String(localized: "扫描配对二维码")
     }
 
     @available(*, unavailable)
@@ -63,25 +63,25 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
             systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
         navigationItem.leftBarButtonItem?.accessibilityIdentifier = "pairing.scanner.close"
         navigationItem.rightBarButtonItem = UIBarButtonItem(
-            title: "重置分片",
+            title: String(localized: "重置分片"),
             primaryAction: UIAction { [weak self] _ in
                 guard let self else { return }
                 seen.removeAll()
                 onReset()
                 showProgress(received: 0, total: 0)
-                message.text = "已清空分片，请扫描同一批次二维码。"
+                message.text = String(localized: "已清空分片，请扫描同一批次二维码。")
             })
         navigationItem.rightBarButtonItem?.accessibilityIdentifier = "pairing.scanner.reset"
-        message.text = "正在准备相机…"
+        message.text = String(localized: "正在准备相机…")
         message.numberOfLines = 0
         message.font = .preferredFont(forTextStyle: .body)
         message.adjustsFontForContentSizeCategory = true
         message.textColor = .white
         message.textAlignment = .center
         message.accessibilityIdentifier = "pairing.scanner.status"
-        let retry = Theme.button("重试相机", icon: "arrow.clockwise") { [weak self] in self?.startCamera() }
+        let retry = Theme.button(String(localized: "重试相机"), icon: "arrow.clockwise") { [weak self] in self?.startCamera() }
         retry.accessibilityIdentifier = "pairing.scanner.retry"
-        let settings = Theme.button("相机权限设置", icon: "gear") {
+        let settings = Theme.button(String(localized: "相机权限设置"), icon: "gear") {
             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
         }
         settings.accessibilityIdentifier = "pairing.scanner.permissions"
@@ -164,11 +164,11 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
         guard visible, !finished, cameraTask == nil else { return }
         cameraGeneration += 1
         let current = cameraGeneration
-        message.text = "正在准备相机…"
+        message.text = String(localized: "正在准备相机…")
         cameraTask = Task { [weak self] in
             do {
                 guard Bundle.main.object(forInfoDictionaryKey: "NSCameraUsageDescription") as? String != nil else {
-                    throw TodexError.invalid("应用尚未配置相机权限说明，请使用二维码图片导入")
+                    throw TodexError.invalid(String(localized: "应用尚未配置相机权限说明，请使用二维码图片导入"))
                 }
                 let allowed: Bool
                 switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -177,11 +177,11 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
                 default: allowed = false
                 }
                 try Task.checkCancellation()
-                guard allowed else { throw TodexError.invalid("未获得相机权限。可前往系统设置允许访问，或返回使用照片导入。") }
+                guard allowed else { throw TodexError.invalid(String(localized: "未获得相机权限。可前往系统设置允许访问，或返回使用照片导入。")) }
                 guard let self, visible, cameraGeneration == current else { return }
                 try await capture.start(delegate: self)
                 guard !Task.isCancelled, visible, cameraGeneration == current else { return }
-                message.text = "将二维码放在画面中；分片二维码可连续扫描。"
+                message.text = String(localized: "将二维码放在画面中；分片二维码可连续扫描。")
                 message.textColor = .white
                 view.setNeedsLayout()
             } catch {
@@ -246,7 +246,7 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
                     capture.stop()
                     checkmark.isHidden = false
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
-                    UIAccessibility.post(notification: .announcement, argument: "扫描完成")
+                    UIAccessibility.post(notification: .announcement, argument: String(localized: "扫描完成"))
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
                         self?.dismiss(animated: true)
                     }
@@ -265,7 +265,7 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
         progressLabel.isHidden = !visible
         guard visible else { return }
         progressBar.progress = Float(received) / Float(total)
-        progressLabel.text = "已收到 \(received)/\(total) 分片"
+        progressLabel.text = String(localized: "已收到 \(received)/\(total) 分片")
     }
 
     /// Dimmed overlay with a transparent center square and corner brackets,
@@ -348,17 +348,17 @@ private nonisolated final class PairingCameraCapture: @unchecked Sendable {
                 forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil
             ) { notification in
                 let error = notification.userInfo?[AVCaptureSessionErrorKey] as? NSError
-                onIssue(error?.localizedDescription ?? "相机发生错误，请重试或使用照片导入。")
+                onIssue(error?.localizedDescription ?? String(localized: "相机发生错误，请重试或使用照片导入。"))
             },
             NotificationCenter.default.addObserver(
                 forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil
             ) { _ in
-                onIssue("相机已中断。请返回前台后重试，或使用照片导入。")
+                onIssue(String(localized: "相机已中断。请返回前台后重试，或使用照片导入。"))
             },
             NotificationCenter.default.addObserver(
                 forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: nil
             ) { _ in
-                onIssue("相机中断已结束，请继续扫码；若画面未恢复，可点按重试相机。")
+                onIssue(String(localized: "相机中断已结束，请继续扫码；若画面未恢复，可点按重试相机。"))
             },
         ]
     }
@@ -376,7 +376,7 @@ private nonisolated final class PairingCameraCapture: @unchecked Sendable {
                         configured = true
                     }
                     if !session.isRunning { session.startRunning() }
-                    guard session.isRunning else { throw TodexError.invalid("相机无法启动，请重试或使用照片导入") }
+                    guard session.isRunning else { throw TodexError.invalid(String(localized: "相机无法启动，请重试或使用照片导入")) }
                     continuation.resume()
                 } catch { continuation.resume(throwing: error) }
             }
@@ -388,7 +388,7 @@ private nonisolated final class PairingCameraCapture: @unchecked Sendable {
             let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
                 ?? AVCaptureDevice.default(for: .video)
         else {
-            throw TodexError.invalid("此设备没有可用相机，请使用二维码图片导入")
+            throw TodexError.invalid(String(localized: "此设备没有可用相机，请使用二维码图片导入"))
         }
         let input = try AVCaptureDeviceInput(device: device)
         let output = AVCaptureMetadataOutput()
@@ -397,11 +397,11 @@ private nonisolated final class PairingCameraCapture: @unchecked Sendable {
         // A failed configuration is retryable without accumulating duplicate inputs.
         for old in session.inputs { session.removeInput(old) }
         for old in session.outputs { session.removeOutput(old) }
-        guard session.canAddInput(input) else { throw TodexError.invalid("相机输入不可用") }
+        guard session.canAddInput(input) else { throw TodexError.invalid(String(localized: "相机输入不可用")) }
         session.addInput(input)
-        guard session.canAddOutput(output) else { throw TodexError.invalid("此相机不支持二维码识别") }
+        guard session.canAddOutput(output) else { throw TodexError.invalid(String(localized: "此相机不支持二维码识别")) }
         session.addOutput(output)
-        guard output.availableMetadataObjectTypes.contains(.qr) else { throw TodexError.invalid("此相机不支持二维码识别") }
+        guard output.availableMetadataObjectTypes.contains(.qr) else { throw TodexError.invalid(String(localized: "此相机不支持二维码识别")) }
         output.setMetadataObjectsDelegate(delegate, queue: .main)
         output.metadataObjectTypes = [.qr]
     }

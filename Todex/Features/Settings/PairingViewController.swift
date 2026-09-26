@@ -20,7 +20,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
     private var readingPhotos = false
     private var verificationCode: String?
     private var remainingSeconds = 0
-    private var status = "导入后端提供的配对信息，或申请设备验证。"
+    private var status = String(localized: "导入后端提供的配对信息，或申请设备验证。")
     private var failure: String?
 
     init(
@@ -31,7 +31,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
         self.connection = connection
         self.onApply = onApply
         self.onApproved = onApproved
-        super.init(title: "配对与设备验证")
+        super.init(title: String(localized: "配对与设备验证"))
     }
 
     override func viewDidLoad() {
@@ -54,28 +54,28 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                 title: connection.name,
                 rows: [
                     SettingsRow(
-                        title: connection.serverURL.isEmpty ? "尚未设置地址" : connection.serverURL, detail: status,
+                        title: connection.serverURL.isEmpty ? String(localized: "尚未设置地址") : connection.serverURL, detail: status,
                         id: "pairing.status")
                 ])
         ]
         if let failure {
             sections.append(
                 SettingsSection(
-                    title: "操作失败", rows: [SettingsRow(title: failure, id: "pairing.error", color: .systemRed)]))
+                    title: String(localized: "操作失败"), rows: [SettingsRow(title: failure, id: "pairing.error", color: .systemRed)]))
         }
         var importRows: [SettingsRow] = [
             SettingsRow(
-                title: "粘贴配对 JSON", symbol: "curlybraces", id: "pairing.json", enabled: !waiting && !readingPhotos
+                title: String(localized: "粘贴配对 JSON"), symbol: "curlybraces", id: "pairing.json", enabled: !waiting && !readingPhotos
             ) { [weak self] in self?.editJSON() },
             SettingsRow(
-                title: "从剪贴板导入", symbol: "doc.on.clipboard", id: "pairing.clipboard",
+                title: String(localized: "从剪贴板导入"), symbol: "doc.on.clipboard", id: "pairing.clipboard",
                 enabled: !waiting && !readingPhotos
             ) { [weak self] in
                 guard let self else { return }
                 do {
                     guard let raw = UIPasteboard.general.string,
                         !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    else { throw TodexError.invalid("剪贴板中没有配对文本") }
+                    else { throw TodexError.invalid(String(localized: "剪贴板中没有配对文本")) }
                     _ = try ingest(raw)
                 } catch {
                     failure = error.localizedDescription
@@ -83,57 +83,57 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                 }
             },
             SettingsRow(
-                title: readingPhotos ? "正在识别二维码图片…" : "从照片选择二维码", detail: "支持多张图片及分片二维码", symbol: "photo",
+                title: readingPhotos ? String(localized: "正在识别二维码图片…") : String(localized: "从照片选择二维码"), detail: String(localized: "支持多张图片及分片二维码"), symbol: "photo",
                 id: "pairing.photos", enabled: !waiting && !readingPhotos, activity: readingPhotos
             ) { [weak self] in self?.choosePhotos() },
             SettingsRow(
-                title: "相机扫码", detail: "连续扫描同一批次的全部分片", symbol: "qrcode.viewfinder", id: "pairing.camera",
+                title: String(localized: "相机扫码"), detail: String(localized: "连续扫描同一批次的全部分片"), symbol: "qrcode.viewfinder", id: "pairing.camera",
                 enabled: !waiting && !readingPhotos
             ) { [weak self] in self?.scan() },
         ]
         if importer.totalCount > 0 {
             importRows.append(
                 SettingsRow(
-                    title: "分片进度 \(importer.receivedCount)/\(importer.totalCount)", detail: "点按清空本批次后重新导入",
+                    title: String(localized: "分片进度 \(importer.receivedCount)/\(importer.totalCount)"), detail: String(localized: "点按清空本批次后重新导入"),
                     id: "pairing.fragments.reset", enabled: !readingPhotos
                 ) { [weak self] in
                     self?.resetFragments()
                 })
         }
-        sections.append(SettingsSection(title: "导入配对", footer: "分片可按任意顺序扫描；收齐同一批次后才会保存配对信息。", rows: importRows))
+        sections.append(SettingsSection(title: String(localized: "导入配对"), footer: String(localized: "分片可按任意顺序扫描；收齐同一批次后才会保存配对信息。"), rows: importRows))
         var deviceRows: [SettingsRow] = []
         if let verificationCode {
             deviceRows.append(
                 SettingsRow(
-                    title: verificationCode, detail: "在后端核对同一个随机码后批准此设备。剩余 \(remainingSeconds) 秒。",
+                    title: verificationCode, detail: String(localized: "在后端核对同一个随机码后批准此设备。剩余 \(remainingSeconds) 秒。"),
                     symbol: "checkmark.shield", id: "pairing.verificationCode"))
         }
         deviceRows.append(
             SettingsRow(
-                title: waiting ? "等待后端批准…" : "申请设备验证", symbol: "iphone.gen3", id: "pairing.device.begin",
+                title: waiting ? String(localized: "等待后端批准…") : String(localized: "申请设备验证"), symbol: "iphone.gen3", id: "pairing.device.begin",
                 enabled: !waiting && !readingPhotos, activity: waiting
             ) { [weak self] in self?.beginDevice() })
         if waiting {
             deviceRows.append(
-                SettingsRow(title: "取消验证", id: "pairing.device.cancel", color: .systemRed) { [weak self] in
+                SettingsRow(title: String(localized: "取消验证"), id: "pairing.device.cancel", color: .systemRed) { [weak self] in
                     self?.cancelDevice(silent: false)
                 })
         }
         sections.append(
-            SettingsSection(title: "设备验证", footer: "批准后此后端即信任本机设备密钥；传输加密公钥仍需从配对信息导入。", rows: deviceRows))
+            SettingsSection(title: String(localized: "设备验证"), footer: String(localized: "批准后此后端即信任本机设备密钥；传输加密公钥仍需从配对信息导入。"), rows: deviceRows))
         redraw()
     }
 
     @discardableResult
     private func ingest(_ raw: String) throws -> Bool {
-        guard !waiting else { throw TodexError.invalid("请先取消正在进行的设备验证") }
+        guard !waiting else { throw TodexError.invalid(String(localized: "请先取消正在进行的设备验证")) }
         let updated = try importer.ingest(raw.trimmingCharacters(in: .whitespacesAndNewlines), current: connection)
         if let updated {
             try onApply(updated)
             connection = updated
-            status = "配对信息已导入并保存。"
+            status = String(localized: "配对信息已导入并保存。")
         } else {
-            status = "已收到分片 \(importer.receivedCount)/\(importer.totalCount)，请继续导入本批次剩余分片。"
+            status = String(localized: "已收到分片 \(importer.receivedCount)/\(importer.totalCount)，请继续导入本批次剩余分片。")
         }
         failure = nil
         render()
@@ -148,13 +148,13 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
     private func resetFragments() {
         importer = PairingImporter()
         failure = nil
-        status = "已清空配对分片。"
+        status = String(localized: "已清空配对分片。")
         render()
     }
 
     private func editJSON() {
         let editor = SettingsTextController(
-            title: "配对 JSON", text: "", detail: "粘贴后端 TUI 提供的完整 JSON，或本批次的一个二维码分片。", editable: true, actionTitle: "导入"
+            title: String(localized: "配对 JSON"), text: "", detail: String(localized: "粘贴后端 TUI 提供的完整 JSON，或本批次的一个二维码分片。"), editable: true, actionTitle: String(localized: "导入")
         ) { [weak self] text in
             guard let self else { throw CancellationError() }
             _ = try ingest(text)
@@ -210,7 +210,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
 
     private static func imageData(_ provider: NSItemProvider) async throws -> Data {
         guard let type = provider.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .image) == true })
-        else { throw TodexError.invalid("所选项目不是图片") }
+        else { throw TodexError.invalid(String(localized: "所选项目不是图片")) }
         return try await withCheckedThrowingContinuation { continuation in
             provider.loadDataRepresentation(forTypeIdentifier: type) { data, error in
                 if let error {
@@ -218,7 +218,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                 } else if let data {
                     continuation.resume(returning: data)
                 } else {
-                    continuation.resume(throwing: TodexError.invalid("无法读取图片"))
+                    continuation.resume(throwing: TodexError.invalid(String(localized: "无法读取图片")))
                 }
             }
         }
@@ -259,7 +259,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
         waiting = true
         failure = nil
         verificationCode = nil
-        status = "正在向后端申请设备验证…"
+        status = String(localized: "正在向后端申请设备验证…")
         render()
         deviceTask = Task { [weak self] in
             do {
@@ -271,7 +271,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                 }
                 self.session = session
                 verificationCode = session.verificationCode
-                status = "等待后端批准，请核对随机码。"
+                status = String(localized: "等待后端批准，请核对随机码。")
                 let expiry = session.expiresAt
                 startExpiryClock(expiresAt: expiry, generation: current)
                 render()
@@ -284,7 +284,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                         return
                     }
                     guard Date().timeIntervalSince1970 * 1_000 < expiry else {
-                        finishDevice("申请已过期，请重新申请。", cancel: true)
+                        finishDevice(String(localized: "申请已过期，请重新申请。"), cancel: true)
                         return
                     }
                     switch result {
@@ -292,21 +292,21 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                     case .approved:
                         // The device key was already persisted before the
                         // request; approval only activates it on the backend.
-                        finishDevice("设备已批准，正在连接…", cancel: false)
+                        finishDevice(String(localized: "设备已批准，正在连接…"), cancel: false)
                         onApproved()
                         return
                     case .rejected:
-                        finishDevice("后端已拒绝申请，请核对后重新申请。", cancel: false)
+                        finishDevice(String(localized: "后端已拒绝申请，请核对后重新申请。"), cancel: false)
                         return
                     case .expired:
-                        finishDevice("申请已过期，请重新申请。", cancel: false)
+                        finishDevice(String(localized: "申请已过期，请重新申请。"), cancel: false)
                         return
                     }
                 }
             } catch {
                 guard let self, !Task.isCancelled, generation == current else { return }
                 failure = error.localizedDescription
-                finishDevice("设备验证失败，请重新申请。", cancel: true)
+                finishDevice(String(localized: "设备验证失败，请重新申请。"), cancel: true)
             }
         }
     }
@@ -320,7 +320,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                 guard let self, generation == current else { return }
                 remainingSeconds = max(0, Int(ceil((expiresAt - Date().timeIntervalSince1970 * 1_000) / 1_000)))
                 if remainingSeconds == 0 {
-                    finishDevice("申请已过期，请重新申请。", cancel: true)
+                    finishDevice(String(localized: "申请已过期，请重新申请。"), cancel: true)
                     return
                 }
                 render()
@@ -345,7 +345,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
 
     private func cancelDevice(silent: Bool) {
         guard waiting || session != nil else { return }
-        finishDevice(silent ? "验证已停止。" : "已取消本次设备验证。", cancel: true)
+        finishDevice(silent ? String(localized: "验证已停止。") : String(localized: "已取消本次设备验证。"), cancel: true)
     }
 }
 
@@ -362,13 +362,13 @@ private actor PairingImageReader {
                     kCGImageSourceCreateThumbnailWithTransform: true,
                     kCGImageSourceThumbnailMaxPixelSize: 4096,
                 ] as CFDictionary)
-        else { throw TodexError.invalid("无法读取图片，或图片超过 25 MiB") }
+        else { throw TodexError.invalid(String(localized: "无法读取图片，或图片超过 25 MiB")) }
         let request = VNDetectBarcodesRequest()
         request.symbologies = [.qr]
         try VNImageRequestHandler(cgImage: image).perform([request])
         try Task.checkCancellation()
         let values = request.results?.compactMap(\.payloadStringValue) ?? []
-        guard !values.isEmpty else { throw TodexError.invalid("图片中未识别到二维码，请选择更清晰的原图") }
+        guard !values.isEmpty else { throw TodexError.invalid(String(localized: "图片中未识别到二维码，请选择更清晰的原图")) }
         return values
     }
 }

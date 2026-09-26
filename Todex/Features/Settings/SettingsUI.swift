@@ -75,7 +75,7 @@ class SettingsListController: UITableViewController {
         if row.activity {
             let spinner = UIActivityIndicatorView(style: .medium)
             spinner.startAnimating()
-            spinner.accessibilityLabel = "正在处理"
+            spinner.accessibilityLabel = String(localized: "正在处理")
             cell.accessoryView = spinner
         }
         cell.selectionStyle = row.enabled && row.action != nil ? .default : .none
@@ -101,7 +101,7 @@ class SettingsListController: UITableViewController {
             alert.addAction(
                 UIAlertAction(title: key == selected ? "✓ \(label)" : label, style: .default) { _ in apply(key) })
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
         if let popover = alert.popoverPresentationController {
             popover.sourceView = view
             popover.sourceRect = CGRect(x: view.bounds.midX, y: view.safeAreaInsets.top + 22, width: 1, height: 1)
@@ -127,9 +127,9 @@ class SettingsListController: UITableViewController {
             field.accessibilityLabel = title
             field.clearButtonMode = .whileEditing
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
         alert.addAction(
-            UIAlertAction(title: "保存", style: .default) { [weak alert] _ in
+            UIAlertAction(title: String(localized: "保存"), style: .default) { [weak alert] _ in
                 apply(alert?.textFields?.first?.text ?? "")
             })
         present(alert, animated: true)
@@ -209,13 +209,13 @@ final class SettingsTextController: UIViewController {
         let text = textView.text ?? ""
         navigationItem.rightBarButtonItem?.isEnabled = false
         textView.isEditable = false
-        message.text = "正在处理…"
+        message.text = String(localized: "正在处理…")
         message.textColor = .secondaryLabel
         task = Task { [weak self] in
             do {
                 try await action(text)
                 try Task.checkCancellation()
-                self?.message.text = "已完成"
+                self?.message.text = String(localized: "已完成")
             } catch {
                 if !Task.isCancelled {
                     self?.message.text = error.localizedDescription
@@ -239,7 +239,7 @@ final class SettingsTextController: UIViewController {
 
 enum SettingsResponse {
     static func array(_ value: JSONValue, key: String) throws -> [JSONValue] {
-        guard case .array(let items) = value[key] else { throw TodexError.invalid("后端响应缺少 \(key) 数组，请检查后端版本") }
+        guard case .array(let items) = value[key] else { throw TodexError.invalid(String(localized: "后端响应缺少 \(key) 数组，请检查后端版本")) }
         return items
     }
 
@@ -247,7 +247,7 @@ enum SettingsResponse {
         if case TodexError.server(let code, _) = error,
             ["404", "405", "501", "NOT_FOUND", "UNSUPPORTED"].contains(code.uppercased())
         {
-            return "此后端不支持\(feature)，请更新后端后重试。"
+            return String(localized: "此后端不支持\(feature)，请更新后端后重试。")
         }
         return error.localizedDescription
     }
