@@ -38,7 +38,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | POST | `/v2/device-pairing/create` | `createDevicePairing(clientPublicKey:deviceName:)` | 已封装；公开；不代替本机配对批准 | `endpointWire(createDevicePairing)` |
 | POST | `/v2/device-pairing/poll` | `pollDevicePairing(requestId:proof:)` | 已封装；公开；传入 poll proof | `endpointWire(pollDevicePairing)` |
 | POST | `/v2/device-pairing/cancel` | `cancelDevicePairing(requestId:proof:)` | 已封装；公开；传入 cancel proof | `endpointWire(cancelDevicePairing)` |
-| GET | `/v2/workspaces` | `workspaces()` | 已封装；认证；解包 workspaces | `endpointWire(workspaces)` |
+| GET | `/v2/workspaces` | `workspaces()`、`workspaceCatalog()` | 已封装；认证；解包 workspaces；`workspaceCatalog()` 另保留 rejected（目录在后端不可用的已存工作区） | `endpointWire(workspaces)`、`workspaceCatalogKeepsRejectedRecordsApart` |
 | PUT | `/v2/workspaces` | `replaceWorkspaces(_:)` | 已封装；认证；后端按归属合并 | `endpointWire(replaceWorkspaces)` |
 | DELETE | `/v2/workspaces/{workspace_id}` | `deleteWorkspace(id:)` | 已封装；认证 | `endpointWire(deleteWorkspace)` |
 | GET | `/v2/workspaces/{workspace_id}/trust` | `workspaceTrust(id:)` | 已封装；认证 | `endpointWire(workspaceTrust)` |
@@ -68,7 +68,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | POST | `/v2/agent-providers/{agent}/{id}/activate` | `activateAgentProvider(agent:id:modelId:)` | 已封装；认证；modelId 可选 | `endpointWire(activateAgentProvider)` |
 | POST | `/v2/agent-providers/{agent}/import-live` | `importLiveAgentProvider(agent:id:name:)` | 已封装；认证；独占型捕获整份 live，叠加型按 id 收编 | `endpointWire(importLiveAgentProvider)` |
 | GET | `/v2/agent-providers/{agent}/{id}/models` | `agentProviderModels(agent:id:)` | 已封装；认证；后端代理拉取、密钥不出后端 | `endpointWire(agentProviderModels)` |
-| POST | `/v2/agent-providers/{agent}/{id}/models` | — | 未封装；保存前预览拉取，掩码密钥按同 id 档案/live 节点还原 | — |
+| POST | `/v2/agent-providers/{agent}/{id}/models` | `previewAgentProviderModels(agent:id:settingsConfig:)` | 已封装；认证；保存前按编辑表单预览拉取，掩码密钥按同 id 档案/live 节点还原 | `endpointWire(previewAgentProviderModels)` |
 | GET | `/v2/catalog/skills` | `skills(provider:workspace:)` | 已封装；认证 | `endpointWire(skills)` |
 | GET | `/v2/catalog/skills/{resource_id}` | `skillResource(id:provider:workspace:)` | 已封装；认证 | `endpointWire(skillResource)` |
 | GET | `/v2/catalog/mcp` | `mcpCatalog(provider:workspace:)` | 已封装；认证 | `endpointWire(mcpCatalog)` |
@@ -109,7 +109,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | WS 命令 | 后端支持状态 | 说明 |
 | --- | --- | --- |
 | `conversation.subscribe` | Supported | 以 `detail: summary` 回放，最多 `backfillLimit` 条；`hasMore` 时经 HTTP 补齐至 `lastSequence`，再转发实时事件并补齐缺口。 |
-| `conversation.unsubscribe` | Supported | 释放该连接上的订阅槽位并停止转发任务；重复调用幂等。 |
+| `conversation.unsubscribe` | Supported | 释放该连接上的订阅槽位并停止转发任务；重复调用幂等。客户端本地预算 120（后端上限 128），按最久未用淘汰空闲订阅。 |
 | `conversation.create` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
 | `conversation.prompt` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
 | `conversation.followUp` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
