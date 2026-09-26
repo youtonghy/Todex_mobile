@@ -185,10 +185,12 @@ nonisolated final class TodexUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(newTask.waitForExistence(timeout: 5))
         newTask.tap()
-        let taskField = app.alerts["新建任务"].textFields.firstMatch
+        // Desktop-parity task editor: title plus optional description and due date.
+        let taskField = app.textFields["task.editor.title"]
         XCTAssertTrue(taskField.waitForExistence(timeout: 5))
+        taskField.tap()
         taskField.typeText("回归任务")
-        app.alerts["新建任务"].buttons["确定"].tap()
+        app.navigationBars["新建任务"].buttons["添加"].tap()
         let taskTitle = app.staticTexts["回归任务"]
         XCTAssertTrue(taskTitle.waitForExistence(timeout: 5))
         let statusChip = app.buttons.matching(
@@ -298,7 +300,8 @@ nonisolated final class TodexUITests: XCTestCase {
         XCTAssertTrue((address.value as? String ?? "").hasPrefix("http://127.0.0.1:\(port)"))
         address.tap()
         address.press(forDuration: 1.2)
-        let selectAll = app.menuItems["Select All"]
+        // The app now ships zh-Hans, so system edit menus follow the test locale.
+        let selectAll = app.menuItems.matching(NSPredicate(format: "label IN %@", ["全选", "Select All"])).firstMatch
         XCTAssertTrue(selectAll.waitForExistence(timeout: 5))
         selectAll.tap()
         address.typeText("http://127.0.0.1:\(port)/health")
@@ -425,7 +428,10 @@ nonisolated final class TodexUITests: XCTestCase {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         // Create the target conversation over REST so it exists before launch.
         let workspaces = try await fixtureRequest("GET", "/v2/workspaces")
-        let workspace = (workspaces["workspaces"] as? [[String: Any]])?.first
+        // The worktree test registers extra workspaces; target the fixture's own
+        // (listed first on Home) so the new row is on screen.
+        let list = workspaces["workspaces"] as? [[String: Any]] ?? []
+        let workspace = list.first { $0["name"] as? String == "Isolated Fixture" } ?? list.first
         let path = workspace?["path"] as? String ?? ""
         XCTAssertFalse(path.isEmpty)
         let created = try await fixtureRequest(
@@ -588,7 +594,7 @@ nonisolated final class TodexUITests: XCTestCase {
     }
 
     /// Terminal shell selection feeds terminal.start and the PTY echo fills the
-    /// field back; the worktree action adds a workspace visible on Home.
+    /// field back; opening a worktree switches to a conversation in its workspace.
     @MainActor func testParityTerminalShellAndWorktree() throws {
         continueAfterFailure = false
         guard ProcessInfo.processInfo.environment["TODEX_TEST_PORT"] != nil else {
@@ -652,7 +658,8 @@ nonisolated final class TodexUITests: XCTestCase {
         XCTAssertTrue(clear.waitForExistence(timeout: 5))
         clear.tap()
         XCTAssertTrue(status.exists)
-        // Git worktree -> 打开为工作区 -> the new workspace is usable on Home.
+        // Git worktree -> 打开工作树并切换对话 -> a conversation opens in the new workspace,
+        // which is also listed on Home.
         app.buttons["新标签"].tap()
         app.sheets["新建标签"].buttons["Git"].tap()
         XCTAssertTrue(app.staticTexts["来源：后端 Git 状态"].waitForExistence(timeout: 20))
@@ -666,12 +673,15 @@ nonisolated final class TodexUITests: XCTestCase {
             NSPredicate(format: "label BEGINSWITH %@", "wt-fixture")).firstMatch
         XCTAssertTrue(entry.waitForExistence(timeout: 5), "Git 菜单没有列出 wt-fixture 工作树")
         entry.tap()
-        let openWorkspace = app.descendants(matching: .any)["打开为工作区"].firstMatch
-        XCTAssertTrue(openWorkspace.waitForExistence(timeout: 5))
-        openWorkspace.tap()
-        let added = app.alerts["已添加工作区"].firstMatch
-        XCTAssertTrue(added.waitForExistence(timeout: 10))
-        app.alerts.buttons["知道了"].tap()
+        let openWorktree = app.descendants(matching: .any)["打开工作树并切换对话"].firstMatch
+        XCTAssertTrue(openWorktree.waitForExistence(timeout: 5))
+        openWorktree.tap()
+        // A second conversation is pushed, so the back button no longer reads "TodeX".
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.navigationBars.buttons["TodeX"])
+        waitForExpectations(timeout: 20)
+        for _ in 0..<3 where !app.navigationBars.buttons["TodeX"].exists {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
         app.navigationBars.buttons["TodeX"].tap()
         XCTAssertTrue(
             app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "wt-fixture")).firstMatch
