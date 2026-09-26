@@ -20,14 +20,17 @@ extension RealtimeClient: SessionSocket {}
     // never reach connections.json, or a Settings save under a fixture launch
     // would overwrite the real backend list.
     private var fixtureConnectionID: String?
-    private var connectionStatus = "尚未连接"
-    var status: String { storageError.map { "本地保存失败：\($0)" } ?? connectionStatus }
+    private var connectionStatus = String(localized: "尚未连接")
+    var status: String { storageError.map { String(localized: "本地保存失败：\($0)") } ?? connectionStatus }
     private(set) var isConnected = false
     private(set) var isConnecting = false
     private var operationError: String?
     var lastError: String? { storageError ?? operationError }
     var storageError: String? { storageFailures[stateNamespace]?.message }
     private(set) var workspaces: [WorkspaceRecord] = []
+    /// Stored workspaces whose path the backend rejects (directory removed or
+    /// outside its roots); Home lists them dimmed and unselectable.
+    private(set) var rejectedWorkspaces: [RejectedWorkspace] = []
     private(set) var tasks: [KanbanTask] = []
     private(set) var conversations: [ConversationManifest] = []
     private(set) var providers: [ProviderDescriptor] = []
@@ -36,6 +39,9 @@ extension RealtimeClient: SessionSocket {}
     private(set) var commands: [String: [JSONValue]] = [:]
     private(set) var pendingSends: [String: PendingSend] = [:]
     var activeConversationID: String?
+    /// The conversation whose chat is on screen right now (nil on Home or
+    /// Settings); completion alerts skip it.
+    var viewingConversationID: String?
     var drafts: [String: ComposerDraft] = [:]
     var preferences: [String: ConversationPreferences] = [:]
     // Composer memory: the last chip configuration used with each provider, and
@@ -47,7 +53,18 @@ extension RealtimeClient: SessionSocket {}
     var pinnedWorkspaces: [String] = []
     var pinnedConversations: [String] = []
     var readSequences: [String: Int] = [:]
+    /// Local-only conversation label colors (`#rrggbb`) in this backend's namespace.
+    private(set) var conversationLabels: [String: String] = [:]
     private(set) var sentAttachments: [SentAttachmentRecord] = []
+    /// Usage records across every conversation of this backend, newest first
+    /// and bounded like desktop; Settings aggregates them.
+    private(set) var usageRecords: [JSONValue] = [] { didSet { usageRevision &+= 1 } }
+    /// Bumps on every ledger change; merges can replace a mid-list record
+    /// without changing the count or head, so observers compare this instead.
+    private(set) var usageRevision = 0
+    /// The error behind the last failed connect/close, kept only so Settings can
+    /// present a categorized diagnostic. Reconnect policy never reads it.
+    private(set) var lastConnectionError: (any Error)?
     private(set) var api: APIClient?
     private var socket: (any SessionSocket)?
     private let store: LocalStore
@@ -73,6 +90,17 @@ extension RealtimeClient: SessionSocket {}
         let task: Task<Void, any Error>
     }
     private var recoveryTasks: [String: Recovery] = [:]
+    /// Conversations subscribed on the current socket, least recently used
+    /// first. The backend rejects subscribes past 128 per socket; the local
+    /// budget evicts (unsubscribes) before that so opening one never fails.
+    private var liveSubscriptions: [String] = []
+    private static let subscriptionBudget = 120
+    /// Slots background watching leaves free for conversations the user opens.
+    private static let watchHeadroom = 16
+    /// Watch-only subscribes backfill only this many events past the listed
+    /// cursor: enough to catch up the row's status, never a whole journal.
+    nonisolated static let watchBackfillLimit = 50
+    private var watchTask: Task<Void, Never>?
     private struct SendOperation {
         let requestID: String
         let afterSequence: Int
@@ -176,7 +204,7 @@ extension RealtimeClient: SessionSocket {}
                 } ?? environment["TODEX_TEST_URL"]
             if initial == nil, let url = fixtureURL {
                 let fixture = BackendConnection(
-                    id: "simulator-fixture", name: "测试后端", serverURL: url,
+                    id: "simulator-fixture", name: String(localized: "测试后端"), serverURL: url,
                     deviceSecret: environment["TODEX_TEST_DEVICE_SECRET"] ?? "")
                 connections.removeAll { $0.id == fixture.id }
                 connections.append(fixture)
@@ -221,7 +249,7 @@ extension RealtimeClient: SessionSocket {}
     }
 
     func saveConnections(_ values: [BackendConnection], selected: String?) throws {
-        guard Set(values.map(\.id)).count == values.count else { throw TodexError.invalid("后端标识重复") }
+        guard Set(values.map(\.id)).count == values.count else { throw TodexError.invalid(String(localized: "后端标识重复")) }
         // Settings persists an unfinished row while the user enters its address.
         for value in values where !value.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             _ = try value.normalizedURL()
@@ -245,7 +273,7 @@ extension RealtimeClient: SessionSocket {}
         if changedTransport {
             wantsConnection = false
             invalidateTransport()
-            connectionStatus = "尚未连接"
+            connectionStatus = String(localized: "尚未连接")
         }
         connections = values
         selectedID = nextID
@@ -262,7 +290,7 @@ extension RealtimeClient: SessionSocket {}
         }
         do { _ = try next.normalizedURL() } catch {
             operationError = error.localizedDescription
-            connectionStatus = "连接配置未完成"
+            connectionStatus = String(localized: "连接配置未完成")
             changed(immediate: true)
             return
         }
@@ -287,8 +315,11 @@ extension RealtimeClient: SessionSocket {}
         let current = revision
         wantsConnection = true
         isConnecting = true
-        connectionStatus = "正在连接…"
+        connectionStatus = String(localized: "正在连接…")
         operationError = nil
+        lastConnectionError = nil
+        DebugLog.record(
+            "connection.connect", ["url": next.serverURL, "encryption": next.encryption.rawValue], level: .info)
         connectingConfiguration = next
         let task = Task<Void, Never> { [weak self] in
             guard let self else { return }
@@ -325,7 +356,8 @@ extension RealtimeClient: SessionSocket {}
             try checkRevision(current)
             isConnecting = false
             isConnected = true
-            connectionStatus = "已连接"
+            connectionStatus = String(localized: "已连接")
+            DebugLog.record("connection.open", level: .info)
             startHealthChecks()
             checkBackendVersion(api)
             try await refresh()
@@ -345,16 +377,23 @@ extension RealtimeClient: SessionSocket {}
             guard current == revision else { return }
             invalidateTransport()
             operationError = error.localizedDescription
-            connectionStatus = "连接失败"
-            if case TodexError.server(let code, _) = error,
-                ["401", "403", "UNAUTHENTICATED", "UNAUTHORIZED"].contains(code)
-            {
-                wantsConnection = false
-            }
+            lastConnectionError = error
+            DebugLog.record(
+                "connection.failed",
+                ["error": String(describing: error), "permanent": "\(TodexError.stopsReconnect(error))"], level: .error)
+            connectionStatus = String(localized: "连接失败")
+            stopReconnectingIfPermanent(TodexError.stopsReconnect(error))
             persist()
             scheduleReconnect()
             changed(immediate: true)
         }
+    }
+    /// Auth rejections and transport-setup mismatches fail identically on
+    /// every retry; stop until the user edits the backend or reconnects.
+    private func stopReconnectingIfPermanent(_ permanent: Bool) {
+        guard permanent else { return }
+        wantsConnection = false
+        connectionStatus = String(localized: "连接已停止，请检查后端配置")
     }
 
     /// Invalidate synchronously, before awaiting the old actor's disconnect.
@@ -376,6 +415,10 @@ extension RealtimeClient: SessionSocket {}
         versionProbeSeq += 1
         for flight in recoveryTasks.values { flight.task.cancel() }
         recoveryTasks.removeAll()
+        // Subscriptions belong to the socket; a new one starts with none.
+        liveSubscriptions.removeAll()
+        watchTask?.cancel()
+        watchTask = nil
         queueDispatches.removeAll()
         sending.removeAll()
         completedDuringSend.removeAll()
@@ -389,9 +432,10 @@ extension RealtimeClient: SessionSocket {}
         Task { await old?.disconnect() }
     }
     func disconnect() {
+        DebugLog.record("connection.disconnect", level: .info)
         wantsConnection = false
         invalidateTransport()
-        connectionStatus = "已断开"
+        connectionStatus = String(localized: "已断开")
         persist()
         changed(immediate: true)
     }
@@ -428,12 +472,15 @@ extension RealtimeClient: SessionSocket {}
             }
         }
     }
+    /// Desktop parity: retry for as long as the app is foregrounded, backing off
+    /// to 30 s. Backgrounding cancels the loop; returning restarts it at once.
     private func scheduleReconnect() {
-        guard wantsConnection, foreground, reconnectTask == nil, reconnectAttempt < 5 else { return }
+        guard wantsConnection, foreground, reconnectTask == nil else { return }
         reconnectAttempt += 1
         let current = revision
-        let delay = min(30, pow(2, Double(reconnectAttempt)))
-        connectionStatus = "连接中断，\(Int(delay)) 秒后重试"
+        let delay = min(30, pow(2, Double(min(reconnectAttempt, 5))))
+        DebugLog.record("connection.retryScheduled", ["attempt": "\(reconnectAttempt)", "delay": "\(Int(delay))"])
+        connectionStatus = String(localized: "连接中断，\(Int(delay)) 秒后第 \(reconnectAttempt) 次重试")
         reconnectTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             guard let self, current == revision else { return }
@@ -481,7 +528,7 @@ extension RealtimeClient: SessionSocket {}
             else { return }
             guard let self, self.versionProbeSeq == probe, self.isConnected else { return }
             let app = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-            self.versionMismatch = VersionCheck.mismatch(app: app, backend: backend) ? (app ?? "未知", backend) : nil
+            self.versionMismatch = VersionCheck.mismatch(app: app, backend: backend) ? (app ?? String(localized: "未知"), backend) : nil
             self.changed()
         }
     }
@@ -504,16 +551,17 @@ extension RealtimeClient: SessionSocket {}
         let request = UUID()
         refreshRevision = request
         kanbanSyncSupported = true
-        async let workspaceResult = api.workspaces()
+        async let workspaceResult = api.workspaceCatalog()
         async let conversationResult = api.conversations()
         async let providerResult = api.providers()
         async let taskResult = remoteKanbanTasks()
-        let (workspaces, conversations, providers) = try await (workspaceResult, conversationResult, providerResult)
+        let (catalog, conversations, providers) = try await (workspaceResult, conversationResult, providerResult)
         try checkRevision(current)
         guard refreshRevision == request else { return }
         let oldScopes = Dictionary(
             self.conversations.map { ($0.id, conversationScope($0)) }, uniquingKeysWith: { _, latest in latest })
-        self.workspaces = workspaces
+        self.workspaces = catalog.workspaces
+        rejectedWorkspaces = catalog.rejected
         self.conversations = conversations
         self.providers = providers
         if let remoteTasks = await taskResult {
@@ -531,6 +579,7 @@ extension RealtimeClient: SessionSocket {}
             cacheLoaded.remove(conversation.id)
         }
         persist()
+        watchConversations()
         changed(immediate: true)
     }
     func select(_ conversation: ConversationManifest) {
@@ -570,7 +619,10 @@ extension RealtimeClient: SessionSocket {}
         var value = ConversationPreferences()
         value.model = workspace(for: conversation)?.model ?? ""
         let config = provider(for: conversation)?.capabilities["permissionConfig"] ?? .null
-        value.permissionMode = config["defaultMode"].optionalString ?? "ask"
+        let modes = config["modes"].arrayValue.compactMap(\.optionalString)
+        // Never assume "ask" for an agent that cannot enforce it: leave the mode
+        // unset so the composer asks the user to choose (desktop parity).
+        value.permissionMode = config["defaultMode"].optionalString ?? (modes.isEmpty || modes.contains("ask") ? "ask" : "")
         value.reasoningEffort = workspace(for: conversation)?.reasoningEffort ?? ""
         return value
     }
@@ -587,7 +639,8 @@ extension RealtimeClient: SessionSocket {}
         let config = providers.first { $0.id == provider }?.capabilities["permissionConfig"] ?? .null
         let modes = config["modes"].arrayValue.compactMap(\.optionalString)
         if !modes.isEmpty, !modes.contains(value.permissionMode) {
-            value.permissionMode = config["defaultMode"].optionalString ?? "ask"
+            // Same fallback as preferences(for:): never assume an unsupported "ask".
+            value.permissionMode = config["defaultMode"].optionalString ?? (modes.contains("ask") ? "ask" : "")
         }
         if value.workMode == "plan", config["supportsPlan"].boolValue != true {
             value.workMode = "implement"
@@ -658,7 +711,7 @@ extension RealtimeClient: SessionSocket {}
     private func replay(_ id: String, api: APIClient, socket: any SessionSocket, revision current: UUID) async throws {
         let manifest = try await api.conversation(id: id)
         try checkRevision(current)
-        guard manifest.id == id else { throw TodexError.invalid("对话恢复响应不匹配") }
+        guard manifest.id == id else { throw TodexError.invalid(String(localized: "对话恢复响应不匹配")) }
         // A runtime that has never applied an event opens at the journal tail
         // instead of replaying from sequence 0; earlier pages load on demand.
         var lazyOpened = false
@@ -683,24 +736,33 @@ extension RealtimeClient: SessionSocket {}
         }
         var highWater = manifest.lastSequence
         try await replayPages(id, target: highWater, api: api, revision: current)
+        try await makeRoomForSubscription(id, socket: socket, revision: current)
         for _ in 0..<10_000 {
             try checkRevision(current)
             let before = runtimes[id]?.appliedSequence ?? 0
-            let result = try await socket.command(
-                type: "conversation.subscribe",
-                // Backfill folded like HTTP history pages and capped so a stale
-                // cursor cannot stream a whole journal; `hasMore` then pages the
-                // rest over HTTP below. Older backends ignore both fields.
-                payload: [
-                    "conversationId": .string(id), "afterSequence": .number(Double(before)), "limit": 200,
-                    "detail": "summary", "backfillLimit": .number(Double(Self.subscribeBackfillLimit)),
-                ],
-                timeout: 45, id: UUID().uuidString)
-            try checkRevision(current)
-            guard result["conversationId"].isNull || result["conversationId"] == .string(id) else {
-                throw TodexError.invalid("订阅响应不匹配")
+            let result: JSONValue
+            do {
+                result = try await socket.command(
+                    type: "conversation.subscribe",
+                    // Backfill folded like HTTP history pages and capped so a stale
+                    // cursor cannot stream a whole journal; `hasMore` then pages the
+                    // rest over HTTP below. Older backends ignore both fields.
+                    payload: [
+                        "conversationId": .string(id), "afterSequence": .number(Double(before)), "limit": 200,
+                        "detail": "summary", "backfillLimit": .number(Double(Self.subscribeBackfillLimit)),
+                    ],
+                    timeout: 45, id: UUID().uuidString)
+            } catch {
+                if current == revision { liveSubscriptions.removeAll { $0 == id } }
+                throw error
             }
-            guard result["subscribed"].boolValue else { throw TodexError.invalid("后端未确认订阅") }
+            try checkRevision(current)
+            liveSubscriptions.removeAll { $0 == id }
+            liveSubscriptions.append(id)
+            guard result["conversationId"].isNull || result["conversationId"] == .string(id) else {
+                throw TodexError.invalid(String(localized: "订阅响应不匹配"))
+            }
+            guard result["subscribed"].boolValue else { throw TodexError.invalid(String(localized: "后端未确认订阅")) }
             highWater = max(
                 highWater, Self.sequence(result["nextSequence"]) ?? 0, Self.sequence(result["lastSequence"]) ?? 0)
             for raw in result["events"].arrayValue { try ingestReplay(raw, conversationId: id) }
@@ -710,7 +772,7 @@ extension RealtimeClient: SessionSocket {}
             try checkRevision(current)
             if !result["hasMore"].boolValue {
                 runtimes[id]?.markReplayComplete(highWater: highWater)
-                guard runtimes[id]?.readyForActions == true else { throw TodexError.invalid("历史记录存在缺口，请重新核对") }
+                guard runtimes[id]?.readyForActions == true else { throw TodexError.invalid(String(localized: "历史记录存在缺口，请重新核对")) }
                 var updated = manifest
                 updated.lastSequence = max(manifest.lastSequence, runtimes[id]?.appliedSequence ?? 0)
                 updated.status = runtimes[id]?.status ?? manifest.status
@@ -724,9 +786,9 @@ extension RealtimeClient: SessionSocket {}
                 changed(immediate: true)
                 return
             }
-            guard (runtimes[id]?.appliedSequence ?? 0) > before else { throw TodexError.invalid("订阅分页没有前进，恢复未完成") }
+            guard (runtimes[id]?.appliedSequence ?? 0) > before else { throw TodexError.invalid(String(localized: "订阅分页没有前进，恢复未完成")) }
         }
-        throw TodexError.invalid("订阅分页过多，恢复未完成")
+        throw TodexError.invalid(String(localized: "订阅分页过多，恢复未完成"))
     }
     /// Fetch the full events covering a folded process group and merge them
     /// into the projected timeline. Called when a user expands a group that
@@ -741,20 +803,20 @@ extension RealtimeClient: SessionSocket {}
             let page = try await api.events(
                 conversationId: id, after: cursor, limit: min(200, max(1, upper - cursor)))
             try checkRevision(current)
-            guard case .array(let raw) = page["events"] else { throw TodexError.invalid("历史分页响应无效") }
+            guard case .array(let raw) = page["events"] else { throw TodexError.invalid(String(localized: "历史分页响应无效")) }
             var reached = false
             for value in raw {
                 let event = try value.decoded(ConversationEvent.self)
-                guard event.conversationId == id else { throw TodexError.invalid("历史事件属于其他对话") }
+                guard event.conversationId == id else { throw TodexError.invalid(String(localized: "历史事件属于其他对话")) }
                 guard event.sequence > cursor, event.sequence <= upper else { continue }
                 events.append(event)
                 cursor = event.sequence
                 reached = true
             }
-            guard reached else { throw TodexError.invalid("过程详情分页没有前进") }
+            guard reached else { throw TodexError.invalid(String(localized: "过程详情分页没有前进")) }
             if cursor >= upper || !page["hasMore"].boolValue { break }
         }
-        guard cursor >= upper else { throw TodexError.invalid("过程详情分页过多") }
+        guard cursor >= upper else { throw TodexError.invalid(String(localized: "过程详情分页过多")) }
         var runtime = runtimes[id] ?? ConversationRuntime(conversationId: id)
         if runtime.hydrate(events) {
             runtimes[id] = runtime
@@ -783,11 +845,11 @@ extension RealtimeClient: SessionSocket {}
         let page = try await api.events(
             conversationId: id, before: floor, limit: Self.historyPageSize, detail: "summary")
         try checkRevision(current)
-        guard case .array(let raw) = page["events"] else { throw TodexError.invalid("历史分页响应无效") }
+        guard case .array(let raw) = page["events"] else { throw TodexError.invalid(String(localized: "历史分页响应无效")) }
         var events: [ConversationEvent] = []
         for value in raw {
             let event = try value.decoded(ConversationEvent.self)
-            guard event.conversationId == id else { throw TodexError.invalid("历史事件属于其他对话") }
+            guard event.conversationId == id else { throw TodexError.invalid(String(localized: "历史事件属于其他对话")) }
             events.append(event)
         }
         events.sort { $0.sequence < $1.sequence }
@@ -832,13 +894,13 @@ extension RealtimeClient: SessionSocket {}
                 conversationId: id, before: cursor, limit: Self.historyPageSize, detail: "summary")
             try checkRevision(current)
             guard case .array(let raw) = page["events"] else {
-                throw TodexError.invalid("历史分页响应无效")
+                throw TodexError.invalid(String(localized: "历史分页响应无效"))
             }
             var events: [ConversationEvent] = []
             for value in raw {
                 let event = try value.decoded(ConversationEvent.self)
                 guard event.conversationId == id else {
-                    throw TodexError.invalid("历史事件属于其他对话")
+                    throw TodexError.invalid(String(localized: "历史事件属于其他对话"))
                 }
                 events.append(event)
             }
@@ -869,6 +931,86 @@ extension RealtimeClient: SessionSocket {}
         return true
     }
 
+    /// Unsubscribe the least valuable subscriptions until `id` fits the local
+    /// budget. Idle watch-only rows go first, then idle opened conversations;
+    /// the open conversation is never evicted. An evicted runtime re-enters
+    /// replay so reopening it recovers the events it stopped receiving.
+    private func makeRoomForSubscription(_ id: String, socket: any SessionSocket, revision current: UUID) async throws {
+        guard !liveSubscriptions.contains(id) else { return }
+        while liveSubscriptions.count >= Self.subscriptionBudget {
+            let busy = { (id: String) -> Bool in
+                let status = self.runtimes[id]?.status ?? self.conversations.first { $0.id == id }?.status ?? ""
+                return ["running", "waitingPermission", "waiting_permission"].contains(status)
+            }
+            let candidates = liveSubscriptions.filter { $0 != id && $0 != activeConversationID }
+            guard
+                let victim = candidates.first(where: { runtimes[$0] == nil && !busy($0) })
+                    ?? candidates.first(where: { !busy($0) }) ?? candidates.first
+            else { return }
+            liveSubscriptions.removeAll { $0 == victim }
+            runtimes[victim]?.beginReplay()
+            _ = try await socket.command(
+                type: "conversation.unsubscribe", payload: ["conversationId": .string(victim)], timeout: 15,
+                id: UUID().uuidString)
+            try checkRevision(current)
+        }
+    }
+    /// Desktop parity: subscribe the backend's unarchived conversations so the
+    /// list's running, approval and unread state updates without a refresh.
+    /// Rows never opened have no runtime and project through `applyWatchedEvent`;
+    /// a previously opened runtime sees the gap on its first new event and
+    /// recovers in full, so only conversations with activity pay for replay.
+    /// Runs one subscribe at a time so it never competes with an open one.
+    private func watchConversations() {
+        guard isConnected, let socket else { return }
+        watchTask?.cancel()
+        let current = revision
+        let listed = Set(conversations.map(\.id))
+        let stale = liveSubscriptions.filter { !listed.contains($0) }
+        let targets = conversations
+            .filter { $0.archivedAt == nil }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .map { (id: $0.id, after: $0.lastSequence) }
+        watchTask = Task { [weak self] in
+            do {
+                for id in stale {
+                    guard let self, current == revision else { return }
+                    liveSubscriptions.removeAll { $0 == id }
+                    _ = try await socket.command(
+                        type: "conversation.unsubscribe", payload: ["conversationId": .string(id)], timeout: 15,
+                        id: UUID().uuidString)
+                }
+                for target in targets {
+                    guard let self, current == revision, !Task.isCancelled else { return }
+                    guard liveSubscriptions.count < Self.subscriptionBudget - Self.watchHeadroom else { return }
+                    guard !liveSubscriptions.contains(target.id), recoveryTasks[target.id] == nil else { continue }
+                    liveSubscriptions.append(target.id)
+                    let result: JSONValue
+                    do {
+                        result = try await socket.command(
+                            type: "conversation.subscribe",
+                            payload: [
+                                "conversationId": .string(target.id), "afterSequence": .number(Double(target.after)),
+                                "limit": .number(Double(Self.watchBackfillLimit)), "detail": "summary",
+                                "backfillLimit": .number(Double(Self.watchBackfillLimit)),
+                            ],
+                            timeout: 30, id: UUID().uuidString)
+                    } catch {
+                        if current == revision { liveSubscriptions.removeAll { $0 == target.id } }
+                        throw error
+                    }
+                    guard current == revision else { return }
+                    if !result["subscribed"].boolValue { liveSubscriptions.removeAll { $0 == target.id } }
+                }
+            } catch {
+                // Watching is an optimization over the HTTP list: stop at the first
+                // failure instead of hammering a limit or an outage, and say so.
+                guard let self, current == revision, !(error is CancellationError) else { return }
+                operationError = String(localized: "后台对话状态同步已暂停：\(error.localizedDescription)")
+                changed()
+            }
+        }
+    }
     private func replayPages(_ id: String, target: Int, api: APIClient, revision current: UUID) async throws {
         var highWater = target
         for _ in 0..<10_000 {
@@ -876,20 +1018,20 @@ extension RealtimeClient: SessionSocket {}
             let before = runtimes[id]?.appliedSequence ?? 0
             let page = try await api.events(conversationId: id, after: before, limit: 200, detail: "summary")
             try checkRevision(current)
-            guard case .array(let events) = page["events"] else { throw TodexError.invalid("历史分页响应无效") }
+            guard case .array(let events) = page["events"] else { throw TodexError.invalid(String(localized: "历史分页响应无效")) }
             for raw in events { try ingestReplay(raw, conversationId: id) }
             let runtime = runtimes[id] ?? ConversationRuntime(conversationId: id)
             highWater = max(
                 highWater, runtime.highWaterSequence, Self.sequence(page["nextSequence"]) ?? 0,
                 Self.sequence(page["lastSequence"]) ?? 0)
             if !page["hasMore"].boolValue, runtime.appliedSequence >= highWater { return }
-            guard runtime.appliedSequence > before else { throw TodexError.invalid("历史记录存在缺口，请重新核对") }
+            guard runtime.appliedSequence > before else { throw TodexError.invalid(String(localized: "历史记录存在缺口，请重新核对")) }
         }
-        throw TodexError.invalid("历史分页过多，恢复未完成")
+        throw TodexError.invalid(String(localized: "历史分页过多，恢复未完成"))
     }
     private func ingestReplay(_ raw: JSONValue, conversationId: String) throws {
         let event = try raw.decoded(ConversationEvent.self)
-        guard event.conversationId == conversationId else { throw TodexError.invalid("历史事件属于其他对话") }
+        guard event.conversationId == conversationId else { throw TodexError.invalid(String(localized: "历史事件属于其他对话")) }
         ingest(event)
     }
     private static func sequence(_ value: JSONValue) -> Int? {
@@ -906,26 +1048,48 @@ extension RealtimeClient: SessionSocket {}
         try checkRevision(current)
         return result
     }
-    func send(_ draft: ComposerDraft, in conversation: ConversationManifest, enqueueWhenBusy: Bool = true) async throws
-    {
-        try await send(draft, in: conversation, enqueueWhenBusy: enqueueWhenBusy, queued: nil)
+    /// `nativeQueue: false` keeps a busy-time follow-up in the local queue: the
+    /// agent's own queue carries text only, so a draft that depends on changed
+    /// composer settings (e.g. `/plan <task>`) must wait for a real prompt.
+    func send(
+        _ draft: ComposerDraft, in conversation: ConversationManifest, enqueueWhenBusy: Bool = true,
+        nativeQueue: Bool = true
+    ) async throws {
+        try await send(draft, in: conversation, enqueueWhenBusy: enqueueWhenBusy, queued: nil, nativeQueue: nativeQueue)
     }
     private func send(
-        _ draft: ComposerDraft, in conversation: ConversationManifest, enqueueWhenBusy: Bool, queued: QueuedDraft?
+        _ draft: ComposerDraft, in conversation: ConversationManifest, enqueueWhenBusy: Bool, queued: QueuedDraft?,
+        nativeQueue: Bool = true
     ) async throws {
         let id = conversation.id
         let current = revision
         guard !draft.isEmpty else { return }
-        guard stateLoaded else { throw TodexError.invalid(storageError ?? "本地草稿仍在加载") }
+        guard stateLoaded else { throw TodexError.invalid(storageError ?? String(localized: "本地草稿仍在加载")) }
         guard let socket, isConnected else { throw TodexError.disconnected }
         guard conversations.contains(where: { $0.id == id && $0.workspace == conversation.workspace }) else {
-            throw TodexError.invalid("对话已切换，请重新打开")
+            throw TodexError.invalid(String(localized: "对话已切换，请重新打开"))
         }
-        guard pendingSends[id] == nil, sending[id] == nil else { throw TodexError.unknownOutcome("已有消息等待核对") }
-        guard let runtime = runtimes[id], runtime.readyForActions else { throw TodexError.invalid("请等待历史记录同步完成") }
+        guard pendingSends[id] == nil, sending[id] == nil else { throw TodexError.unknownOutcome(String(localized: "已有消息等待核对")) }
+        guard let runtime = runtimes[id], runtime.readyForActions else { throw TodexError.invalid(String(localized: "请等待历史记录同步完成")) }
         if ["running", "waitingPermission", "waiting_permission"].contains(runtime.status) {
-            guard enqueueWhenBusy else { throw TodexError.server(code: "CONFLICT", message: "当前任务尚未结束") }
-            guard (queues[id]?.count ?? 0) < 32 else { throw TodexError.invalid("候选消息最多 32 条") }
+            guard enqueueWhenBusy else { throw TodexError.server(code: "CONFLICT", message: String(localized: "当前任务尚未结束")) }
+            // Desktop parity: a plain-text follow-up goes to the agent's own
+            // queue when the provider has one; attachments and skills can only
+            // travel through a prompt, so they wait in the local queue.
+            // Only while nothing waits locally, or it would overtake earlier drafts.
+            if nativeQueue, provider(for: conversation)?.capabilities["followUpQueue"].boolValue == true,
+                draft.attachments.isEmpty, draft.skills.isEmpty, (queues[id] ?? []).isEmpty
+            {
+                _ = try await liveControl(
+                    ["action": "queueAdd", "itemId": .string(UUID().uuidString), "text": .string(draft.text)],
+                    conversation: conversation)
+                try checkRevision(current)
+                if drafts[id] == draft { drafts[id] = ComposerDraft() }
+                persist()
+                changed(immediate: true)
+                return
+            }
+            guard (queues[id]?.count ?? 0) < 32 else { throw TodexError.invalid(String(localized: "候选消息最多 32 条")) }
             queues[id, default: []].append(QueuedDraft(draft: draft))
             pausedQueues.remove(id)
             if drafts[id] == draft { drafts[id] = ComposerDraft() }
@@ -940,6 +1104,12 @@ extension RealtimeClient: SessionSocket {}
             }
         }
         let pref = preferences(for: conversation)
+        let modes =
+            provider(for: conversation)?.capabilities["permissionConfig"]["modes"].arrayValue.compactMap(\.optionalString)
+            ?? []
+        guard modes.isEmpty || modes.contains(pref.permissionMode) else {
+            throw TodexError.invalid(String(localized: "当前 Agent 不支持所选权限模式，请重新选择权限"))
+        }
         var payload: JSONValue = [
             "conversationId": .string(id), "text": .string(draft.text),
             "content": .array(
@@ -1050,18 +1220,23 @@ extension RealtimeClient: SessionSocket {}
             SentAttachment(
                 id: item.id, kind: item.isImage ? "image" : "file", name: item.name,
                 mimeType: item.mimeType, sizeBytes: item.data.count,
-                preview: item.isImage ? imagePreview(item.data) : nil)
+                preview: item.isImage ? imagePreview(item.data) : nil,
+                textContent: item.isImage
+                    ? nil : String(decoding: item.data.prefix(100 * 1024), as: UTF8.self))
         }
     }
-    /// Recent 150 records; previews are evicted oldest-first past a 2 MB budget.
+    /// Recent 150 records; previews and text are evicted oldest-first past a
+    /// shared 2 MB budget.
     private func pruneSentAttachments() {
         if sentAttachments.count > 150 { sentAttachments.removeFirst(sentAttachments.count - 150) }
         var remaining = 2 * 1024 * 1024
         for index in sentAttachments.indices.reversed() {
             for attachment in sentAttachments[index].attachments.indices {
-                let bytes = sentAttachments[index].attachments[attachment].preview?.utf8.count ?? 0
+                let item = sentAttachments[index].attachments[attachment]
+                let bytes = (item.preview?.utf8.count ?? 0) + (item.textContent?.utf8.count ?? 0)
                 if bytes > remaining {
                     sentAttachments[index].attachments[attachment].preview = nil
+                    sentAttachments[index].attachments[attachment].textContent = nil
                 } else {
                     remaining -= bytes
                 }
@@ -1079,12 +1254,12 @@ extension RealtimeClient: SessionSocket {}
             try await loadEarlier(id)
             try checkRevision(current)
         }
-        if pendingSends[id] != nil { throw TodexError.unknownOutcome("完整记录中仍未找到这次请求，原消息保留在待核对区") }
+        if pendingSends[id] != nil { throw TodexError.unknownOutcome(String(localized: "完整记录中仍未找到这次请求，原消息保留在待核对区")) }
     }
     func restoreUnknownAsDraft(_ id: String) {
         guard sending[id] == nil, let pending = pendingSends[id] else { return }
         guard drafts[id]?.isEmpty != false else {
-            operationError = "输入框已有草稿，请先保留它再恢复待核对消息"
+            operationError = String(localized: "输入框已有草稿，请先保留它再恢复待核对消息")
             changed(immediate: true)
             return
         }
@@ -1129,22 +1304,51 @@ extension RealtimeClient: SessionSocket {}
     func respond(_ permission: PendingPermission, conversationId: String, decision: JSONValue) async throws {
         guard let runtime = runtimes[conversationId], runtime.readyForActions,
             runtime.pendingPermissions.contains(where: { $0.id == permission.id && $0.turnId == permission.turnId })
-        else { throw TodexError.invalid("审批已失效，请同步当前记录") }
+        else { throw TodexError.invalid(String(localized: "审批已失效，请同步当前记录")) }
         _ = try await command(
             "conversation.permission.respond",
             ["conversationId": .string(conversationId), "permissionId": .string(permission.id), "decision": decision])
     }
     func control(_ action: String, conversation: ConversationManifest) async throws -> JSONValue {
-        guard runtimes[conversation.id]?.readyForActions == true else { throw TodexError.invalid("请等待历史记录同步完成") }
+        guard runtimes[conversation.id]?.readyForActions == true else { throw TodexError.invalid(String(localized: "请等待历史记录同步完成")) }
         guard provider(for: conversation)?.capabilities["controlActions"].arrayValue.contains(.string(action)) == true
-        else { throw TodexError.invalid("当前 Agent 不支持此操作") }
+        else { throw TodexError.invalid(String(localized: "当前 Agent 不支持此操作")) }
         return try await command(
             "conversation.\(action)", ["conversationId": .string(conversation.id)],
             timeout: action == "compact" ? 310 : 45)
     }
+    /// Desktop-parity fork from the list: unlike `control`, it needs no replayed
+    /// runtime, so a never-opened conversation can be forked. The copy inherits
+    /// the source's composer preferences, as on desktop.
+    func fork(_ conversation: ConversationManifest) async throws -> ConversationManifest {
+        guard provider(for: conversation)?.capabilities["controlActions"].arrayValue.contains("fork") == true else {
+            throw TodexError.invalid(String(localized: "当前 Agent 未提供已验证的原生分叉能力。"))
+        }
+        let busy = ["running", "waitingPermission", "waiting_permission"]
+        let statuses = [runtimes[conversation.id]?.status, conversations.first { $0.id == conversation.id }?.status]
+        guard !statuses.contains(where: { busy.contains($0 ?? "") }) else {
+            throw TodexError.invalid(String(localized: "请先结束当前任务再分叉对话。"))
+        }
+        let title = conversation.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let result = try await command(
+            "conversation.fork",
+            [
+                "conversationId": .string(conversation.id),
+                "title": .string(String(localized: "\(title.isEmpty ? String(localized: "对话") : title) · 分叉")),
+            ], timeout: 45)
+        guard let id = result["conversationId"].optionalString, !id.isEmpty else {
+            throw TodexError.invalid(String(localized: "分叉已响应，但未返回新对话标识，请刷新对话列表核对。"))
+        }
+        try await refresh()
+        guard let created = conversations.first(where: { $0.id == id }) else {
+            throw TodexError.invalid(String(localized: "分叉已完成，但新对话尚未出现在列表中，请刷新核对。"))
+        }
+        if let source = preferences[conversation.id] { updatePreferences(source, for: created) }
+        return created
+    }
     func liveControl(_ control: JSONValue, conversation: ConversationManifest) async throws -> JSONValue {
         guard let runtime = runtimes[conversation.id], runtime.readyForActions, !runtime.activeTurnId.isEmpty else {
-            throw TodexError.invalid("没有已同步的运行任务")
+            throw TodexError.invalid(String(localized: "没有已同步的运行任务"))
         }
         return try await command(
             "conversation.control",
@@ -1160,7 +1364,7 @@ extension RealtimeClient: SessionSocket {}
                 // Consumers must refresh any projection that missed a wire frame.
                 continuation.yield([
                     "type": "connection.gap",
-                    "payload": ["message": "实时事件缓冲区已满，请重新同步", "reason": "subscriberOverflow"],
+                    "payload": ["message": .string(String(localized: "实时事件缓冲区已满，请重新同步")), "reason": "subscriberOverflow"],
                 ])
             }
         }
@@ -1168,13 +1372,25 @@ extension RealtimeClient: SessionSocket {}
         if type == "connection.closed" {
             invalidateTransport()
             operationError = frame["payload"]["message"].stringValue
-            connectionStatus = "连接已中断"
+            lastConnectionError = TodexError.server(
+                code: frame["payload"]["code"].optionalString ?? "CONNECTION_CLOSED", message: operationError ?? "")
+            DebugLog.record(
+                "connection.closed",
+                ["code": frame["payload"]["code"].stringValue, "message": operationError ?? "",
+                 "retryable": "\(frame["payload"]["retryable"] != false)"], level: .warn)
+            connectionStatus = String(localized: "连接已中断")
+            stopReconnectingIfPermanent(frame["payload"]["retryable"] == false)
             persist()
             scheduleReconnect()
             changed(immediate: true)
             return
         }
         if type == "conversation.event", let event = try? frame["payload"].decoded(ConversationEvent.self) {
+            // Watched conversations have no runtime; only their list row updates.
+            guard runtimes[event.conversationId] != nil else {
+                applyWatchedEvent(event)
+                return
+            }
             ingest(event, live: true)
             if runtimes[event.conversationId]?.needsRecovery == true, recoveryTasks[event.conversationId] == nil,
                 isConnected
@@ -1194,9 +1410,62 @@ extension RealtimeClient: SessionSocket {}
                 saveSoon()
             }
         } else if type == "server.error", frame["id"].isNull {
-            operationError = frame["payload"]["message"].stringValue
+            let payload = frame["payload"]
+            // The backend replays after a lag notice; nothing is lost.
+            guard payload["code"] != "EVENT_STREAM_LAGGED" else { return }
+            let id = payload["conversationId"].stringValue
+            if !id.isEmpty {
+                // That conversation's forwarder died server-side and released its
+                // slot. Drop the marker so the next subscribe is not skipped, and
+                // resubscribe the open conversation through a full recovery.
+                liveSubscriptions.removeAll { $0 == id }
+                runtimes[id]?.beginReplay()
+                if id == activeConversationID, recoveryTasks[id] == nil, isConnected {
+                    let current = revision
+                    Task { [weak self] in
+                        guard let self, current == revision else { return }
+                        do { try await recover(id) } catch { /* recover reports once for all waiters. */ }
+                    }
+                }
+            }
+            operationError = payload["message"].stringValue
             changed()
         }
+    }
+    private func recordUsage(_ id: String, _ record: JSONValue) {
+        usageRecords = UsageLedger.merge(
+            usageRecords, runtime: [record],
+            provider: conversations.first { $0.id == id }?.provider ?? "", model: preferences[id]?.model ?? "")
+        saveSoon()
+    }
+    /// Lightweight projection for watch-only subscriptions: keep the list's
+    /// running/approval/unread state and completion alerts current without
+    /// building a timeline. Opening the conversation recovers it in full.
+    private func applyWatchedEvent(_ event: ConversationEvent) {
+        guard let index = conversations.firstIndex(where: { $0.id == event.conversationId }),
+            event.sequence > conversations[index].lastSequence
+        else { return }
+        let old = conversations[index].status
+        conversations[index].lastSequence = event.sequence
+        let payload = event.payload
+        let sessionScoped = (payload["scope"].optionalString ?? payload["details"]["scope"].optionalString) == "session"
+        switch ConversationRuntime.canonicalType(event) {
+        case "turn.started": conversations[index].status = "running"
+        case "permission.requested" where !sessionScoped, "tool.awaitingApproval" where !sessionScoped:
+            conversations[index].status = "waiting_permission"
+        case "permission.resolved" where ["waiting_permission", "waitingPermission"].contains(old):
+            conversations[index].status = "running"
+        case "turn.completed": conversations[index].status = payload["stopReason"] == "error" ? "failed" : "completed"
+        case "turn.failed": conversations[index].status = "failed"
+        case "turn.cancelled": conversations[index].status = "cancelled"
+        case "turn.interrupted": conversations[index].status = "interrupted"
+        default: break
+        }
+        if conversations[index].status == "completed", old != "completed" {
+            notifyTurnCompleted(event.conversationId, reply: "")
+        }
+        saveSoon()
+        changed()
     }
     /// `live` marks events from the open socket; cache and history replays pass
     /// the default so completion alerts only fire for turns that finish now.
@@ -1206,8 +1475,12 @@ extension RealtimeClient: SessionSocket {}
         let before = runtime.appliedSequence
         let oldStatus = runtime.status
         let oldTurn = runtime.activeTurnId
+        let usageHead = runtime.usageRecords.first
         runtime.ingest(event)
         runtimes[id] = runtime
+        // Records only ever change by (re)inserting at the head; a final turn
+        // record's removal of that turn's partials is mirrored by the ledger.
+        if let head = runtime.usageRecords.first, head != usageHead { recordUsage(id, head) }
         cache(event)
         if let pending = pendingSends[id], event.sequence > pending.afterSequence,
             event.payload["clientRequestId"].stringValue == pending.requestId
@@ -1223,7 +1496,12 @@ extension RealtimeClient: SessionSocket {}
             }
             if ["failed", "cancelled", "interrupted"].contains(runtime.status) { pausedQueues.insert(id) }
             if runtime.status == "completed", oldStatus != "completed", !oldTurn.isEmpty {
-                if live { notifyTurnCompleted(id, runtime: runtime) }
+                if live {
+                    let reply = runtime.messages.first {
+                        $0.role == "assistant" && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    }?.text ?? ""
+                    notifyTurnCompleted(id, reply: reply)
+                }
                 if let send = sending[id], runtime.appliedSequence > send.afterSequence {
                     completedDuringSend[id] = send.requestID
                 } else {
@@ -1235,11 +1513,12 @@ extension RealtimeClient: SessionSocket {}
         changed()
     }
 
-    /// Alerts only while the app is backgrounded: without a presentation
-    /// delegate, foreground delivery shows no banner and only drops the
-    /// notification into Notification Center.
-    private func notifyTurnCompleted(_ id: String, runtime: ConversationRuntime) {
-        guard !foreground, CompletionNotifications.isEnabled(in: defaults) else { return }
+    /// Desktop parity: alert only for a turn the user is not watching — the
+    /// app is backgrounded, or another screen than this conversation is shown.
+    /// SceneDelegate presents foreground banners.
+    private func notifyTurnCompleted(_ id: String, reply: String) {
+        guard !foreground || viewingConversationID != id, CompletionNotifications.isEnabled(in: defaults)
+        else { return }
         let manifest = conversations.first { $0.id == id }
         let workspaceName = manifest.map {
             $0.workspace.contains("/") ? URL(fileURLWithPath: $0.workspace).lastPathComponent : $0.workspace
@@ -1247,12 +1526,9 @@ extension RealtimeClient: SessionSocket {}
         let title = [manifest?.title, workspaceName]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty } ?? "TodeX"
-        let reply = runtime.messages.first {
-            $0.role == "assistant" && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }?.text ?? ""
         let excerpt = reply.components(separatedBy: .whitespacesAndNewlines).joined(separator: " ")
         let body = excerpt.isEmpty
-            ? "任务已完成"
+            ? String(localized: "任务已完成")
             : String(excerpt.prefix(160)) + (excerpt.count > 160 ? "…" : "")
         CompletionNotifications.post(conversationId: id, title: title, body: body)
     }
@@ -1345,6 +1621,22 @@ extension RealtimeClient: SessionSocket {}
             persist()
         }
     }
+    /// Sets or clears (nil) a conversation's local label color.
+    func setConversationLabel(_ color: String?, for id: String) {
+        let value = color.flatMap(BackendConnection.normalizeLabelColor)
+        guard conversationLabels[id] != value else { return }
+        conversationLabels[id] = value
+        saveSoon()
+        changed(immediate: true)
+    }
+    /// Read-only cached state of another configured backend, for the Home list.
+    /// Nothing from it enters this session, so per-backend isolation holds.
+    func cachedSnapshot(for connection: BackendConnection) async throws -> SessionSnapshot? {
+        let namespace = LocalStore.namespace(connection)
+        guard namespace != stateNamespace else { return nil }
+        if let unsaved = unsavedSnapshots[namespace]?.snapshot { return unsaved }
+        return try await persistence.load("\(namespace)-state")
+    }
     // MARK: Task plan (synced through the backend; local snapshot is the cache)
     private static let kanbanTombstoneRetention = 30 * 24 * 60 * 60 * 1_000
     var taskConversationIDs: Set<String> {
@@ -1358,14 +1650,39 @@ extension RealtimeClient: SessionSocket {}
                 ? (left.createdAt, left.id) < (right.createdAt, right.id) : a < b
         }
     }
-    @discardableResult func addTask(workspaceId: String, title: String) -> KanbanTask? {
+    @discardableResult func addTask(
+        workspaceId: String, title: String, description: String? = nil, dueDate: String? = nil
+    ) -> KanbanTask? {
         let name = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
         let activeCount = tasks.filter { $0.deletedAt == nil }.count
         guard !workspaceId.isEmpty, !name.isEmpty, activeCount < 500 else { return nil }
-        let task = KanbanTask(workspaceId: workspaceId, title: name)
+        var task = KanbanTask(workspaceId: workspaceId, title: name)
+        task.description = Self.taskDescription(description)
+        task.dueDate = Self.taskDueDate(dueDate)
         tasks.append(task)
         tasksChanged()
         return task
+    }
+    /// Edits description and due date together; empty or malformed values clear them.
+    func updateTaskDetails(_ id: String, description: String?, dueDate: String?) {
+        let description = Self.taskDescription(description)
+        let dueDate = Self.taskDueDate(dueDate)
+        guard let task = tasks.first(where: { $0.id == id && $0.deletedAt == nil }),
+            task.description != description || task.dueDate != dueDate
+        else { return }
+        mutateTask(id) {
+            $0.description = description
+            $0.dueDate = dueDate
+        }
+    }
+    /// Desktop limits: description trimmed to 2000 characters, due date `YYYY-MM-DD`.
+    private static func taskDescription(_ value: String?) -> String? {
+        let text = String((value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000))
+        return text.isEmpty ? nil : text
+    }
+    private static func taskDueDate(_ value: String?) -> String? {
+        guard let value, value.wholeMatch(of: #/\d{4}-\d{2}-\d{2}/#) != nil else { return nil }
+        return value
     }
     func renameTask(_ id: String, title: String) {
         let name = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
@@ -1487,13 +1804,14 @@ extension RealtimeClient: SessionSocket {}
             queues: queues, pendingSends: pendingSends, legacyCursors: legacyCursors, readSequences: reads,
             pinnedWorkspaces: pinnedWorkspaces, pinnedConversations: pinnedConversations,
             pausedQueues: pausedQueues, activeConversationID: activeConversationID, tasks: tasks,
-            sentAttachments: sentAttachments)
+            sentAttachments: sentAttachments, conversationLabels: conversationLabels,
+            usageRecords: usageRecords)
         let checkpoint = Checkpoint(version: saveVersion, snapshot: snapshot)
         unsavedSnapshots[stateNamespace] = checkpoint
         return checkpoint
     }
     private func persistDurably() async throws {
-        guard stateLoaded else { throw TodexError.invalid(storageError ?? "本地状态未完成加载") }
+        guard stateLoaded else { throw TodexError.invalid(storageError ?? String(localized: "本地状态未完成加载")) }
         let namespace = stateNamespace
         let checkpoint = stageCheckpoint()
         try await commit(checkpoint, namespace: namespace)
@@ -1537,7 +1855,7 @@ extension RealtimeClient: SessionSocket {}
     }
     private func reportStorageError(_ error: Error, namespace: String, version: UInt64) {
         guard version >= (storageFailures[namespace]?.version ?? 0) else { return }
-        let message = "草稿和待确认消息仍保留在内存中。\(error.localizedDescription)"
+        let message = String(localized: "草稿和待确认消息仍保留在内存中。\(error.localizedDescription)")
         let different = storageFailures[namespace]?.message != message
         storageFailures[namespace] = (version, message)
         if namespace == stateNamespace {
@@ -1556,6 +1874,7 @@ extension RealtimeClient: SessionSocket {}
         stateLoaded = false
         saveAfterLoad = false
         workspaces = []
+        rejectedWorkspaces = []
         conversations = []
         providers = []
         runtimes = [:]
@@ -1571,7 +1890,9 @@ extension RealtimeClient: SessionSocket {}
         pinnedWorkspaces = []
         pinnedConversations = []
         tasks = []
+        usageRecords = []
         readSequences = [:]
+        conversationLabels = [:]
         legacyCursors = [:]
         rawEvents = [:]
         historyFloors = [:]
@@ -1583,6 +1904,7 @@ extension RealtimeClient: SessionSocket {}
         modelRevisions = [:]
         commandRevisions = [:]
         operationError = nil
+        lastConnectionError = nil
         loadState()
     }
     private func loadState() {
@@ -1627,6 +1949,8 @@ extension RealtimeClient: SessionSocket {}
                 tasks = (snapshot.tasks + tasks).reduce(into: [String: KanbanTask]()) { $0[$1.id] = $1 }
                     .values.sorted { $0.createdAt < $1.createdAt || ($0.createdAt == $1.createdAt && $0.id < $1.id) }
                 sentAttachments = snapshot.sentAttachments
+                conversationLabels = snapshot.conversationLabels.merging(conversationLabels) { _, edited in edited }
+                usageRecords = UsageLedger.union(usageRecords, snapshot.usageRecords)
                 pausedQueues = Set(queues.keys)  // Restarts never automatically drain a persisted queue.
                 activeConversationID = activeConversationID ?? snapshot.activeConversationID
                 stateLoaded = true

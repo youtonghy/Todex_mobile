@@ -36,8 +36,15 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, UNUserNotificatio
             routeNotificationResponse(response)
         }
     }
-    /// Completion notifications only fire while the app is backgrounded; when a
-    /// tap brings the scene back, open the conversation they refer to.
+    /// Completion alerts also fire in the foreground for conversations that are
+    /// not on screen; show them as banners instead of dropping them silently.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .list, .sound])
+    }
+    /// Tapping a completion alert opens the conversation it refers to.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void

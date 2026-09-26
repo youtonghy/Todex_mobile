@@ -66,7 +66,13 @@ actor Backend {
     var beforeCursors: [Int] = []
     var firstPageGate: Gate?
     var nextPageGate: Gate?
+    /// Extra empty conversations listed beside "c" (subscription budget tests).
+    var extraIDs: [String] = []
+    /// Stored workspaces the backend reports as unusable (`rejected`).
+    var rejected: [RejectedWorkspace] = []
     init(_ events: [ConversationEvent] = []) { journal = events }
+    func setRejected(_ values: [RejectedWorkspace]) { rejected = values }
+    func setExtraConversations(_ ids: [String]) { extraIDs = ids }
     func configure(gate: Gate? = nil, pageSize: Int = 200) { firstPageGate = gate; self.pageSize = pageSize }
     func setProviders(_ values: [ProviderDescriptor]) { providers = values }
     func changeTenant() { workspace.tenantId = "tenant-b" }
@@ -79,10 +85,18 @@ actor Backend {
     func append(_ events: [ConversationEvent]) { journal.append(contentsOf: events) }
     func handle(_ url: URL) async throws -> JSONValue {
         switch url.path {
-        case "/v2/workspaces": return ["workspaces": try JSONValue(encoding: [workspace])]
+        case "/v2/workspaces":
+            var body: JSONValue = ["workspaces": try JSONValue(encoding: [workspace])]
+            if !rejected.isEmpty { body["rejected"] = try JSONValue(encoding: rejected) }
+            return body
         case "/v2/conversations":
             var current = manifest; current.lastSequence = journal.last?.sequence ?? 0
-            return ["conversations": try JSONValue(encoding: [current])]
+            let extras = extraIDs.map { ConversationManifest(id: $0, provider: "codex", workspace: "/workspace", workspaceId: "w") }
+            return ["conversations": try JSONValue(encoding: [current] + extras)]
+        case let path where extraIDs.contains(where: { path == "/v2/conversations/" + $0 }):
+            return try JSONValue(encoding: ConversationManifest(id: String(path.dropFirst("/v2/conversations/".count)), provider: "codex", workspace: "/workspace", workspaceId: "w"))
+        case let path where extraIDs.contains(where: { path == "/v2/conversations/\($0)/events" }):
+            return ["events": .array([]), "nextSequence": 0, "hasMore": false]
         case "/v2/providers": return ["providers": try JSONValue(encoding: providers)]
         case "/v2/conversations/c":
             manifestCalls += 1
@@ -135,7 +149,11 @@ actor FakeSocket: SessionSocket {
     var connects = 0
     var disconnects = 0
     var subscribeCursors: [Int] = []
+    var watches: [String] = []
+    var unsubscribes: [String] = []
+    var controls: [JSONValue] = []
     var prompts: [(String, JSONValue)] = []
+    var forks: [JSONValue] = []
     var connectGate: Gate?
     var promptGate: Gate?
     var promptError: TodexError?
@@ -155,14 +173,32 @@ actor FakeSocket: SessionSocket {
     func disconnect() async { disconnects += 1 }
     func overflow() { for _ in 0..<2_060 { continuation.yield(["type": "workbench.fixture"]) } }
     func emit(_ event: ConversationEvent) throws { continuation.yield(["type": "conversation.event", "payload": try JSONValue(encoding: event)]) }
+    func emitFrame(_ frame: JSONValue) { continuation.yield(frame) }
     func command(type: String, payload: JSONValue, timeout: TimeInterval, id: String) async throws -> JSONValue {
+        if type == "conversation.control" { controls.append(payload); return ["accepted": true] }
+        if type == "conversation.unsubscribe" {
+            unsubscribes.append(payload["conversationId"].stringValue)
+            return ["conversationId": payload["conversationId"], "unsubscribed": true]
+        }
+        // Background list watches are recorded apart from recovery subscribes
+        // so the recovery scenarios keep asserting exact cursors.
+        if type == "conversation.subscribe", payload["backfillLimit"].intValue == AppSession.watchBackfillLimit {
+            watches.append(payload["conversationId"].stringValue)
+            return ["conversationId": payload["conversationId"], "subscribed": true, "hasMore": false]
+        }
         if type == "conversation.subscribe" {
             subscribeCursors.append(payload["afterSequence"].intValue)
+            let conversation = payload["conversationId"]
             if !subscriptions.isEmpty {
                 let page = subscriptions.removeFirst(); await page.gate?.wait(); await backend.append(page.events)
-                return ["conversationId": "c", "subscribed": true, "nextSequence": .number(Double(page.events.last?.sequence ?? payload["afterSequence"].intValue)), "hasMore": .bool(page.more)]
+                return ["conversationId": conversation, "subscribed": true, "nextSequence": .number(Double(page.events.last?.sequence ?? payload["afterSequence"].intValue)), "hasMore": .bool(page.more)]
             }
-            return ["conversationId": "c", "subscribed": true, "nextSequence": .number(Double(await backend.journal.last?.sequence ?? 0)), "hasMore": false]
+            let last = conversation == "c" ? await backend.journal.last?.sequence ?? 0 : 0
+            return ["conversationId": conversation, "subscribed": true, "nextSequence": .number(Double(last)), "hasMore": false]
+        }
+        if type == "conversation.fork" {
+            forks.append(payload)
+            return ["conversationId": "c-fork", "forkedFrom": payload["conversationId"]]
         }
         if type == "conversation.prompt" {
             prompts.append((id, payload))
@@ -572,6 +608,88 @@ actor FakeSocket: SessionSocket {
     try check(h.session.hasEarlierHistory("c"), "scan should stop above the journal head")
     h.session.disconnect()
 }
+@MainActor func watchedConversationUpdatesListRow() async throws {
+    let h = try Harness(); await h.session.connect()
+    try await eventually("watch subscribed") { await h.socket.watches == ["c"] }
+    try await h.socket.emit(event(1, "turn.started", ["turnId": "t"]))
+    try await eventually("row running") { h.session.conversations.first?.status == "running" }
+    try check(h.session.runtimes["c"] == nil, "a watch-only row built a runtime")
+    try await h.socket.emit(event(2, "permission.requested", ["turnId": "t", "permissionId": "p"]))
+    try await eventually("row waiting") { h.session.conversations.first?.status == "waiting_permission" }
+    try await h.socket.emit(event(3, "turn.completed", ["turnId": "t"]))
+    try await eventually("row completed") {
+        h.session.conversations.first?.status == "completed" && h.session.conversations.first?.lastSequence == 3
+    }
+    h.session.disconnect()
+}
+@MainActor func scopedStreamErrorResubscribesOpenConversation() async throws {
+    let h = try Harness([event(1)]); try await h.ready()
+    h.session.activeConversationID = "c"
+    let before = await h.socket.subscribeCursors.count
+    await h.socket.emitFrame(["type": "server.error", "payload": ["code": "EVENT_STREAM_LAGGED", "message": "lagged"]])
+    await h.socket.emitFrame(["type": "server.error", "payload": ["code": "CONFLICT", "message": "gap", "conversationId": "c"]])
+    try await eventually("resubscribed") {
+        await h.socket.subscribeCursors.count == before + 1 && h.session.runtimes["c"]?.readyForActions == true
+    }
+    try check(h.session.isConnected, "a subscription-scoped error dropped the connection")
+    try check(h.session.lastError == "gap", "lag notice surfaced as an error or scoped error was hidden: \(h.session.lastError ?? "none")")
+    h.session.disconnect()
+}
+@MainActor func permanentCloseStopsReconnect() async throws {
+    let permanent = try Harness(); await permanent.session.connect()
+    await permanent.socket.emitFrame(["type": "connection.closed", "payload": ["message": "key", "retryable": false]])
+    try await eventually("closed") { !permanent.session.isConnected }
+    try check(permanent.session.status.contains("连接已停止"), "permanent failure kept retrying: \(permanent.session.status)")
+    permanent.session.disconnect()
+    let transient = try Harness(); await transient.session.connect()
+    await transient.socket.emitFrame(["type": "connection.closed", "payload": ["message": "lost", "retryable": true]])
+    try await eventually("closed") { !transient.session.isConnected }
+    try check(transient.session.status.contains("第 1 次重试"), "transient failure did not retry: \(transient.session.status)")
+    transient.session.disconnect()
+}
+@MainActor func subscriptionBudgetEvictsIdleWatch() async throws {
+    let h = try Harness()
+    let ids = (0..<140).map { "x\($0)" }
+    await h.backend.setExtraConversations(ids)
+    await h.session.connect()
+    try await eventually("watch stops at its headroom") { await h.socket.watches.count == 104 }
+    let watched = Set(await h.socket.watches)
+    let unwatched = ids.filter { !watched.contains($0) }
+    for id in unwatched.prefix(16) { try await h.session.recover(id) }
+    try check(await h.socket.unsubscribes.isEmpty, "evicted below the budget")
+    try await h.session.recover(unwatched[16])
+    let evicted = await h.socket.unsubscribes
+    try check(evicted.count == 1 && watched.contains(evicted[0]), "budget did not evict one idle watch: \(evicted)")
+    try check(h.session.runtimes[unwatched[16]]?.readyForActions == true, "subscribe after eviction failed")
+    h.session.disconnect()
+}
+@MainActor func followUpQueueAndPermissionGuard() async throws {
+    let h = try Harness([event(1, "turn.started", ["turnId": "t"])])
+    await h.backend.setProviders([
+        ProviderDescriptor(
+            id: "codex", displayName: "Codex", available: true,
+            capabilities: ["followUpQueue": true, "permissionConfig": ["modes": ["auto"]]])
+    ])
+    try await h.ready()
+    try check(h.session.preferences(for: h.manifest).permissionMode == "", "assumed ask for an agent without it")
+    try await h.session.send(ComposerDraft(text: "next"), in: h.manifest)
+    try check(await h.socket.controls.map { $0["control"]["action"].stringValue } == ["queueAdd"], "plain follow-up skipped the native queue")
+    try check(await h.socket.controls.first?["expectedTurnId"] == "t", "queueAdd not bound to the running turn")
+    try check((h.session.queues["c"] ?? []).isEmpty, "plain follow-up went to the local queue")
+    let withAttachment = ComposerDraft(text: "see [file]", attachments: [MessageAttachment(name: "a.txt", mimeType: "text/plain", data: Data("x".utf8))])
+    try await h.session.send(withAttachment, in: h.manifest)
+    let controlCount = await h.socket.controls.count
+    try check(h.session.queues["c"]?.count == 1 && controlCount == 1, "attachment follow-up must stay local")
+    h.session.queues["c"] = []
+    try await h.socket.emit(event(2, "turn.completed", ["turnId": "t"]))
+    try await eventually("turn completed") { h.session.runtimes["c"]?.status == "completed" }
+    do {
+        try await h.session.send(ComposerDraft(text: "go"), in: h.manifest)
+        throw Failure(description: "sent with a permission mode the agent does not support")
+    } catch TodexError.invalid {}
+    try check(await h.socket.prompts.isEmpty, "prompt reached the socket")
+    h.session.disconnect()
+}
 @MainActor func fixtureNeverOverwritesCatalog() async throws {
     #if DEBUG
     let store = try TestEnvironment.store()
@@ -594,6 +712,114 @@ actor FakeSocket: SessionSocket {
     session.disconnect()
     #endif
 }
+/// Home parity: list fork without a replayed runtime, busy refusal, rejected
+/// workspaces, local conversation labels and another backend's cached catalog.
+@MainActor func homeParity() async throws {
+    let h = try Harness()
+    await h.backend.setProviders([
+        ProviderDescriptor(
+            id: "codex", displayName: "Codex", available: true, capabilities: ["controlActions": ["fork"]])
+    ])
+    await h.backend.setExtraConversations(["c-fork"])
+    await h.backend.setRejected([RejectedWorkspace(id: "gone", name: "旧", path: "/gone", message: "missing")])
+    await h.session.connect()
+    try check(h.session.isConnected, "connect failed")
+    try check(h.session.rejectedWorkspaces.map(\.id) == ["gone"], "rejected workspaces not exposed")
+    try check(h.session.runtimes["c"] == nil, "fork precondition: conversation never opened")
+    var source = h.session.preferences(for: h.manifest)
+    source.model = "fork-model"
+    h.session.updatePreferences(source, for: h.manifest)
+    let created = try await h.session.fork(h.manifest)
+    let payload = await h.socket.forks.first ?? .null
+    try check(created.id == "c-fork", "fork did not return the new conversation")
+    try check(
+        payload["conversationId"] == "c" && payload["title"] == "对话 · 分叉",
+        "unexpected fork payload: \(payload)")
+    try check(h.session.preferences(for: created).model == "fork-model", "fork did not inherit preferences")
+    await h.backend.setStatus("running")
+    try await h.session.refresh()
+    do {
+        _ = try await h.session.fork(h.manifest)
+        throw TodexError.invalid("fork of a running conversation was not refused")
+    } catch TodexError.invalid(let message) where message.contains("结束当前任务") {}
+    try check(await h.socket.forks.count == 1, "a refused fork reached the backend")
+
+    h.session.setConversationLabel("#EF4444", for: "c")
+    h.session.setConversationLabel("teal", for: "c-fork")
+    try check(h.session.conversationLabels == ["c": "#ef4444"], "labels not normalized")
+    let task = h.session.addTask(workspaceId: "w", title: "细节", description: "  说明 ", dueDate: "2026-13")
+    try check(task?.description == "说明" && task?.dueDate == nil, "task details not validated")
+    h.session.updateTaskDetails(task?.id ?? "", description: nil, dueDate: "2026-10-01")
+    try check(
+        h.session.tasks.first { $0.id == task?.id }.map { $0.description == nil && $0.dueDate == "2026-10-01" } == true,
+        "task details not updated")
+    h.session.persist()
+    try await eventually("labels persisted") {
+        try h.store.read(h.stateKey, as: SessionSnapshot.self)?.conversationLabels == ["c": "#ef4444"]
+    }
+    // Another backend's cache is readable but never merged into this session.
+    let other = BackendConnection(id: "other-" + UUID().uuidString, name: "Other", serverURL: "https://other.invalid")
+    var cached = SessionSnapshot()
+    cached.workspaces = [WorkspaceRecord(id: "ow", name: "Other W", path: "/other")]
+    try h.store.save(cached, key: LocalStore.namespace(other) + "-state")
+    let read = try await h.session.cachedSnapshot(for: other)
+    try check(read?.workspaces.map(\.id) == ["ow"], "other backend cache not readable")
+    try check(!h.session.workspaces.contains { $0.id == "ow" }, "other backend state leaked into the session")
+    try check(try await h.session.cachedSnapshot(for: h.connection) == nil, "active namespace read as other backend")
+    let legacy = try JSONDecoder().decode(
+        SessionSnapshot.self, from: JSONEncoder().encode(["drafts": JSONValue.object([:])]))
+    try check(legacy.conversationLabels.isEmpty, "legacy snapshot failed to decode without labels")
+    h.session.disconnect()
+}
+@MainActor func usageLedgerPersistsAcrossRestart() async throws {
+    // A record from an older, unloaded part of the journal must survive; a
+    // runtime record with the same id replaces its stored copy.
+    var snapshot = SessionSnapshot()
+    snapshot.usageRecords = [
+        ["id": "old", "conversationId": "c", "turnId": "t0", "provider": "codex", "updatedAt": 1, "totalTokens": 5],
+        ["id": "other", "conversationId": "d", "turnId": "t9", "provider": "pi", "updatedAt": 2, "totalTokens": 7],
+    ]
+    let h = try Harness(
+        [event(1, "turn.started", ["turnId": "t"]),
+         event(2, "usage.updated", ["provider": "codex", "turnId": "t", "usage": ["last": ["input": 80, "output": 10, "total": 90]]])],
+        snapshot: snapshot)
+    try await h.ready()
+    try await eventually("usage merged") { h.session.usageRecords.count == 3 }
+    try check(h.session.usageRecords.contains { $0["id"] == "old" } && h.session.usageRecords.contains { $0["id"] == "other" },
+              "merge dropped records outside the loaded window")
+    try check(h.session.usageRecords.contains { $0["turnId"] == "t" && $0["totalTokens"] == 90 }, "runtime record missing")
+    h.session.persist()
+    try await eventually("usage persisted") {
+        (try h.store.read(h.stateKey, as: SessionSnapshot.self)?.usageRecords.count) == 3
+    }
+    // A final turn snapshot supersedes that turn's partial records.
+    let stored: [JSONValue] = [
+        ["id": "r1", "conversationId": "c", "turnId": "t", "provider": "codex", "scope": "request", "updatedAt": 3],
+        ["id": "keep", "conversationId": "c", "turnId": "u", "provider": "codex", "scope": "request", "updatedAt": 4],
+    ]
+    let merged = UsageLedger.merge(
+        stored, runtime: [["id": "turn", "conversationId": "c", "turnId": "t", "provider": "codex", "scope": "turn", "updatedAt": 5]],
+        provider: "codex", model: "gpt")
+    try check(merged.map { $0["id"] } == ["turn", "keep"], "turn record did not supersede: \(merged.map { $0["id"] })")
+    try check(merged.first?["model"] == "gpt", "unknown model not filled from conversation")
+    let bounded = UsageLedger.union((0..<2_100).map { ["id": .string("n\($0)"), "updatedAt": .number(Double($0))] }, [])
+    try check(bounded.count == UsageLedger.limit && bounded.first?["id"] == "n2099", "ledger not bounded newest-first")
+    let legacy = try JSONDecoder().decode(
+        SessionSnapshot.self, from: JSONEncoder().encode(["drafts": JSONValue.object([:])]))
+    try check(legacy.usageRecords.isEmpty, "legacy snapshot failed to decode without usageRecords")
+    h.session.disconnect()
+}
+@MainActor func connectFailureKeepsDiagnosticError() async throws {
+    let h = try Harness()
+    await h.session.connect()
+    await h.socket.emitFrame(["type": "connection.closed", "payload": ["code": "401", "message": "后端拒绝认证", "retryable": false]])
+    try await eventually("closed") { !h.session.isConnected && h.session.lastConnectionError != nil }
+    try check(ConnectionDiagnostic.classify(h.session.lastConnectionError!).category == .authenticationFailed,
+              "close code lost for diagnostics")
+    await h.session.connect()
+    try check(h.session.isConnected && h.session.lastConnectionError == nil, "diagnostic survived a successful connect")
+    h.session.disconnect()
+}
 @main struct SessionRaceRunner {
     @MainActor static func main() async {
         let tests: [(String, @MainActor () async throws -> Void)] = [
@@ -615,7 +841,15 @@ actor FakeSocket: SessionSocket {
             ("composer memory persistence + capability fallback", composerMemory),
             ("lazy tail open + earlier paging", lazyTailOpenAndEarlierPaging),
             ("old backend falls back to forward replay", lazyOpenFallsBackToForwardReplay),
-            ("lazy open scans back for active turn", lazyOpenScansBackForActiveTurn)
+            ("lazy open scans back for active turn", lazyOpenScansBackForActiveTurn),
+            ("background watch updates list row", watchedConversationUpdatesListRow),
+            ("scoped stream error resubscribes", scopedStreamErrorResubscribesOpenConversation),
+            ("permanent close stops reconnect", permanentCloseStopsReconnect),
+            ("subscription budget evicts idle watch", subscriptionBudgetEvictsIdleWatch),
+            ("follow-up native queue + permission guard", followUpQueueAndPermissionGuard),
+            ("home parity: fork, labels, task details, other backend cache", homeParity),
+            ("usage ledger persists across conversations", usageLedgerPersistsAcrossRestart),
+            ("connection diagnostic error lifecycle", connectFailureKeepsDiagnosticError)
         ]
         var failures = 0
         for (name, run) in tests {

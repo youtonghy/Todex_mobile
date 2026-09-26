@@ -66,7 +66,7 @@ enum CredentialStore {
         ]
         if secret.isEmpty {
             let result = SecItemDelete(query as CFDictionary)
-            guard result == errSecSuccess || result == errSecItemNotFound else { throw TodexError.invalid("无法删除设备密钥") }
+            guard result == errSecSuccess || result == errSecItemNotFound else { throw TodexError.invalid(String(localized: "无法删除设备密钥")) }
             return
         }
         let values: [String: Any] = [
@@ -76,10 +76,10 @@ enum CredentialStore {
         let updated = SecItemUpdate(query as CFDictionary, values as CFDictionary)
         if updated == errSecItemNotFound {
             guard SecItemAdd(query.merging(values) { _, rhs in rhs } as CFDictionary, nil) == errSecSuccess else {
-                throw TodexError.invalid("无法安全保存设备密钥")
+                throw TodexError.invalid(String(localized: "无法安全保存设备密钥"))
             }
         } else if updated != errSecSuccess {
-            throw TodexError.invalid("无法更新设备密钥")
+            throw TodexError.invalid(String(localized: "无法更新设备密钥"))
         }
     }
 }
@@ -159,6 +159,8 @@ nonisolated struct SessionSnapshot: Codable, Sendable {
     var activeConversationID: String?
     var tasks: [KanbanTask] = []
     var sentAttachments: [SentAttachmentRecord] = []
+    var conversationLabels: [String: String] = [:]
+    var usageRecords: [JSONValue] = []
 }
 
 /// Every field decodes with decodeIfPresent so a snapshot written by an older
@@ -183,6 +185,55 @@ extension SessionSnapshot {
         activeConversationID = try c.decodeIfPresent(String.self, forKey: .activeConversationID)
         tasks = try c.decodeIfPresent([KanbanTask].self, forKey: .tasks) ?? []
         sentAttachments = try c.decodeIfPresent([SentAttachmentRecord].self, forKey: .sentAttachments) ?? []
+        conversationLabels = try c.decodeIfPresent([String: String].self, forKey: .conversationLabels) ?? [:]
+        usageRecords = try c.decodeIfPresent([JSONValue].self, forKey: .usageRecords) ?? []
+    }
+}
+
+/// Cross-conversation usage history, bounded like desktop MAX_USAGE_RECORDS.
+/// A runtime holds only its loaded event window, so records merge by id
+/// instead of replacing a conversation's set. A turn-scoped record (the
+/// cumulative or final turn snapshot) supersedes that turn's other records,
+/// exactly as ConversationRuntime collapses them.
+nonisolated enum UsageLedger {
+    static let limit = 2_000
+
+    static func merge(_ stored: [JSONValue], runtime: [JSONValue], provider: String, model: String) -> [JSONValue] {
+        guard !runtime.isEmpty else { return stored }
+        // Desktop parity: fill an unknown provider/model from the conversation.
+        let incoming = runtime.map { record -> JSONValue in
+            var record = record
+            if !provider.isEmpty, ["", "unknown"].contains(record["provider"].stringValue) {
+                record["provider"] = .string(provider)
+            }
+            if !model.isEmpty, (record["model"].optionalString ?? "").isEmpty { record["model"] = .string(model) }
+            return record
+        }
+        let ids = Set(incoming.map { $0["id"] })
+        let turns = Set(
+            incoming.filter { $0["scope"] == "turn" && !$0["turnId"].stringValue.isEmpty }.map(turnKey))
+        let kept = stored.filter { !ids.contains($0["id"]) && !turns.contains(turnKey($0)) }
+        return newestFirst(incoming + kept)
+    }
+
+    /// Loaded snapshot records under records gathered while it loaded.
+    static func union(_ current: [JSONValue], _ loaded: [JSONValue]) -> [JSONValue] {
+        guard !current.isEmpty else { return Array(loaded.prefix(limit)) }
+        let ids = Set(current.map { $0["id"] })
+        return newestFirst(current + loaded.filter { !ids.contains($0["id"]) })
+    }
+
+    private static func turnKey(_ record: JSONValue) -> [JSONValue] {
+        [record["conversationId"], record["turnId"], record["provider"]]
+    }
+
+    /// Stable: ties (and records without a time) keep their incoming order.
+    private static func newestFirst(_ records: [JSONValue]) -> [JSONValue] {
+        records.enumerated().sorted {
+            let lhs = $0.element["updatedAt"].doubleValue ?? 0
+            let rhs = $1.element["updatedAt"].doubleValue ?? 0
+            return lhs != rhs ? lhs > rhs : $0.offset < $1.offset
+        }.prefix(limit).map(\.element)
     }
 }
 
@@ -197,9 +248,9 @@ nonisolated struct KanbanTask: Identifiable, Codable, Sendable, Equatable {
         case done
         var label: String {
             switch self {
-            case .planned: "计划"
-            case .inProgress: "进行中"
-            case .done: "已完成"
+            case .planned: String(localized: "计划")
+            case .inProgress: String(localized: "进行中")
+            case .done: String(localized: "已完成")
             }
         }
         var symbol: String {
@@ -272,7 +323,7 @@ actor SessionPersistence {
     }
     private func write<T: Encodable>(_ value: T, key: String, version: UInt64) throws {
         if version <= (committed[key] ?? 0) { return }
-        guard version >= (attempted[key] ?? 0) else { throw TodexError.invalid("较新的本地保存尚未成功") }
+        guard version >= (attempted[key] ?? 0) else { throw TodexError.invalid(String(localized: "较新的本地保存尚未成功")) }
         attempted[key] = version
         try store.save(value, key: key)
         committed[key] = version
@@ -362,6 +413,9 @@ nonisolated struct SentAttachment: Codable, Sendable, Equatable {
     var mimeType: String
     var sizeBytes: Int?
     var preview: String?
+    /// UTF-8 text of a file attachment (≤100 KB, desktop parity) for the
+    /// read-only receipt preview; shares the preview eviction budget.
+    var textContent: String?
 }
 nonisolated struct SentAttachmentRecord: Codable, Sendable, Equatable {
     var conversationId: String
