@@ -38,6 +38,7 @@ final class TaskBoardView: UIView, UIDragInteractionDelegate, UIDropInteractionD
     private var expandedDone = Set<String>()
     /// A rebuild mid-drag would remove the drop targets; it waits for the drop.
     private var dragging = false
+    private var renderedSignature: [String]?
     private var deferredColumns: [(WorkspaceRecord, [KanbanTask])]?
     // Mirror the desktop column palette: accent, warning, danger, success.
     private static let palette: [UIColor] = [Theme.accent, .systemOrange, .systemRed, .systemGreen]
@@ -74,12 +75,30 @@ final class TaskBoardView: UIView, UIDragInteractionDelegate, UIDropInteractionD
         let data = workspaces.map { ($0, tasksFor($0)) }
         if dragging {
             deferredColumns = data
-        } else {
-            render(data)
+            return
         }
+        // Home reloads on every session change (health probes, background
+        // subscriptions). Rebuilding unchanged columns would dismiss an open
+        // card menu and cancel a pending column lift, so skip identical data.
+        guard signature(data) != renderedSignature else { return }
+        render(data)
+    }
+    /// Everything a column displays: workspace, tasks and the linked
+    /// conversation's title and status dot. Menus build lazily when opened.
+    private func signature(_ data: [(WorkspaceRecord, [KanbanTask])]) -> [String] {
+        data.flatMap { workspace, tasks in
+            ["\(workspace)"]
+                + tasks.map { task in
+                    "\(task)|\(handlers?.linkedTitle(task) ?? "")|\(handlers?.linkedStatus(task)?.label ?? "")"
+                }
+        }
+    }
+    private static func deferredMenu(_ build: @escaping @MainActor () -> [UIMenuElement]) -> UIMenu {
+        UIMenu(children: [UIDeferredMenuElement.uncached { completion in completion(build()) }])
     }
 
     private func render(_ data: [(WorkspaceRecord, [KanbanTask])]) {
+        renderedSignature = signature(data)
         columns.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let ids = data.map(\.0.id)
         for (index, (workspace, tasks)) in data.enumerated() {
@@ -383,14 +402,16 @@ final class TaskBoardView: UIView, UIDragInteractionDelegate, UIDropInteractionD
         }
         let chip = UIButton(configuration: chipConfig)
         chip.configuration?.title = task.status.label
-        chip.menu = handlers?.statusMenu(task)
+        chip.menu = Self.deferredMenu { [weak self] in self?.handlers?.statusMenu(task).children ?? [] }
         chip.showsMenuAsPrimaryAction = true
         chip.accessibilityLabel = String(localized: "任务状态：\(task.status.label)")
 
         let pin = UIButton(type: .system)
         pin.setImage(Theme.icon("pin", pointSize: 12), for: .normal)
         pin.tintColor = .secondaryLabel
-        pin.menu = (handlers?.attachMenu(task, workspace)).map { UIMenu(children: [$0]) }
+        pin.menu = Self.deferredMenu { [weak self] in
+            (self?.handlers?.attachMenu(task, workspace)).map { [$0] } ?? []
+        }
         pin.showsMenuAsPrimaryAction = true
         pin.accessibilityLabel = String(localized: "贴到对话")
         pin.widthAnchor.constraint(equalToConstant: 32).isActive = true
@@ -399,7 +420,7 @@ final class TaskBoardView: UIView, UIDragInteractionDelegate, UIDropInteractionD
         let more = UIButton(type: .system)
         more.setImage(Theme.icon("ellipsis", pointSize: 12), for: .normal)
         more.tintColor = .secondaryLabel
-        more.menu = handlers?.moreMenu(task, workspace)
+        more.menu = Self.deferredMenu { [weak self] in self?.handlers?.moreMenu(task, workspace).children ?? [] }
         more.showsMenuAsPrimaryAction = true
         more.accessibilityLabel = String(localized: "任务操作")
         more.widthAnchor.constraint(equalToConstant: 32).isActive = true
