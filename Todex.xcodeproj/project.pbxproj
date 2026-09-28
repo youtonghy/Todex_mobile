@@ -85,7 +85,7 @@
 		CD4992CC1CD7B78D9050C05A /* CatalogViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogViewController.swift; sourceTree = "<group>"; };
 		D967855CE742B8058D64D347 /* TimelineViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineViewController.swift; sourceTree = "<group>"; };
 		DB42BD1C260F89F222ED2D1B /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		DF87381D01A89298CC562143 /* Todex.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Todex.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF87381D01A89298CC562143 /* Todex.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Todex.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0817D5BCA31F65AABAE304D /* TodexUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodexUITests.swift; sourceTree = "<group>"; };
 		E45D1797EEA72BE5FF1B4AFC /* Chat */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Chat; path = Todex/Resources/Chat; sourceTree = SOURCE_ROOT; };
 		E94641F64C898CE786F92167 /* CodeHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeHighlighter.swift; sourceTree = "<group>"; };
@@ -298,7 +298,6 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					42D99DBCAA03593933872BA9 = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					DF6FA927AE57FF62B0B05803 = {
@@ -427,6 +426,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 6X47LXL6KT;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Todex/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -527,6 +527,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 6X47LXL6KT;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Todex/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
