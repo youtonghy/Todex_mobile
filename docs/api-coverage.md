@@ -1,16 +1,16 @@
 # Swift API 覆盖与验证
 
-核对日期：2026-09-10。以当前后端源码为准：
+核对日期：2026-09-10；CLI 安装与 Agent 供应商导出/导入于 2026-09-28 补充。以当前后端源码为准：
 
 - 路由：[routes.rs](../../TodeX_backend/src/server/routes.rs)、[v2.rs](../../TodeX_backend/src/server/v2.rs)、[device_pairing.rs](../../TodeX_backend/src/server/device_pairing.rs)。
 - WS 分派及 wire：[websocket.rs](../../TodeX_backend/src/server/websocket.rs)、[protocol.rs](../../TodeX_backend/src/server/protocol.rs)。
 - 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。共享客户端 [v2.ts](../../TodeX_protocol/src/v2.ts) 仅作交叉参考。
 
-**45/45 个普通 HTTP method + path 已封装，57/57 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 45 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
+**55/55 个普通 HTTP method + path 已封装，57/57 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 55 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
 ## 验证范围
 
-[APIClientTests.swift](../Packages/TodexCore/Tests/TodexCoreTests/APIClientTests.swift) 在 Swift 6.3.3、macOS 的临时包副本中通过：11 个 Swift Testing 测试函数，其中 `endpointWire` 包含 45 个参数用例，`httpErrors` 包含 4 个参数用例，其余 9 个函数分别验证模型、默认值、分页、错误和协议。依赖使用本机已缓存的 swift-sodium 0.11.0；包副本的 Package.swift 与工作区原文件一致。
+[APIClientTests.swift](../Packages/TodexCore/Tests/TodexCoreTests/APIClientTests.swift) 最近于 2026-09-28 在 Swift 6.4、macOS 上以 `swift test --package-path Packages/TodexCore` 通过：17 个 Swift Testing 测试函数，其中 `endpointWire` 包含 55 个参数用例，`httpErrors` 包含 4 个参数用例，其余 15 个函数分别验证模型、默认值、分页、错误、协议、CLI 安装字段与供应商导出文件。依赖使用本机已缓存的 swift-sodium 0.11.0；包副本的 Package.swift 与工作区原文件一致。
 
 这里的通过是 **URLProtocol 拦截 URLSession 实际构造请求后的本地契约测试**：逐项检查 HTTP method、编码后的 path、按后端规则解码的 query、设备签名头（x-todex-device-id/auth-ts/auth-nonce/auth-sig）、Accept/Content-Type、JSON body、返回值。fixture 使用独立的 .invalid 主机和 session；所有请求都被拦截。上述 URLProtocol 阶段没有启动或访问真实 backend，也没有调用真实 provider、Git、PTY、MCP、配对批准、升级或云任务。该阶段 WS 只验证编码、解码与源码支持状态；后续真实协议集成结果见文末。表中“已封装”不代表真实服务实测通过。
 
@@ -56,9 +56,10 @@ swift test --package-path /path/to/TodexCore-copy \
 | GET | `/v2/git/diff` | `gitDiff(workspacePath:path:)` | 已封装；认证 | `endpointWire(gitDiff)` |
 | POST | `/v2/browser/fetch` | `browserFetch(url:)` | 已封装；认证 | `endpointWire(browserFetch)` |
 | GET | `/v2/providers` | `providers()` | 已封装；认证；解包 providers | `endpointWire(providers)` |
-| GET | `/v2/providers/versions` | `providerVersions()` | 已封装；认证 | `endpointWire(providerVersions)` |
+| GET | `/v2/providers/versions` | `providerVersions()` | 已封装；认证；未安装为 `installed: false`/`status: "notInstalled"` 且无 error；缺少 `installSupported` 视为不可安装（`CLIManagement`） | `endpointWire(providerVersions)` |
 | POST | `/v2/providers/{provider}/upgrade` | `upgradeProvider(provider:)` | 已封装；认证；不自动重试 | `endpointWire(upgradeProvider)` |
-| GET | `/v2/providers/upgrades/{operation_id}` | `providerUpgradeOperation(id:)` | 已封装；认证 | `endpointWire(providerUpgradeOperation)` |
+| POST | `/v2/providers/{provider}/install` | `installProvider(provider:)` | 已封装；设备签名；仅未安装时（否则 409）；返回与升级相同的操作对象，`action: "install"`；不自动重试 | `endpointWire(installProvider)`、`cliInstallFieldsDefaultForOlderBackends` |
+| GET | `/v2/providers/upgrades/{operation_id}` | `providerUpgradeOperation(id:)` | 已封装；认证；安装与升级共用；缺少 `action` 视为升级 | `endpointWire(providerUpgradeOperation)` |
 | GET | `/v2/providers/models` | `providerModels(provider:workspace:)` | 已封装；认证；运行时发现 | `endpointWire(providerModels)` |
 | GET | `/v2/providers/image-input` | `providerImageInput(provider:workspace:profile:model:)` | 已封装；认证；运行时能力 | `endpointWire(providerImageInput)` |
 | GET | `/v2/providers/commands` | `providerCommands(provider:workspace:)` | 已封装；认证；运行时发现 | `endpointWire(providerCommands)` |
@@ -67,6 +68,8 @@ swift test --package-path /path/to/TodexCore-copy \
 | DELETE | `/v2/agent-providers/{agent}/{id}` | `deleteAgentProvider(agent:id:)` | 已封装；认证 | `endpointWire(deleteAgentProvider)` |
 | POST | `/v2/agent-providers/{agent}/{id}/activate` | `activateAgentProvider(agent:id:modelId:)` | 已封装；认证；modelId 可选 | `endpointWire(activateAgentProvider)` |
 | POST | `/v2/agent-providers/{agent}/import-live` | `importLiveAgentProvider(agent:id:name:)` | 已封装；认证；独占型捕获整份 live，叠加型按 id 收编 | `endpointWire(importLiveAgentProvider)` |
+| GET | `/v2/agent-providers/{agent}/export` | `exportAgentProviders(agent:)` | 已封装；设备签名；返回后端原始字节（`todex.agent-providers` v1 文件，密钥为明文） | `endpointWire(exportAgentProviders)`、`agentProviderTransferTravelsVerbatim` |
+| POST | `/v2/agent-providers/{agent}/import` | `importAgentProviders(agent:transfer:)` | 已封装；设备签名；文件字节原样作为请求体；按 id upsert，保留文件外的供应商与当前供应商；返回该 Agent 的 bucket；错 agent/格式/版本、重复 id、掩码密钥为 400。上传前 `AgentProviderTransfer.providerCount(in:agent:)` 做轻量校验 | `endpointWire(importAgentProviders)`、`agentProviderTransferEnvelopeIsCheckedBeforeUpload` |
 | GET | `/v2/agent-providers/{agent}/{id}/models` | `agentProviderModels(agent:id:)` | 已封装；认证；后端代理拉取、密钥不出后端 | `endpointWire(agentProviderModels)` |
 | POST | `/v2/agent-providers/{agent}/{id}/models` | `previewAgentProviderModels(agent:id:settingsConfig:)` | 已封装；认证；保存前按编辑表单预览拉取，掩码密钥按同 id 档案/live 节点还原 | `endpointWire(previewAgentProviderModels)` |
 | GET | `/v2/catalog/skills` | `skills(provider:workspace:)` | 已封装；认证 | `endpointWire(skills)` |
@@ -94,6 +97,7 @@ swift test --package-path /path/to/TodexCore-copy \
 - 创建会话发送 `workspace.path` 字符串和 `providerProfile`；不会发送整个 workspace 对象。nil profile/title 不入请求体。更新支持后端的 title/archived patch，原样保留调用方 JSON；无额外成功语义。
 - 回放使用 `afterSequence` 和 `limit`（默认 200），返回完整 replay JSON，保留 nextSequence/hasMore。不会将缺失的列表字段悄悄当作空列表。反向翻页使用 `beforeSequence`（包含式上界）加 `limit`，返回 `sequence <= before` 的最后一页，`hasMore` 表示还有更早事件；下一页游标为本页首条 `sequence - 1`。旧后端忽略该参数时由调用方校验锚点并回退正向回放。
 - 文件保存必需 `expectedText`。Git operation 的 wire 为 `{ "workspacePath": "…", "operation": { "action": "create-branch", "branchName": "…" } }`。权限回复 wire 为 `{ "outcome": "allow_once", "optionId": "…" }` 等后端决策结构。
+- 供应商导出/导入不经 JSONValue 往返：JSONValue 以 Double 存数字且不保留键顺序，而 settingsConfig 是不透明 JSON。导出直接返回响应字节（仅校验为 JSON 对象），导入用 `HTTPClient.request(_:path:jsonData:)` 原样发送并照常签名。
 - 复用现有 JSONValue、BackendConnection、HTTPClient，包括 URL 规范化、路径 segment 编码和 JSON 请求/错误处理。只在 APIClient 内处理两个例外：/health 的纯文本，以及查询值含字面量 + 的 GET。后者将 URLQueryItem 留下的 + 改为 %2B，避免被 Axum 的表单查询解析器变为空格；% 字符不重复解码。这两个分支使用同一个 session，并保留大小上限与 HTTP 错误语义，共同文件未修改。
 - 默认 session 禁用重定向、缓存和 cookie；公开探测/配对方法不附带设备签名。额外的 `init(connection:session:)` 允许 URLProtocol 注入，调用方负责注入 session 的策略。
 - 非 GET 网络失败沿用 HTTPClient 的 unknownOutcome；不重试写操作。401/409/501/302、无效 JSON、缺失必需字段、204 空响应及传输超时均有本地用例。配对封装只发送公钥/设备名或 proof；poll proof 与 cancel proof 的派生域不同，密码学过程不属于本文件封装。

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Named wrappers for the backend's 41 HTTP method/path pairs.
+/// Named wrappers for the backend's HTTP method/path pairs (see docs/api-coverage.md).
 /// Provider-specific request and response fields remain JSONValue.
 public final class APIClient: Sendable {
     public let http: HTTPClient
@@ -249,6 +249,14 @@ public final class APIClient: Sendable {
         try await http.request(.post, path: "/v2/providers/\(HTTPClient.segment(provider))/upgrade")
     }
 
+    /// Starts installing a managed CLI that is not installed (409 otherwise).
+    /// Returns the same operation object as upgrades, with `action: "install"`;
+    /// poll it with providerUpgradeOperation(id:).
+    public func installProvider(provider: String) async throws -> JSONValue {
+        try await http.request(.post, path: "/v2/providers/\(HTTPClient.segment(provider))/install")
+    }
+
+    /// Serves both install and upgrade operations.
     public func providerUpgradeOperation(id: String) async throws -> JSONValue {
         try await http.request(path: "/v2/providers/upgrades/\(HTTPClient.segment(id))")
     }
@@ -307,6 +315,27 @@ public final class APIClient: Sendable {
         return try await http.request(
             .post, path: "/v2/agent-providers/\(HTTPClient.segment(agent))/import-live",
             body: .object(body))
+    }
+
+    /// One agent's providers as a `todex.agent-providers` file with secrets in
+    /// clear. Returns the backend's exact bytes so the file round-trips
+    /// without re-encoding opaque settingsConfig values.
+    public func exportAgentProviders(agent: String) async throws -> Data {
+        let result = try await http.response(
+            path: "/v2/agent-providers/\(HTTPClient.segment(agent))/export",
+            maximumBytes: AgentProviderTransfer.maximumBytes)
+        guard case .object = try result.json() else {
+            throw TodexError.invalid(String(localized: "后端返回的供应商导出无效", bundle: .module))
+        }
+        return result.data
+    }
+
+    /// Upserts every provider of an export file by id; providers missing from
+    /// the file stay and the current provider is unchanged. The file is sent
+    /// byte-for-byte and the agent's updated bucket is returned.
+    public func importAgentProviders(agent: String, transfer: Data) async throws -> JSONValue {
+        try await http.request(
+            .post, path: "/v2/agent-providers/\(HTTPClient.segment(agent))/import", jsonData: transfer)
     }
 
     /// Model listing proxied by the backend so the API key stays server-side.

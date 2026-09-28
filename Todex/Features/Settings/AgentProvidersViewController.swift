@@ -1,13 +1,15 @@
 import Foundation
 import TodexCore
 import UIKit
+import UniformTypeIdentifiers
 
 /// cc-switch 同款的多供应商/账户管理：每个 Agent 一份档案库。独占型（Codex、
 /// Claude Code、Grok Build）激活时改写该 Agent 的全局配置文件；叠加型（Pi、OpenCode）
 /// 保存档案即把 provider 节点写入全局配置，可多个并存，界面只保留编辑入口。
 /// settingsConfig 中的密钥由后端脱敏返回，原样写回即保留已存密钥。
+/// 每个 Agent 的供应商可导出为含明文密钥的 JSON 文件，并在其他设备的后端导入。
 @MainActor
-final class AgentProvidersViewController: SettingsListController {
+final class AgentProvidersViewController: SettingsListController, UIDocumentPickerDelegate {
     private static let agentIDs = ["codex", "claude-code", "grok-build", "pi", "opencode"]
     private static let agentTitles: [String: String] = [
         "codex": "Codex CLI",
@@ -17,15 +19,23 @@ final class AgentProvidersViewController: SettingsListController {
         "opencode": "OpenCode",
     ]
     private static let additiveAgents: Set<String> = ["pi", "opencode"]
+    /// Export files hold plaintext keys; each export replaces this directory
+    /// so a file left by an interrupted share sheet does not linger.
+    private static let exportDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("AgentProviderExports", isDirectory: true)
 
     private let connection: BackendConnection
     private let api: APIClient
     private var buckets: [String: JSONValue] = [:]
     private var loading = false
     private var submitting = false
+    /// Status row text while submitting; nil shows the generic one.
+    private var progressText: String?
     private var errorMessage: String?
     private var requestTask: Task<Void, Never>?
     private var generation = 0
+    /// Agent whose import file the document picker is choosing.
+    private var pendingImportAgent: String?
 
     init(connection: BackendConnection) {
         self.connection = connection
@@ -55,6 +65,7 @@ final class AgentProvidersViewController: SettingsListController {
             requestTask = nil
             loading = false
             submitting = false
+            progressText = nil
         }
     }
 
@@ -227,6 +238,146 @@ final class AgentProvidersViewController: SettingsListController {
         mutate { api in _ = try await api.importLiveAgentProvider(agent: agent, id: id, name: name) }
     }
 
+    // MARK: - 导出与导入
+
+    private func confirmExport(agent: String) {
+        confirm(
+            title: String(localized: "导出 \(Self.agentTitles[agent] ?? agent) 供应商？"),
+            message: String(localized: "导出的文件包含明文密钥，请妥善保管。")
+        ) { [weak self] in self?.export(agent: agent) }
+    }
+
+    private func export(agent: String) {
+        guard !loading, !submitting else { return }
+        generation += 1
+        let current = generation
+        submitting = true
+        progressText = String(localized: "正在导出…")
+        errorMessage = nil
+        render()
+        requestTask = Task { [weak self, api] in
+            do {
+                let data = try await api.exportAgentProviders(agent: agent)
+                try Task.checkCancellation()
+                guard let self, generation == current else { return }
+                submitting = false
+                progressText = nil
+                requestTask = nil
+                render()
+                try share(data, agent: agent)
+            } catch {
+                guard let self, !Task.isCancelled, generation == current else { return }
+                submitting = false
+                progressText = nil
+                requestTask = nil
+                errorMessage = SettingsResponse.errorMessage(error, feature: String(localized: " 供应商导出"))
+                render()
+            }
+        }
+    }
+
+    /// Writes the export to a protected temp file and removes it once the share
+    /// sheet finishes, whether or not it was saved or sent.
+    private func share(_ data: Data, agent: String) throws {
+        let files = FileManager.default
+        let directory = Self.exportDirectory
+        if files.fileExists(atPath: directory.path) { try files.removeItem(at: directory) }
+        try files.createDirectory(at: directory, withIntermediateDirectories: true)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let url = directory.appendingPathComponent(
+            "todex-\(agent)-providers-\(formatter.string(from: Date())).json", isDirectory: false)
+        try data.write(to: url, options: [.atomic, .completeFileProtection])
+        let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        sheet.completionWithItemsHandler = { _, _, _, _ in
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                // The next export clears the directory again.
+                DebugLog.record(
+                    "agentProviders.export.cleanup", ["error": error.localizedDescription], level: .warn)
+            }
+        }
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = view
+            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            popover.permittedArrowDirections = []
+        }
+        present(sheet, animated: true)
+    }
+
+    private func pickImport(agent: String) {
+        guard !loading, !submitting else { return }
+        pendingImportAgent = agent
+        // Open in place (security-scoped) rather than as a copy, so no extra
+        // plaintext copy of the keys is left in the app container.
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.json], asCopy: false)
+        picker.allowsMultipleSelection = false
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let agent = pendingImportAgent, let url = urls.first else { return }
+        pendingImportAgent = nil
+        let data: Data
+        let count: Int
+        do {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                try AgentProviderTransfer.checkSize(size)
+            }
+            data = try Data(contentsOf: url)
+            count = try AgentProviderTransfer.providerCount(in: data, agent: agent)
+        } catch {
+            showNotice(title: String(localized: "无法导入"), message: error.localizedDescription)
+            return
+        }
+        confirm(
+            title: String(localized: "导入 \(count) 个供应商到 \(Self.agentTitles[agent] ?? agent)？"),
+            message: String(localized: "同 ID 的供应商将被文件内容覆盖；其他供应商与当前选中的供应商保持不变。")
+        ) { [weak self] in self?.submitImport(agent: agent, data: data, count: count) }
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        pendingImportAgent = nil
+    }
+
+    private func submitImport(agent: String, data: Data, count: Int) {
+        guard !loading, !submitting else { return }
+        generation += 1
+        let current = generation
+        submitting = true
+        progressText = String(localized: "正在导入…")
+        errorMessage = nil
+        render()
+        requestTask = Task { [weak self, api] in
+            do {
+                let bucket = try await api.importAgentProviders(agent: agent, transfer: data)
+                try Task.checkCancellation()
+                guard let self, generation == current else { return }
+                guard case .array = bucket["providers"] else {
+                    throw TodexError.invalid(String(localized: "导入已提交，但后端返回的供应商数据无效；请刷新核对"))
+                }
+                buckets[agent] = bucket
+                submitting = false
+                progressText = nil
+                requestTask = nil
+                render()
+                showNotice(title: String(localized: "导入完成"), message: String(localized: "已导入 \(count) 个供应商"))
+            } catch {
+                guard let self, !Task.isCancelled, generation == current else { return }
+                submitting = false
+                progressText = nil
+                requestTask = nil
+                errorMessage = SettingsResponse.errorMessage(error, feature: String(localized: " 供应商导入"))
+                render()
+            }
+        }
+    }
+
     private static func modelSummary(_ ids: [String]) -> String {
         guard !ids.isEmpty else { return "" }
         let shown = ids.prefix(3).joined(separator: ", ")
@@ -253,7 +404,7 @@ final class AgentProvidersViewController: SettingsListController {
                     title: String(localized: "状态"),
                     rows: [
                         SettingsRow(
-                            title: submitting ? String(localized: "正在提交…") : String(localized: "正在读取供应商…"),
+                            title: submitting ? progressText ?? String(localized: "正在提交…") : String(localized: "正在读取供应商…"),
                             symbol: "arrow.triangle.2.circlepath", id: "agentProviders.loading",
                             activity: true)
                     ]))
@@ -342,6 +493,18 @@ final class AgentProvidersViewController: SettingsListController {
                     title: String(localized: "添加供应商"), symbol: "plus.circle", id: "agentProviders.\(agent).add",
                     color: Theme.accent, enabled: !loading && !submitting
                 ) { [weak self] in self?.openEditor(agent: agent, kind: .new) })
+            rows.append(
+                SettingsRow(
+                    title: String(localized: "导出供应商"), detail: String(localized: "文件包含明文密钥"),
+                    symbol: "square.and.arrow.up", id: "agentProviders.\(agent).export", color: Theme.accent,
+                    enabled: !loading && !submitting && !bucket["providers"].arrayValue.isEmpty
+                ) { [weak self] in self?.confirmExport(agent: agent) })
+            rows.append(
+                SettingsRow(
+                    title: String(localized: "导入供应商"), detail: String(localized: "从其他设备导出的 JSON 文件"),
+                    symbol: "tray.and.arrow.down", id: "agentProviders.\(agent).import", color: Theme.accent,
+                    enabled: !loading && !submitting
+                ) { [weak self] in self?.pickImport(agent: agent) })
             sections.append(SettingsSection(title: title, rows: rows))
         }
 

@@ -1541,6 +1541,34 @@
         }
       }
     },
+    "后端返回的供应商导出无效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backend returned an invalid provider export"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドが返したプロバイダーのエクスポートが無効です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드가 잘못된 프로바이더 내보내기를 반환했습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端返回的供应商导出无效"
+          }
+        }
+      }
+    },
     "后端返回的确认不是有效 JSON": {
       "localizations": {
         "en": {
@@ -1681,6 +1709,90 @@
         }
       }
     },
+    "导入文件不是有效的 JSON 对象": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The import file is not a valid JSON object"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インポートファイルは有効な JSON オブジェクトではありません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "가져올 파일이 유효한 JSON 객체가 아닙니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入文件不是有效的 JSON 对象"
+          }
+        }
+      }
+    },
+    "导入文件缺少供应商列表": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The import file has no provider list"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インポートファイルにプロバイダー一覧がありません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "가져올 파일에 프로바이더 목록이 없습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入文件缺少供应商列表"
+          }
+        }
+      }
+    },
+    "导入文件过大": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The import file is too large"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インポートファイルが大きすぎます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "가져올 파일이 너무 큽니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入文件过大"
+          }
+        }
+      }
+    },
     "尚未导入加密公钥，请先完成密钥传输验证": {
       "localizations": {
         "en": {
@@ -1761,6 +1873,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "当前后端不支持设备验证，请更新后端。"
+          }
+        }
+      }
+    },
+    "所选文件不是 TodeX 供应商导出文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected file is not a TodeX provider export"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選択したファイルは TodeX のプロバイダーエクスポートファイルではありません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "선택한 파일은 TodeX 프로바이더 내보내기 파일이 아닙니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选文件不是 TodeX 供应商导出文件"
           }
         }
       }
@@ -2769,6 +2909,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "该地址被 App Transport Security 拦截。请使用局域网地址或改用 HTTPS。"
+          }
+        }
+      }
+    },
+    "该文件导出自 %@，与所选 Agent（%@）不一致": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file was exported from %@, which does not match the selected Agent (%@)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このファイルは %@ からエクスポートされたもので、選択したエージェント（%@）と一致しません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 파일은 %@에서 내보낸 것으로, 선택한 에이전트(%@)와 일치하지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该文件导出自 %@，与所选 Agent（%@）不一致"
           }
         }
       }

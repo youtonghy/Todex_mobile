@@ -90,14 +90,25 @@ public final class HTTPClient: Sendable {
         return try result.json(method: method)
     }
 
+    /// Sends caller-owned JSON bytes verbatim. JSONValue stores numbers as
+    /// Double and reorders keys, so opaque documents such as provider export
+    /// files use this to reach the backend exactly as read.
+    public func request(
+        _ method: HTTPMethod, path: String, jsonData: Data, authenticated: Bool = true
+    ) async throws -> JSONValue {
+        let result = try await response(method, path: path, rawBody: jsonData, authenticated: authenticated)
+        return try result.json(method: method)
+    }
+
     /// Keeps the actual HTTP status for transport policy discovery: only HTTP
     /// 404 permits the older-backend fallback, never a body claiming NOT_FOUND.
     func response(
         _ method: HTTPMethod = .get, path: String, query: [String: String] = [:], body: JSONValue? = nil,
-        authenticated: Bool = true, timeout: TimeInterval = 30, maximumBytes: Int = 20 * 1024 * 1024
+        rawBody: Data? = nil, authenticated: Bool = true, timeout: TimeInterval = 30,
+        maximumBytes: Int = 20 * 1024 * 1024
     ) async throws -> HTTPResult {
         try Task.checkCancellation()
-        guard timeout.isFinite, timeout > 0, timeout <= 3600, maximumBytes > 0 else {
+        guard timeout.isFinite, timeout > 0, timeout <= 3600, maximumBytes > 0, body == nil || rawBody == nil else {
             throw TodexError.invalid(String(localized: "HTTP 请求限制无效", bundle: .module))
         }
         let requestURL = try url(path: path, query: query)
@@ -107,9 +118,8 @@ public final class HTTPClient: Sendable {
         request.httpMethod = method.rawValue
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        var bodyData = Data()
-        if let body {
-            bodyData = try JSONEncoder().encode(body)
+        let bodyData = try body.map { try JSONEncoder().encode($0) } ?? rawBody ?? Data()
+        if body != nil || rawBody != nil {
             request.httpBody = bodyData
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }

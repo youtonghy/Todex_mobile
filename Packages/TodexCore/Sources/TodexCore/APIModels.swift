@@ -282,3 +282,59 @@ public struct ConversationEvent: Codable, Sendable, Equatable {
         self.payload = payload
     }
 }
+
+/// Reads `/v2/providers/versions` entries and CLI operations with the defaults
+/// older backends need; the wire values themselves stay JSONValue.
+public enum CLIManagement {
+    /// Older backends omit `installSupported` and cannot install.
+    public static func installSupported(_ cli: JSONValue) -> Bool {
+        cli["kind"].stringValue == "managed" && cli["installSupported"].boolValue
+    }
+
+    /// A missing CLI is `installed: false` / `status: "notInstalled"`. Either
+    /// signal wins, since that state is not an error to report.
+    public static func isInstalled(_ cli: JSONValue) -> Bool {
+        cli["installed"] != false && cli["status"].stringValue != "notInstalled"
+    }
+
+    /// Older backends omit `action` and only run upgrades.
+    public static func isInstall(_ operation: JSONValue) -> Bool {
+        operation["action"].stringValue == "install"
+    }
+}
+
+/// Envelope checks for a per-agent provider export (`todex.agent-providers`).
+/// settingsConfig stays opaque; the backend remains authoritative for the
+/// version, duplicate ids and masked secrets.
+public enum AgentProviderTransfer {
+    public static let format = "todex.agent-providers"
+    /// The backend's import body limit: 100 providers × (256 KiB + 16 KiB).
+    public static let maximumBytes = 100 * (256 + 16) * 1024
+
+    /// Lets callers reject a file by its size before reading it.
+    public static func checkSize(_ bytes: Int) throws {
+        guard bytes <= maximumBytes else {
+            throw TodexError.invalid(String(localized: "导入文件过大", bundle: .module))
+        }
+    }
+
+    /// Number of providers in `data` when it is an export file for `agent`.
+    public static func providerCount(in data: Data, agent: String) throws -> Int {
+        try checkSize(data.count)
+        guard let value = try? JSONDecoder().decode(JSONValue.self, from: data), case .object = value else {
+            throw TodexError.invalid(String(localized: "导入文件不是有效的 JSON 对象", bundle: .module))
+        }
+        guard value["format"].stringValue == format else {
+            throw TodexError.invalid(String(localized: "所选文件不是 TodeX 供应商导出文件", bundle: .module))
+        }
+        let fileAgent = value["agent"].stringValue
+        guard fileAgent == agent else {
+            throw TodexError.invalid(
+                String(localized: "该文件导出自 \(fileAgent.isEmpty ? "?" : fileAgent)，与所选 Agent（\(agent)）不一致", bundle: .module))
+        }
+        guard case .array(let providers) = value["providers"] else {
+            throw TodexError.invalid(String(localized: "导入文件缺少供应商列表", bundle: .module))
+        }
+        return providers.count
+    }
+}

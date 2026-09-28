@@ -352,6 +352,101 @@ struct APIClientTests {
         #expect(ProtocolCatalog.descriptor(.mcpCall).support == .conditional)
         #expect(ProtocolCatalog.descriptor(type: "future.command") == nil)
     }
+
+    @Test
+    func cliInstallFieldsDefaultForOlderBackends() async throws {
+        let fixture = APIFixture { request in
+            switch request.url?.path {
+            case "/v2/providers/versions":
+                return try .json([
+                    "clis": [
+                        [
+                            "id": "pi", "name": "Pi", "kind": "managed", "installed": false, "status": "notInstalled",
+                            "latestVersion": "1.2.3", "upgradeSupported": true, "installSupported": true,
+                        ],
+                        [
+                            "id": "codex", "name": "Codex", "kind": "managed", "installed": true,
+                            "currentVersion": "0.9.0", "status": "upToDate", "upgradeSupported": true,
+                        ],
+                    ],
+                    "checkedAt": "2026-09-28T00:00:00Z",
+                ])
+            case "/v2/providers/pi/install":
+                return try .json([
+                    "id": "op-1", "provider": "pi", "action": "install", "status": "running",
+                    "startedAt": "2026-09-28T00:00:00Z",
+                ])
+            default:
+                return try .json(
+                    ["id": "op-0", "provider": "codex", "status": "succeeded", "startedAt": "2026-09-28T00:00:00Z"])
+            }
+        }
+        defer { fixture.close() }
+        let clis = try await fixture.api.providerVersions()["clis"].arrayValue
+        #expect(clis.map(CLIManagement.installSupported) == [true, false])
+        #expect(clis.map(CLIManagement.isInstalled) == [false, true])
+        #expect(clis[0]["error"].isNull)
+        #expect(!CLIManagement.isInstalled(["installed": true, "status": "notInstalled"]))
+        #expect(!CLIManagement.installSupported(["kind": "external", "installSupported": true]))
+
+        #expect(CLIManagement.isInstall(try await fixture.api.installProvider(provider: "pi")))
+        // Operations from backends that predate install carry no action.
+        #expect(!CLIManagement.isInstall(try await fixture.api.providerUpgradeOperation(id: "op-0")))
+    }
+
+    @Test
+    func agentProviderTransferTravelsVerbatim() async throws {
+        // Integers beyond Double precision and the original key order must
+        // survive export → file → import untouched.
+        let file = Data(
+            #"{"format":"todex.agent-providers","version":1,"agent":"codex","exportedAt":1790000000000,"providers":[{"id":"p","name":"P","settingsConfig":{"z":1,"big":12345678901234567890,"auth":{"OPENAI_API_KEY":"sk-clear"}}}]}"#
+                .utf8)
+        let sent = Mutex<Data?>(nil)
+        let fixture = APIFixture { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("GET", "/v2/agent-providers/codex/export"):
+                return StubResponse(status: 200, data: file, contentType: "application/json")
+            case ("POST", "/v2/agent-providers/codex/import"):
+                sent.withLock { $0 = try? requestBody(request) }
+                return try .json(["agent": "codex", "currentProviderId": nil, "providers": [["id": "p", "name": "P"]]])
+            default:
+                Issue.record("Unexpected request: \(request.httpMethod ?? "") \(request.url?.path ?? "")")
+                return try .json([:], status: 404)
+            }
+        }
+        defer { fixture.close() }
+        let exported = try await fixture.api.exportAgentProviders(agent: "codex")
+        #expect(exported == file)
+        #expect(try AgentProviderTransfer.providerCount(in: exported, agent: "codex") == 1)
+        let bucket = try await fixture.api.importAgentProviders(agent: "codex", transfer: exported)
+        #expect(sent.withLock { $0 } == file)
+        #expect(bucket["providers"].arrayValue.count == 1)
+
+        let notObject = APIFixture { _ in try .json(["not", "an", "object"]) }
+        defer { notObject.close() }
+        await #expect(throws: TodexError.self) { _ = try await notObject.api.exportAgentProviders(agent: "codex") }
+    }
+
+    @Test
+    func agentProviderTransferEnvelopeIsCheckedBeforeUpload() throws {
+        func count(_ text: String, agent: String = "pi") throws -> Int {
+            try AgentProviderTransfer.providerCount(in: Data(text.utf8), agent: agent)
+        }
+        #expect(try count(#"{"format":"todex.agent-providers","version":1,"agent":"pi","providers":[{},{}]}"#) == 2)
+        for invalid in [
+            "not json", #"["todex.agent-providers"]"#,
+            #"{"format":"cc-switch","agent":"pi","providers":[]}"#,
+            #"{"format":"todex.agent-providers","agent":"codex","providers":[]}"#,
+            #"{"format":"todex.agent-providers","providers":[]}"#,
+            #"{"format":"todex.agent-providers","agent":"pi","providers":{}}"#,
+        ] {
+            #expect(throws: TodexError.self) { try count(invalid) }
+        }
+        let oversized = Data(count: AgentProviderTransfer.maximumBytes + 1)
+        #expect(throws: TodexError.self) {
+            try AgentProviderTransfer.providerCount(in: oversized, agent: "pi")
+        }
+    }
 }
 
 private enum TestWire {
@@ -408,6 +503,10 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
     static let id = "a/b ?#%&+"
     static let escaped = "a%2Fb%20%3F%23%25%26%2B"
     static let workspacePath = "/work/项目 space?x=1&y=%2F+#"
+    static let transfer: JSONValue = [
+        "format": "todex.agent-providers", "version": 1, "agent": "grok-build", "exportedAt": 1_790_000_000_000,
+        "providers": [["id": "xai", "name": "xAI", "settingsConfig": ["apiKey": "xai-clear"], "sortIndex": 0]],
+    ]
 
     static let all: [EndpointCase] = [
         .init(name: "health", method: "GET", path: "/health", authenticated: false, response: "ok") {
@@ -524,6 +623,10 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
         .init(name: "upgradeProvider", method: "POST", path: "/v2/providers/\(escaped)/upgrade") {
             try await $0.upgradeProvider(provider: id)
         },
+        .init(
+            name: "installProvider", method: "POST", path: "/v2/providers/\(escaped)/install",
+            response: ["id": "op", "provider": "pi", "action": "install", "status": "running"]
+        ) { try await $0.installProvider(provider: id) },
         .init(name: "providerUpgradeOperation", method: "GET", path: "/v2/providers/upgrades/\(escaped)") {
             try await $0.providerUpgradeOperation(id: id)
         },
@@ -573,6 +676,14 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
             path: "/v2/agent-providers/codex/import-live",
             body: ["id": .string(id), "name": "已导入"]
         ) { try await $0.importLiveAgentProvider(agent: "codex", id: id, name: "已导入") },
+        .init(
+            name: "exportAgentProviders", method: "GET", path: "/v2/agent-providers/grok-build/export",
+            response: transfer
+        ) { try JSONDecoder().decode(JSONValue.self, from: await $0.exportAgentProviders(agent: "grok-build")) },
+        .init(
+            name: "importAgentProviders", method: "POST", path: "/v2/agent-providers/grok-build/import",
+            body: transfer
+        ) { try await $0.importAgentProviders(agent: "grok-build", transfer: JSONEncoder().encode(transfer)) },
         .init(name: "agentProviderModels", method: "GET", path: "/v2/agent-providers/codex/\(escaped)/models") {
             try await $0.agentProviderModels(agent: "codex", id: id)
         },
@@ -732,7 +843,12 @@ private struct APIFixture {
 }
 
 private func requestJSON(_ request: URLRequest) throws -> JSONValue? {
-    if let body = request.httpBody { return try JSONDecoder().decode(JSONValue.self, from: body) }
+    try requestBody(request).map { try JSONDecoder().decode(JSONValue.self, from: $0) }
+}
+
+/// URLSession hands URLProtocol either httpBody or a stream; read both as bytes.
+private func requestBody(_ request: URLRequest) throws -> Data? {
+    if let body = request.httpBody { return body }
     guard let stream = request.httpBodyStream else { return nil }
     stream.open()
     defer { stream.close() }
@@ -744,7 +860,7 @@ private func requestJSON(_ request: URLRequest) throws -> JSONValue? {
         if count == 0 { break }
         data.append(contentsOf: buffer.prefix(count))
     }
-    return data.isEmpty ? nil : try JSONDecoder().decode(JSONValue.self, from: data)
+    return data.isEmpty ? nil : data
 }
 
 /// Match serde_urlencoded's decoding, including the easily missed + → space rule.

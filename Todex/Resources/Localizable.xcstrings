@@ -421,6 +421,34 @@
         }
       }
     },
+    " CLI 安装": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " CLI install"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " CLI インストール"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " CLI 설치"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " CLI 安装"
+          }
+        }
+      }
+    },
     " CLI 管理": {
       "localizations": {
         "en": {
@@ -669,6 +697,62 @@
           "stringUnit": {
             "state": "translated",
             "value": " · 默认"
+          }
+        }
+      }
+    },
+    " 供应商导入": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " provider import"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " プロバイダーのインポート"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " 프로바이더 가져오기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " 供应商导入"
+          }
+        }
+      }
+    },
+    " 供应商导出": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " provider export"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " プロバイダーのエクスポート"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " 프로바이더 내보내기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " 供应商导出"
           }
         }
       }
@@ -1873,6 +1957,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "Agent 队列 %lld 条%@"
+          }
+        }
+      }
+    },
+    "CLI 安装失败": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI install failed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI のインストールに失敗しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI 설치 실패"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI 安装失败"
+          }
+        }
+      }
+    },
+    "CLI 已安装": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI installed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI をインストールしました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI 설치됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI 已安装"
           }
         }
       }
@@ -4005,6 +4145,34 @@
         }
       }
     },
+    "从其他设备导出的 JSON 文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A JSON file exported from another device"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "他のデバイスからエクスポートした JSON ファイル"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 기기에서 내보낸 JSON 파일"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从其他设备导出的 JSON 文件"
+          }
+        }
+      }
+    },
     "从剪贴板导入": {
       "localizations": {
         "en": {
@@ -5793,6 +5961,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "关闭页面不会取消服务器上已经开始的升级。"
+          }
+        }
+      }
+    },
+    "关闭页面不会取消服务器上已经开始的安装。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Closing this page won't cancel an install already started on the server."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ページを閉じても、サーバーで開始済みのインストールはキャンセルされません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "페이지를 닫아도 서버에서 이미 시작된 설치는 취소되지 않습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭页面不会取消服务器上已经开始的安装。"
           }
         }
       }
@@ -8261,6 +8457,34 @@
         }
       }
     },
+    "同 ID 的供应商将被文件内容覆盖；其他供应商与当前选中的供应商保持不变。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Providers with the same ID are overwritten by the file; other providers and the current selection stay unchanged."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同じ ID のプロバイダーはファイルの内容で上書きされます。その他のプロバイダーと現在の選択は変更されません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "같은 ID의 프로바이더는 파일 내용으로 덮어씁니다. 다른 프로바이더와 현재 선택은 그대로 유지됩니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同 ID 的供应商将被文件内容覆盖；其他供应商与当前选中的供应商保持不变。"
+          }
+        }
+      }
+    },
     "同一工作区共享": {
       "localizations": {
         "en": {
@@ -8901,6 +9125,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "后端未允许升级此 CLI"
+          }
+        }
+      }
+    },
+    "后端未允许安装此 CLI": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backend does not allow installing this CLI"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドはこの CLI のインストールを許可していません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드가 이 CLI 설치를 허용하지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端未允许安装此 CLI"
           }
         }
       }
@@ -10529,6 +10781,118 @@
         }
       }
     },
+    "安装": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インストール"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설치"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "安装"
+          }
+        }
+      }
+    },
+    "安装 %@？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install %@?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ をインストールしますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@을(를) 설치하시겠습니까?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "安装 %@？"
+          }
+        }
+      }
+    },
+    "安装中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installing"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インストール中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설치 중"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "安装中"
+          }
+        }
+      }
+    },
+    "安装操作": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install actions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インストール操作"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설치 작업"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "安装操作"
+          }
+        }
+      }
+    },
     "完全访问": {
       "localizations": {
         "en": {
@@ -11285,6 +11649,62 @@
         }
       }
     },
+    "导入 %lld 个供应商到 %@？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import %lld providers into %@?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 個のプロバイダーを %@ にインポートしますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프로바이더 %lld개를 %@에 가져오시겠습니까?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入 %lld 个供应商到 %@？"
+          }
+        }
+      }
+    },
+    "导入供应商": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import providers"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロバイダーをインポート"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프로바이더 가져오기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入供应商"
+          }
+        }
+      }
+    },
     "导入后端提供的配对信息，或申请设备验证。": {
       "localizations": {
         "en": {
@@ -11309,6 +11729,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "导入后端提供的配对信息，或申请设备验证。"
+          }
+        }
+      }
+    },
+    "导入完成": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import complete"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インポート完了"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "가져오기 완료"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入完成"
+          }
+        }
+      }
+    },
+    "导入已提交，但后端返回的供应商数据无效；请刷新核对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The import was submitted, but the backend returned invalid provider data. Refresh to check."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インポートは送信されましたが、バックエンドが返したプロバイダーデータが無効です。更新して確認してください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "가져오기가 제출되었지만 백엔드가 잘못된 프로바이더 데이터를 반환했습니다. 새로고침하여 확인하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入已提交，但后端返回的供应商数据无效；请刷新核对"
           }
         }
       }
@@ -11369,6 +11845,62 @@
         }
       }
     },
+    "导出 %@ 供应商？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export %@ providers?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ のプロバイダーをエクスポートしますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 프로바이더를 내보내시겠습니까?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导出 %@ 供应商？"
+          }
+        }
+      }
+    },
+    "导出供应商": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export providers"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロバイダーをエクスポート"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프로바이더 내보내기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导出供应商"
+          }
+        }
+      }
+    },
     "导出对话": {
       "localizations": {
         "en": {
@@ -11393,6 +11925,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "导出对话"
+          }
+        }
+      }
+    },
+    "导出的文件包含明文密钥，请妥善保管。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The exported file contains plaintext keys. Keep it safe."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エクスポートしたファイルには平文のキーが含まれます。安全に保管してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "내보낸 파일에는 평문 키가 포함되어 있습니다. 안전하게 보관하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导出的文件包含明文密钥，请妥善保管。"
           }
         }
       }
@@ -11561,6 +12121,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "将同时从 live 配置中移除该节点。"
+          }
+        }
+      }
+    },
+    "将在后端“%@”（%@）上安装此 CLI。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This installs the CLI on backend “%@” (%@)."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンド「%@」（%@）にこの CLI をインストールします。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드 ‘%@’(%@)에 이 CLI를 설치합니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "将在后端“%@”（%@）上安装此 CLI。"
           }
         }
       }
@@ -13269,6 +13857,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "已导入"
+          }
+        }
+      }
+    },
+    "已导入 %lld 个供应商": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported %lld providers"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 個のプロバイダーをインポートしました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프로바이더 %lld개를 가져왔습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已导入 %lld 个供应商"
           }
         }
       }
@@ -17837,6 +18453,34 @@
         }
       }
     },
+    "文件包含明文密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file contains plaintext keys"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルには平文のキーが含まれます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일에 평문 키가 포함됩니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件包含明文密钥"
+          }
+        }
+      }
+    },
     "文件变更": {
       "localizations": {
         "en": {
@@ -18453,6 +19097,34 @@
         }
       }
     },
+    "无法导入": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to import"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インポートできません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "가져올 수 없음"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法导入"
+          }
+        }
+      }
+    },
     "无法新建任务": {
       "localizations": {
         "en": {
@@ -18673,6 +19345,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "无法读取最新进度：%@\n将自动重试；离开页面不会取消后端升级。"
+          }
+        }
+      }
+    },
+    "无法读取最新进度：%@\n将自动重试；离开页面不会取消后端安装。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to read the latest progress: %@\nRetrying automatically; leaving this page won't cancel the backend install."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最新の進捗を読み込めません：%@\n自動的に再試行します。このページを離れてもバックエンドのインストールはキャンセルされません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "최신 진행 상황을 읽을 수 없습니다: %@\n자동으로 다시 시도합니다. 페이지를 떠나도 백엔드 설치는 취소되지 않습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取最新进度：%@\n将自动重试；离开页面不会取消后端安装。"
           }
         }
       }
@@ -22173,6 +22873,90 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在处理…"
+          }
+        }
+      }
+    },
+    "正在安装…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installing…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インストール中…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설치 중…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在安装…"
+          }
+        }
+      }
+    },
+    "正在导入…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importing…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インポート中…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "가져오는 중…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在导入…"
+          }
+        }
+      }
+    },
+    "正在导出…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exporting…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エクスポート中…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "내보내는 중…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在导出…"
           }
         }
       }
