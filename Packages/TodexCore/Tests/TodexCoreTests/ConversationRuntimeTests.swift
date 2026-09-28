@@ -868,6 +868,44 @@ struct ConversationRuntimeTests {
         #expect(!aboveFloor)
     }
 
+    // conversation-runtime.test.cjs: a run whose `subagent.started` sits below
+    // the lazy window appears as a bare `subagent.updated` placeholder.
+    @Test func prependFillsSubagentPlaceholdersFromTheStartedEventBelowTheWindow() throws {
+        let older = [
+            try event(1, "turn.started", #"{"turnId":"t"}"#),
+            try event(
+                2, "subagent.started",
+                #"{"subagentId":"toolu_1","title":"Restore Package.resolved","task":"run the envelope test","agentKind":"general-purpose","turnId":"t"}"#,
+                time: "2026-09-06T00:00:02.000Z"),
+            try event(
+                3, "subagent.completed",
+                #"{"subagentId":"toolu_0","title":"Earlier run","task":"old task","result":"ok"}"#),
+        ]
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.seedHistoryFloor(3)
+        runtime.ingest(
+            try event(
+                4, "subagent.updated",
+                #"{"subagentId":"toolu_1","status":"running","metadata":{"taskId":"a3077749","description":"Running vitest","toolName":"Bash","usage":{"total_tokens":2400}}}"#))
+        var run = try #require(runtime.subagents.first { $0["id"].stringValue == "toolu_1" })
+        // The orphan progress frame reports its own phase instead of 'queued'.
+        #expect(run["status"].stringValue == "running")
+        #expect(run["usage"]["total_tokens"].intValue == 2400)
+        let prepended = runtime.prepend(older, below: 3)
+        #expect(prepended)
+        #expect(runtime.subagents.count == 2)
+        run = try #require(runtime.subagents.first { $0["id"].stringValue == "toolu_1" })
+        #expect(run["title"].stringValue == "Restore Package.resolved")
+        #expect(run["task"].stringValue == "run the envelope test")
+        #expect(run["agentKind"].stringValue == "general-purpose")
+        #expect(run["status"].stringValue == "running")
+        #expect(run["startedAt"].stringValue == "2026-09-06T00:00:02.000Z")
+        #expect(run["metadata"]["description"].stringValue == "Running vitest")
+        let settled = try #require(runtime.subagents.first { $0["id"].stringValue == "toolu_0" })
+        #expect(settled["status"].stringValue == "completed")
+        #expect(settled["result"].stringValue == "ok")
+    }
+
     // pi.rs message_update/pi_completed_message_events and conversation-runtime.test.cjs:
     // Pi streams answer text as progress blocks and finalizes it under the native id.
     private func piProgress(_ sequence: Int, _ text: String, block: String = "m-1-assistant_progress-1")

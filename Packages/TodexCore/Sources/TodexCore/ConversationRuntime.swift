@@ -126,7 +126,10 @@ public struct ConversationRuntime: Sendable {
     /// replay on a scratch runtime so stale turn/permission/usage state cannot
     /// overwrite the newest window; only projected timeline entries append
     /// (newest-first list, so older pages go to the tail). Entries already
-    /// loaded keep their newer-window version.
+    /// loaded keep their newer-window version. Auxiliary collections (subagent
+    /// runs, memory entries) merge per entry: a run whose `subagent.started`
+    /// pages in below the window fills the title, task and lifecycle the
+    /// loaded window only saw as `subagent.updated` frames.
     @discardableResult
     public mutating func prepend(_ events: [ConversationEvent], below floor: Int) -> Bool {
         let sorted = events
@@ -139,10 +142,14 @@ public struct ConversationRuntime: Sendable {
         }
         let existing = Set(messages.map(\.id))
         let older = scratch.messages.filter { !existing.contains($0.id) }
-        guard !older.isEmpty else { return false }
         let merged = Self.droppingSupersededProgress(messages + older)
-        guard merged != messages else { return false }
+        let mergedSubagents = Self.mergingEarlier(scratch.subagents, into: subagents, merge: Self.mergeEarlierSubagent)
+        let mergedMemories = Self.mergingEarlier(scratch.memoryEntries, into: memoryEntries)
+        guard merged != messages || mergedSubagents != subagents || mergedMemories != memoryEntries
+        else { return false }
         messages = merged
+        subagents = mergedSubagents
+        memoryEntries = mergedMemories
         return true
     }
 
@@ -586,11 +593,17 @@ public struct ConversationRuntime: Sendable {
             guard !id.isEmpty else { return }
             let previous = subagents.first { $0["id"] == .string(id) } ?? .null
             let phase = String(type.dropFirst("subagent.".count))
+            // 'queued' marks a run whose start event sits below the loaded
+            // window; a progress frame reporting the real phase outranks it.
+            let previousStatus = previous["status"].stringValue
+            let reportedStatus = Self.subagentStatus(payload["status"])
             let status =
                 phase == "started"
                 ? "running"
                 : ["completed", "failed", "cancelled"].contains(phase)
-                    ? phase : Self.string(previous["status"], "queued")
+                    ? phase
+                    : previousStatus.isEmpty || previousStatus == "queued"
+                        ? (reportedStatus ?? "queued") : previousStatus
             var run = Self.merge(previous, payload)
             run["id"] = .string(id)
             run["conversationId"] = .string(conversationId)
@@ -598,6 +611,11 @@ public struct ConversationRuntime: Sendable {
             run["title"] = .string(Self.string(payload["title"], previous["title"], "Subagent"))
             run["task"] = .string(Self.string(payload["task"], payload["prompt"], previous["task"]))
             run["status"] = .string(status)
+            if case .object = payload["usage"], !payload["usage"].objectValue.isEmpty {
+                run["usage"] = payload["usage"]
+            } else if case .object = payload["metadata"]["usage"], !payload["metadata"]["usage"].objectValue.isEmpty {
+                run["usage"] = payload["metadata"]["usage"]
+            }
             if status == "running" {
                 run["startedAt"] = previous["startedAt"].isNull ? .string(event.time) : previous["startedAt"]
             } else if status != "queued" {
@@ -839,6 +857,64 @@ public struct ConversationRuntime: Sendable {
             }
         }
         return .object(result)
+    }
+    /// `subagent.*` progress frames carry the provider's own phase names;
+    /// normalize them onto the shared lifecycle vocabulary.
+    private static func subagentStatus(_ value: JSONValue) -> String? {
+        let status = value.stringValue
+        if ["queued", "running", "completed", "failed", "cancelled"].contains(status) { return status }
+        switch status {
+        case "inProgress", "in_progress": return "running"
+        case "errored", "notFound": return "failed"
+        case "interrupted", "shutdown", "stopped", "killed": return "cancelled"
+        case "pendingInit", "pending": return "queued"
+        default: return nil
+        }
+    }
+    /// Newer fields win; fields the newer entry lacks or holds as null take the
+    /// earlier projection's value. Used when an older history page merges in.
+    private static func mergeEarlierFields(_ older: JSONValue, _ newer: JSONValue) -> JSONValue {
+        var merged = newer.objectValue
+        for (key, value) in older.objectValue where merged[key]?.isNull ?? true {
+            merged[key] = value
+        }
+        return .object(merged)
+    }
+    /// 'Subagent', '' and 'queued' are placeholders for a run whose start sits
+    /// below the loaded window, so the paged-in start replaces them; every
+    /// other field keeps the newer projection's value.
+    private static func mergeEarlierSubagent(_ older: JSONValue, _ newer: JSONValue) -> JSONValue {
+        var merged = mergeEarlierFields(older, newer)
+        if merged["title"].stringValue == "Subagent", !older["title"].stringValue.isEmpty {
+            merged["title"] = older["title"]
+        }
+        if merged["task"].stringValue.isEmpty, !older["task"].stringValue.isEmpty {
+            merged["task"] = older["task"]
+        }
+        if merged["status"].stringValue == "queued", !["", "queued"].contains(older["status"].stringValue) {
+            merged["status"] = older["status"]
+        }
+        if !older["startedAt"].isNull {
+            merged["startedAt"] = older["startedAt"]
+        }
+        return merged
+    }
+    /// Fold collection entries projected from an earlier page into the loaded
+    /// collection: known ids merge via `merge`, unseen entries append at the
+    /// tail to preserve newest-first ordering.
+    private static func mergingEarlier(
+        _ earlier: [JSONValue], into current: [JSONValue],
+        merge: (JSONValue, JSONValue) -> JSONValue = mergeEarlierFields
+    ) -> [JSONValue] {
+        guard !earlier.isEmpty else { return current }
+        let olderById = Dictionary(uniqueKeysWithValues: earlier.map { ($0["id"].stringValue, $0) })
+        var merged = current.map { item -> JSONValue in
+            guard let older = olderById[item["id"].stringValue] else { return item }
+            return merge(older, item)
+        }
+        let known = Set(current.map { $0["id"].stringValue })
+        merged.append(contentsOf: earlier.filter { !known.contains($0["id"].stringValue) })
+        return merged
     }
     private static func date(_ value: String) -> Date? {
         let formatter = ISO8601DateFormatter()
