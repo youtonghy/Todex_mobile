@@ -29,9 +29,9 @@ Apple 发布的最新 [Xcode 27 RC（27A266a）](https://developer.apple.com/new
 
 | 验证层 | 结果 | 主要覆盖 |
 | --- | --- | --- |
-| TodexCore | Swift Testing 报告 80 tests / 7 suites 通过；其中 2 个可选 live test 在普通运行中跳过 | API 线协议、Rust 加密向量、nonce/伪造/重放、配对取消竞态、HTTP 错误与超时、事件序号缺口和缓存边界 |
+| TodexCore | Swift Testing 报告 151 tests / 13 suites 通过；其中 2 个可选 live test 在普通运行中跳过 | API 线协议、Rust 加密向量、nonce/伪造/重放、配对取消竞态、HTTP 错误与超时、事件序号缺口和缓存边界、`codex.local` 侧车 wire 构造/事件分类/审批桥/本地时间线投影/模型目录解析（`CodexLocalTests` 28 项） |
 | Foundation WebSocket → 真实 Rust | 2 个测试 / 3 个参数场景通过 | 缺失/错误认证、ping、回放、Codex 和 Claude 的发送→审批→完成及重连 |
-| AppSession / LocalStore | 19/19 独立场景通过 | connect/replay 单次并发执行、HTTP 与实时事件交错、分页、迟到响应隔离、切换后端、草稿保护、原子待发送记录、磁盘失败、后台暂停、流溢出、任务计划持久化与旧快照解码、fixture 环境不覆盖真实后端目录、懒加载尾窗打开与向上翻页、旧后端回退正向回放、活跃 turn 反向回扫 |
+| AppSession / LocalStore | 27/27 独立场景通过 | connect/replay 单次并发执行、HTTP 与实时事件交错、分页、迟到响应隔离、切换后端、草稿保护、原子待发送记录、磁盘失败、后台暂停、流溢出、任务计划持久化与旧快照解码、fixture 环境不覆盖真实后端目录、懒加载尾窗打开与向上翻页、旧后端回退正向回放、活跃 turn 反向回扫、订阅预算驱逐空闲 watch、首页分叉/标签/任务详情/其他后端缓存、composer 记忆持久化、连接诊断错误生命周期 |
 | 离线 Markdown / TeX | 全部断言通过 | 6 种公式分隔形式、5 个代码/转义/不完整公式案例、表格、HTML/危险链接、公式长度上限 |
 
 核心测试源码在 [TodexCoreTests](../Packages/TodexCore/Tests/TodexCoreTests)，渲染检查在 [test_renderer.cjs](../scripts/test_renderer.cjs)。[AppSession runner](../scripts/run_session_tests.sh) 使用真实的 AppSession/LocalStore 源码，替换 HTTP、Socket 和 Keychain，独立于 XCTest 计数；从全新临时构建目录重跑的 13 个场景同样全部通过，源码已保存在仓库。
@@ -54,7 +54,8 @@ Apple 发布的最新 [Xcode 27 RC（27A266a）](https://developer.apple.com/new
 
 - 加密帧有 Rust 互通向量和传输单元测试，未进行实际加密 WebSocket 的端到端测试。相机二维码、完整设备配对和真机后台行为仍需设备验收。
 - 未执行实际 CLI 升级、Git push/PR、云任务或外部 MCP 调用。按当前后端能力保留明确不可用状态。
-- Codex Fast 缺少统一会话的后端 API，UI 明确禁用；原生 resume 等 Unsupported 操作不伪造成功。
+- `codex.local` 侧车经由契约测试与分类测试覆盖，未在真实 Codex app-server 上端到端实测；`/review` `/init` 等依赖真 CLI 的往返未实测。Fast/服务档位作用于侧车线程（统一会话主聊天流无 serviceTier 字段，语义同桌面端）；原生 resume 等 Unsupported 操作不伪造成功。
+- 看板打开未关联任务自动建会话并写草稿、iPad 快捷键为 UI 层逻辑，无自动化覆盖，需人工走查。
 - 长时间后台运行、系统回收、网络故障下的 iOS 生命周期无法仅由这些测试穷尽。应用保留未确认发送并暂停队列，不自动重发可能已经执行的操作。
 
 ## 复现

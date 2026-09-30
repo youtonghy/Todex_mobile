@@ -958,7 +958,14 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         let capability = session.provider(for: conversation)?.capabilities ?? .null
         switch token.lowercased() {
         case "/memory", "/memories", "/subagents":
-            openAuxiliary()
+            if session.supportsLocalAdapter(conversation), token.lowercased() != "/subagents" {
+                if !rest.isEmpty, runLocalCommand(token, rest: rest) { break }
+                openLocalPage(CodexMemoriesController(
+                    session: session, conversation: conversation,
+                    workspace: session.workspace(for: conversation) ?? WorkspaceRecord(id: "", name: "", path: conversation.workspace, sessionId: "", tenantId: "")))
+            } else {
+                openAuxiliary()
+            }
         case "/plan":
             guard capability["permissionConfig"]["supportsPlan"].boolValue else {
                 showNotice(title: String(localized: "计划模式"), message: String(localized: "当前 Agent 不支持计划模式。"))
@@ -977,6 +984,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 presentModelSearch()
             } else {
                 configure { $0.model = rest; $0.reasoningEffort = "" }
+                // Desktop also writes the workspace record so adapter-sidecar
+                // threads pick the same model (thread/start reads it).
+                if session.supportsLocalAdapter(conversation) {
+                    patchWorkspace { $0.model = rest }
+                }
             }
         case "/permissions", "/permission":
             let modes = capability["permissionConfig"]["modes"].arrayValue.compactMap(\.optionalString)
@@ -999,7 +1011,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         case "/diff":
             openGit?()
         case "/skills", "/mcp":
-            openCatalog?()
+            if session.supportsLocalAdapter(conversation) {
+                _ = runLocalCommand(token, rest: rest)
+            } else {
+                openCatalog?()
+            }
         case "/approve", "/approval":
             // Decisions differ per request schema, so open the request itself
             // rather than guessing an allow/deny payload.
@@ -1015,6 +1031,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 .compactMap(\.optionalString) ?? []
             if supported.contains("resume") {
                 performControl("resume")
+            } else if session.supportsLocalAdapter(conversation) {
+                _ = runLocalCommand(token, rest: rest)
             } else {
                 showNotice(
                     title: String(localized: "恢复对话"), message: String(localized: "请发送明确的后续消息继续对话；当前 Agent 不支持独立恢复操作。"))
@@ -1022,10 +1040,442 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         case "/compact", "/retry":
             performControl(String(token.dropFirst()))
         default:
-            return false
+            // Desktop's command table is wider than the unified one: adapter
+            // commands, manifest operations and dynamic service-tier names are
+            // checked before the text is allowed to become a prompt.
+            if !runLocalCommand(token, rest: rest) { return false }
         }
         setDraft(ComposerDraft())
         return true
+    }
+    /// Codex adapter + manifest commands, mirroring the desktop slash table in
+    /// `useTodeXSession.sendSlashCommand`. Codex-only entries are gated on the
+    /// provider so other agents never see adapter traffic.
+    @discardableResult
+    private func runLocalCommand(_ token: Substring, rest: String) -> Bool {
+        let command = token.lowercased()
+        let isCodex = session.supportsLocalAdapter(conversation)
+        /// Runs one adapter call; errors surface through the standard notice.
+        func localTask(_ work: @escaping @MainActor () async throws -> Void) {
+            Task { [weak self] in
+                guard let self else { return }
+                do { try await work() } catch {
+                    showNotice(title: String(localized: "本地 Codex 会话"), message: CodexLocal.describeError(error.localizedDescription))
+                }
+            }
+        }
+        /// Commands that need no adapter: they only touch the manifest.
+        switch command {
+        case "/mention":
+            var next = draft
+            next.text = "@"
+            setDraft(next)
+            return true
+        case "/rename":
+            guard !rest.isEmpty else {
+                showNotice(title: String(localized: "重命名"), message: String(localized: "用法：/rename <标题>"))
+                return true
+            }
+            localTask { [rest] in
+                guard let api = self.session.api else { throw TodexError.disconnected }
+                _ = try await api.updateConversation(id: self.conversation.id, patch: ["title": .string(rest)])
+                if isCodex, !self.session.sidecar(for: self.conversation.id).threadId.isEmpty {
+                    _ = try? await self.session.localThreadRequest(
+                        "thread/name/set", params: ["name": .string(rest)], in: self.conversation, requireExisting: true)
+                }
+                try await self.session.refresh()
+            }
+            return true
+        case "/new", "/clear":
+            newConversation()
+            return true
+        case "/archive":
+            confirmArchive()
+            return true
+        default:
+            break
+        }
+        guard isCodex else { return false }
+        let args = rest.split(whereSeparator: \.isWhitespace).map { String($0) }
+        let sub = args.first?.lowercased() ?? ""
+        switch command {
+        case "/memory", "/memories":
+            if sub == "reset" || sub == "clear" {
+                localTask {
+                    _ = try await self.session.localRequest("memory/reset", params: nil, in: self.conversation)
+                    self.transientNotice = (String(localized: "已请求重置记忆"), .secondaryLabel, Date().addingTimeInterval(4))
+                }
+                return true
+            }
+            if ["enabled", "on", "true", "1"].contains(sub) || ["disabled", "off", "false", "0"].contains(sub) {
+                let enabled = ["enabled", "on", "true", "1"].contains(sub)
+                localTask {
+                    _ = try await self.session.localThreadRequest(
+                        "thread/memoryMode/set", params: ["mode": .string(enabled ? "enabled" : "disabled")],
+                        in: self.conversation)
+                }
+                return true
+            }
+            return false
+        case "/hooks", "/hook":
+            openLocalResult(String(localized: "Hooks")) {
+                try await self.session.localRequest(
+                    "hooks/list",
+                    params: ["cwds": [.string(self.session.workspace(for: self.conversation)?.path ?? self.conversation.workspace)]],
+                    in: self.conversation)
+            }
+            return true
+        case "/plugins", "/plugin":
+            openLocalResult(String(localized: "Plugins")) {
+                try await self.session.localRequest(
+                    "plugin/list",
+                    params: [
+                        "cwds": [.string(self.session.workspace(for: self.conversation)?.path ?? self.conversation.workspace)],
+                        "extraUserRoots": [],
+                    ],
+                    in: self.conversation)
+            }
+            return true
+        case "/apps":
+            let refresh = ["reload", "refresh", "true", "1"].contains(sub)
+            openLocalResult(String(localized: "Apps")) {
+                try await self.session.localRequest(
+                    "app/list", params: ["limit": .number(50), "forceRefetch": .bool(refresh)], in: self.conversation)
+            }
+            return true
+        case "/skills":
+            let reload = ["reload", "refresh", "true", "1"].contains(sub)
+            openLocalResult(String(localized: "Skills")) {
+                try await self.session.localRequest(
+                    "skills/list",
+                    params: [
+                        "cwds": [.string(self.session.workspace(for: self.conversation)?.path ?? self.conversation.workspace)],
+                        "forceReload": .bool(reload),
+                    ],
+                    in: self.conversation)
+            }
+            return true
+        case "/mcp":
+            if !sub.isEmpty, !["verbose", "status", "list", "tools", "refresh"].contains(sub) {
+                showNotice(title: "MCP", message: String(localized: "用法：/mcp [verbose]"))
+                return true
+            }
+            let detail = sub == "verbose" ? "full" : "toolsAndAuthOnly"
+            openLocalResult("MCP") {
+                try await self.session.localThreadRequest(
+                    "mcpServerStatus/list",
+                    params: ["cursor": .null, "limit": .null, "detail": .string(detail)], in: self.conversation)
+            }
+            return true
+        case "/goal":
+            if ["pause", "resume"].contains(sub) {
+                localTask {
+                    _ = try await self.session.localThreadRequest(
+                        "thread/goal/set", params: ["status": .string(sub == "pause" ? "paused" : "active")],
+                        in: self.conversation)
+                }
+                return true
+            }
+            if sub == "set" || sub == "clear" || !(sub.isEmpty || ["edit", "get", "show", "view"].contains(sub)) {
+                if sub == "clear" {
+                    localTask {
+                        _ = try await self.session.localThreadRequest("thread/goal/clear", in: self.conversation)
+                    }
+                    return true
+                }
+                let objective = sub == "set" ? args.dropFirst().joined(separator: " ") : rest
+                if objective.isEmpty {
+                    if sub == "set" {
+                        showNotice(title: String(localized: "目标"), message: String(localized: "用法：/goal <目标>"))
+                        return true
+                    }
+                } else {
+                    localTask {
+                        _ = try await self.session.localThreadRequest(
+                            "thread/goal/set", params: ["objective": .string(objective)], in: self.conversation)
+                    }
+                    return true
+                }
+            }
+            openLocalPage(CodexGoalController(session: session, conversation: conversation))
+            return true
+        case "/personality":
+            guard let workspace = session.workspace(for: conversation) else {
+                showNotice(title: String(localized: "性格"), message: String(localized: "找不到对话所属工作区"))
+                return true
+            }
+            openLocalPage(CodexPersonalityController(session: session, conversation: conversation, workspace: workspace))
+            return true
+        case "/feedback":
+            openLocalPage(CodexFeedbackController(session: session, conversation: conversation))
+            return true
+        case "/logout":
+            localTask {
+                _ = try await self.session.localRequest("account/logout", params: nil, in: self.conversation)
+                self.transientNotice = (String(localized: "已发送登出请求"), .secondaryLabel, Date().addingTimeInterval(4))
+            }
+            return true
+        case "/start":
+            localTask {
+                _ = try await self.session.ensureLocalAdapter(self.conversation)
+                self.transientNotice = (String(localized: "本地 Codex 会话已启动"), .secondaryLabel, Date().addingTimeInterval(4))
+            }
+            return true
+        case "/status":
+            return runStatusCommand(args)
+        case "/stop", "/clean":
+            localTask {
+                if !self.session.sidecar(for: self.conversation.id).threadId.isEmpty {
+                    _ = try? await self.session.localThreadRequest(
+                        "thread/backgroundTerminals/clean", in: self.conversation, requireExisting: true)
+                }
+                try await self.session.stopLocal(self.conversation)
+                self.transientNotice = (String(localized: "本地 Codex 会话已停止"), .secondaryLabel, Date().addingTimeInterval(4))
+            }
+            return true
+        case "/quit", "/exit":
+            localTask {
+                try await self.session.stopLocal(self.conversation)
+                self.transientNotice = (String(localized: "本地 Codex 会话已停止"), .secondaryLabel, Date().addingTimeInterval(4))
+            }
+            return true
+        case "/ps":
+            if ["clean", "clear", "stop"].contains(sub) {
+                openLocalResult(String(localized: "后台终端")) {
+                    try await self.session.localThreadRequest("thread/backgroundTerminals/clean", in: self.conversation)
+                }
+            } else {
+                openLocalResult(String(localized: "已加载线程")) {
+                    try await self.session.localRequest(
+                        "thread/loaded/list", params: ["limit": .number(100)], in: self.conversation)
+                }
+            }
+            return true
+        case "/fork", "/side", "/btw":
+            localTask {
+                _ = try await self.session.forkLocalThread(self.conversation, ephemeral: command != "/fork")
+                self.transientNotice = (
+                    command == "/fork"
+                        ? String(localized: "已发送线程分叉请求") : String(localized: "已发送侧线线程请求"),
+                    .secondaryLabel, Date().addingTimeInterval(4))
+            }
+            return true
+        case "/attach":
+            localTask {
+                try await self.session.attachLocal(self.conversation)
+                self.transientNotice = (String(localized: "已附加到本地会话"), .secondaryLabel, Date().addingTimeInterval(4))
+            }
+            return true
+        case "/replay":
+            localTask {
+                try await self.session.replayLocal(self.conversation)
+                self.transientNotice = (String(localized: "已请求重放本地会话事件"), .secondaryLabel, Date().addingTimeInterval(4))
+            }
+            return true
+        case "/interrupt":
+            localTask { try await self.session.interruptLocal(self.conversation) }
+            return true
+        case "/resume":
+            localTask {
+                _ = try await self.session.localThreadRequest(
+                    "thread/resume", in: self.conversation, requireExisting: true)
+                try await self.session.attachLocal(self.conversation)
+            }
+            return true
+        case "/review":
+            localTask {
+                var target: JSONValue = ["type": "uncommittedChanges"]
+                if !rest.isEmpty { target = ["type": "custom", "instructions": .string(rest)] }
+                _ = try await self.session.localThreadRequest(
+                    "review/start", params: ["target": target, "delivery": "inline"], in: self.conversation)
+                self.transientNotice = (
+                    rest.isEmpty ? String(localized: "已开始审查未提交改动") : String(localized: "已开始自定义审查"),
+                    .secondaryLabel, Date().addingTimeInterval(4))
+            }
+            return true
+        case "/init":
+            localTask {
+                try await self.session.sendLocalTurn(
+                    "create or update an AGENTS.md file with concise project instructions for Codex",
+                    in: self.conversation, workMode: "implement")
+            }
+            return true
+        case "/fast":
+            localTask { try await self.toggleFastTier() }
+            return true
+        default:
+            // Dynamic service-tier commands match against the catalog the
+            // adapter already loaded (desktop serviceTierSlashCommandsForModel
+            // likewise only knows cached entries). Anything else returns false
+            // so the text is sent as a message, like the desktop table.
+            let catalog = session.sidecar(for: conversation.id).models
+            let workspace = session.workspace(for: conversation)
+            let pref = session.preferences(for: conversation)
+            let model = pref.model.isEmpty ? (workspace?.model ?? "") : pref.model
+            guard let tier = CodexLocal.serviceTier(forCommand: command, model: model, catalog: catalog) else {
+                return false
+            }
+            localTask {
+                try await self.applyServiceTier(tier["id"].stringValue.isEmpty ? String(command.dropFirst()) : tier["id"].stringValue)
+            }
+            return true
+        }
+    }
+    private func runStatusCommand(_ args: [String]) -> Bool {
+        let sub = args.first?.lowercased() ?? ""
+        switch sub {
+        case "thread", "detail":
+            openLocalResult(String(localized: "线程详情")) {
+                try await self.session.localThreadRequest(
+                    "thread/read", params: ["includeTurns": .bool(false)], in: self.conversation)
+            }
+        case "history", "read":
+            openLocalResult(String(localized: "线程历史")) {
+                try await self.session.localThreadRequest(
+                    "thread/read", params: ["includeTurns": .bool(true)], in: self.conversation, timeout: 60)
+            }
+        case "turns", "turn":
+            let limit = min(Int(args.dropFirst().first ?? "") ?? 20, 100)
+            openLocalResult(String(localized: "线程轮次")) {
+                try await self.session.localThreadRequest(
+                    "thread/turns/list",
+                    params: ["limit": .number(Double(max(1, limit))), "sortDirection": "desc", "itemsView": "summary"],
+                    in: self.conversation)
+            }
+        case "items", "item":
+            guard args.count > 1 else {
+                showNotice(title: String(localized: "状态"), message: String(localized: "用法：/status items <turnId> [数量]"))
+                return true
+            }
+            let turnId = args[1]
+            let limit = min(Int(args.dropFirst(2).first ?? "") ?? 50, 100)
+            openLocalResult(String(localized: "轮次条目")) {
+                try await self.session.localThreadRequest(
+                    "thread/turns/items/list",
+                    params: [
+                        "turnId": .string(turnId), "limit": .number(Double(max(1, limit))), "sortDirection": "asc",
+                    ],
+                    in: self.conversation)
+            }
+        case "loaded", "loaded-threads":
+            openLocalResult(String(localized: "已加载线程")) {
+                try await self.session.localRequest(
+                    "thread/loaded/list", params: ["limit": .number(100)], in: self.conversation)
+            }
+        case "":
+            openLocalResult(String(localized: "本地会话状态")) {
+                try await self.session.localStatus(self.conversation)
+            }
+        default:
+            showNotice(
+                title: String(localized: "状态"),
+                message: String(localized: "用法：/status [thread|history|turns [n]|items <turnId> [n]|loaded]"))
+        }
+        return true
+    }
+    /// `/fast` and the catalog's dynamic tier names share this writer: the
+    /// workspace record carries `serviceTier` (wire passthrough, same as
+    /// desktop `updateWorkspace`) and a live adapter thread is told through
+    /// `thread/settings/update`.
+    private func applyServiceTier(_ tier: String) async throws {
+        guard var workspace = session.workspace(for: conversation) else {
+            throw TodexError.invalid(String(localized: "找不到对话所属工作区"))
+        }
+        workspace.serviceTier = tier
+        workspace.updatedAt = Int(Date().timeIntervalSince1970 * 1_000)
+        guard let api = session.api else { throw TodexError.disconnected }
+        _ = try await api.replaceWorkspaces([workspace])
+        if !session.sidecar(for: conversation.id).threadId.isEmpty {
+            _ = try await session.localThreadRequest(
+                "thread/settings/update", params: ["serviceTier": .string(tier)],
+                in: conversation, requireExisting: true)
+        }
+        transientNotice = (String(localized: "服务档位已设为 \(tier)"), .secondaryLabel, Date().addingTimeInterval(4))
+        try await session.refresh()
+    }
+    private func toggleFastTier() async throws {
+        guard let workspace = session.workspace(for: conversation) else {
+            throw TodexError.invalid(String(localized: "找不到对话所属工作区"))
+        }
+        let pref = session.preferences(for: conversation)
+        let model = pref.model.isEmpty ? workspace.model : pref.model
+        let catalog = (try? await session.localModelCatalog(for: conversation)) ?? []
+        let fastId = CodexLocal.fastTier(for: model, catalog: catalog)?["id"].stringValue ?? "fast"
+        let current = workspace.serviceTier ?? ""
+        try await applyServiceTier(current == fastId || current == "fast" ? "default" : fastId)
+    }
+    /// `/new` and `/clear` create a fresh manifest in the same workspace with
+    /// the same agent (desktop `createConversation`).
+    private func newConversation() {
+        guard let workspace = session.workspace(for: conversation) else {
+            showNotice(title: String(localized: "新对话"), message: String(localized: "找不到对话所属工作区"))
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard let api = session.api else { throw TodexError.disconnected }
+                let next = try await api.createConversation(
+                    workspace: workspace, provider: conversation.provider, profile: conversation.providerProfile)
+                if let pref = session.preferences[conversation.id] {
+                    session.updatePreferences(pref, for: next)
+                }
+                try await session.refresh()
+                guard let manifest = session.conversations.first(where: { $0.id == next.id }) else { return }
+                session.select(manifest)
+                guard let navigation = navigationController, let container = parent else { return }
+                var stack = navigation.viewControllers
+                if let index = stack.firstIndex(where: { $0 === container }) {
+                    stack[index] = ConversationContainerController(session: session, conversation: manifest)
+                    navigation.setViewControllers(stack, animated: true)
+                }
+            } catch { showError(error) }
+        }
+    }
+    /// `/archive`: same confirm + `archived` patch as the desktop alert, then
+    /// leaves the archived conversation's page.
+    private func confirmArchive() {
+        let alert = UIAlertController(
+            title: String(localized: "归档对话"), message: String(localized: "归档后对话会从活跃列表中移除。"),
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
+        alert.addAction(
+            UIAlertAction(title: String(localized: "归档"), style: .destructive) { [weak self] _ in
+                Task { [weak self] in
+                    guard let self else { return }
+                    do {
+                        guard let api = self.session.api else { throw TodexError.disconnected }
+                        _ = try await api.updateConversation(id: self.conversation.id, patch: ["archived": .bool(true)])
+                        try await self.session.refresh()
+                        self.navigationController?.popViewController(animated: true)
+                    } catch { self.showError(error) }
+                }
+            })
+        present(alert, animated: true)
+    }
+    /// Modal presentation shared by adapter result pages and editors.
+    private func openLocalPage(_ page: UIViewController) {
+        let nav = UINavigationController(rootViewController: page)
+        page.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            systemItem: .done, primaryAction: UIAction { [weak nav] _ in nav?.dismiss(animated: true) })
+        present(nav, animated: true)
+    }
+    private func openLocalResult(_ title: String, load: @escaping @MainActor () async throws -> JSONValue) {
+        openLocalPage(CodexLocalResultController(session: session, conversation: conversation, title: title, load: load))
+    }
+    /// Desktop `updateWorkspace`: one record PUT — the backend merges fields,
+    /// letting passthrough values like serviceTier/personality round-trip.
+    private func patchWorkspace(_ change: (inout WorkspaceRecord) -> Void) {
+        guard var workspace = session.workspace(for: conversation) else { return }
+        change(&workspace)
+        workspace.updatedAt = Int(Date().timeIntervalSince1970 * 1_000)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard let api = session.api else { throw TodexError.disconnected }
+                _ = try await api.replaceWorkspaces([workspace])
+            } catch { showError(error) }
+        }
     }
     private func openAuxiliary() {
         let page = AuxiliaryViewController(session: session, conversation: conversation)
@@ -1069,6 +1519,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private static let clientCommands: Set<String> = [
         "/memory", "/memories", "/subagents", "/compact", "/retry", "/resume", "/plan", "/model", "/permissions",
         "/permission", "/copy", "/diff", "/skills", "/mcp", "/approve", "/approval",
+        "/mention", "/rename", "/new", "/clear", "/archive",
+        "/hooks", "/hook", "/plugins", "/plugin", "/apps", "/goal", "/personality", "/feedback", "/logout",
+        "/start", "/status", "/stop", "/clean", "/quit", "/exit", "/ps", "/fork", "/side", "/btw",
+        "/attach", "/replay", "/interrupt", "/review", "/init", "/fast",
     ]
     /// Local commands offered in the `/` popup: (command, detail, prefill).
     /// Commands taking an argument prefill the composer instead of running.
@@ -1081,6 +1535,37 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         ("/skills", String(localized: "打开 Skill 目录"), nil),
         ("/mcp", String(localized: "打开 MCP 目录"), nil),
         ("/approve", String(localized: "处理待审批请求"), nil),
+        ("/new", String(localized: "在同一工作区新建对话"), nil),
+        ("/rename", String(localized: "重命名当前对话"), "/rename "),
+        ("/archive", String(localized: "归档当前对话"), nil),
+        ("/mention", String(localized: "提及文件"), nil),
+    ]
+    /// Codex adapter commands, suggested only on Codex conversations
+    /// (desktop's command catalog likewise lives behind the local session).
+    private static let codexCommandSuggestions: [(String, String, String?)] = [
+        ("/review", String(localized: "审查未提交改动或按说明审查"), "/review "),
+        ("/init", String(localized: "生成或更新 AGENTS.md"), nil),
+        ("/goal", String(localized: "查看或设置线程目标"), nil),
+        ("/personality", String(localized: "设置沟通风格"), nil),
+        ("/memories", String(localized: "记忆设置（可用参数：enabled/disabled/reset）"), nil),
+        ("/hooks", String(localized: "列出已配置的 hooks"), nil),
+        ("/plugins", String(localized: "列出已安装的插件"), nil),
+        ("/apps", String(localized: "列出可用应用"), nil),
+        ("/feedback", String(localized: "提交反馈"), nil),
+        ("/logout", String(localized: "登出 Codex 账户"), nil),
+        ("/status", String(localized: "本地会话与线程状态"), nil),
+        ("/ps", String(localized: "列出已加载线程；/ps clean 清理后台终端"), nil),
+        ("/stop", String(localized: "清理后台终端并停止本地会话"), nil),
+        ("/clean", String(localized: "同 /stop"), nil),
+        ("/interrupt", String(localized: "中断本地任务"), nil),
+        ("/attach", String(localized: "重新附加本地会话事件"), nil),
+        ("/replay", String(localized: "重放本地会话事件"), nil),
+        ("/side", String(localized: "在临时分叉中开始侧线对话"), nil),
+        ("/fork", String(localized: "分叉本地线程"), nil),
+        ("/resume", String(localized: "恢复本地线程"), nil),
+        ("/fast", String(localized: "切换 Fast 服务档位"), nil),
+        ("/quit", String(localized: "停止本地 Codex 会话"), nil),
+        ("/start", String(localized: "启动本地 Codex 会话"), nil),
     ]
     private func updateSuggestions() {
         let text = composer.text ?? ""
@@ -1158,6 +1643,34 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                         submit()
                     }
                 })
+        }
+        if session.supportsLocalAdapter(conversation) {
+            for (command, detail, prefill) in Self.codexCommandSuggestions where command.hasPrefix(lowered) {
+                items.append(
+                    Suggestion(title: command, detail: detail) { [weak self] in
+                        guard let self else { return }
+                        if let prefill {
+                            applyTextSuggestion(prefill)
+                        } else {
+                            applyTextSuggestion(command)
+                            submit()
+                        }
+                    })
+            }
+            // Dynamic tier names from the adapter catalog (desktop
+            // serviceTierSlashCommandsForModel).
+            let catalog = session.sidecar(for: conversation.id).models
+            let workspace = session.workspace(for: conversation)
+            let pref = session.preferences(for: conversation)
+            let model = pref.model.isEmpty ? (workspace?.model ?? "") : pref.model
+            for command in CodexLocal.serviceTierCommands(for: model, catalog: catalog, existing: Self.clientCommands)
+            where command.hasPrefix(lowered) {
+                items.append(
+                    Suggestion(title: command, detail: String(localized: "切换服务档位")) { [weak self] in
+                        self?.applyTextSuggestion(command)
+                        self?.submit()
+                    })
+            }
         }
         for item in session.commands[conversation.provider + ":" + conversation.workspace] ?? [] {
             let name = item["name"].stringValue
@@ -1480,20 +1993,45 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         return UIMenu(children: values)
     }
     private static func modelName(_ model: JSONValue) -> String {
-        model["name"].optionalString ?? model["displayName"].optionalString ?? model["id"].stringValue
+        model["name"].optionalString ?? model["displayName"].optionalString ?? model["display_name"].optionalString
+            ?? model["id"].optionalString ?? model["model"].stringValue
     }
     /// Desktop ModelReasoningCard: case-insensitive search over name and id.
     private func presentModelSearch() {
-        let models = session.models[conversation.provider + ":" + conversation.workspace] ?? []
+        if session.supportsLocalAdapter(conversation) {
+            // The adapter catalog carries the CLI's own model menu (with the
+            // service tiers desktop shows); merge it over provider models.
+            Task { [weak self] in
+                guard let self else { return }
+                let catalog = (try? await session.localModelCatalog(for: conversation)) ?? []
+                presentModelPicker(adapter: catalog)
+            }
+            return
+        }
+        presentModelPicker(adapter: [])
+    }
+    private func presentModelPicker(adapter catalog: [JSONValue]) {
+        var models = session.models[conversation.provider + ":" + conversation.workspace] ?? []
+        // Adapter entries win on duplicate ids — they describe the running CLI.
+        let adapterIds = Set(catalog.map { $0["model"].stringValue })
+        models.removeAll { adapterIds.contains($0["id"].stringValue) }
+        models.append(contentsOf: catalog)
         guard !models.isEmpty else {
             showNotice(title: String(localized: "模型"), message: String(localized: "模型列表尚未加载，可稍后重试或直接输入模型 ID。"))
             return
         }
         let page = ModelSearchViewController(
-            models: models.map { (id: $0["id"].stringValue, name: Self.modelName($0), isDefault: $0["isDefault"].boolValue) },
+            models: models.map {
+                (id: $0["id"].optionalString ?? $0["model"].stringValue,
+                 name: Self.modelName($0), isDefault: $0["isDefault"].boolValue)
+            },
             selected: session.preferences(for: conversation).model
         ) { [weak self] id in
-            self?.configure { $0.model = id; $0.reasoningEffort = "" }
+            guard let self else { return }
+            configure { $0.model = id; $0.reasoningEffort = "" }
+            if session.supportsLocalAdapter(conversation) {
+                patchWorkspace { $0.model = id }
+            }
         }
         let nav = UINavigationController(rootViewController: page)
         page.navigationItem.leftBarButtonItem = UIBarButtonItem(

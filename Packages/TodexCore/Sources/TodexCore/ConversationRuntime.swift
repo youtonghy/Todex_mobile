@@ -298,6 +298,73 @@ public struct ConversationRuntime: Sendable {
         }
     }
 
+    /// Apply one classified `codex.*` sidecar frame. Local entries carry no
+    /// journal sequence — they ride at `appliedSequence` so hydrate/prepend
+    /// merges keep their relative position, and their ids are `local-`
+    /// namespaced so journal rows can never replace or merge into them.
+    /// Returns false when nothing changed (e.g. a pure control ack).
+    @discardableResult
+    public mutating func applyLocal(_ effects: CodexLocal.Effects) -> Bool {
+        var changed = false
+        for entry in effects.entries {
+            var entry = entry
+            entry.sequence = appliedSequence
+            if let index = messages.firstIndex(where: { $0.id == entry.id }) {
+                let previous = messages[index]
+                // A streaming row absorbs its next delta; a finished row keeps
+                // its terminal state when a late delta for it still arrives.
+                if previous.status == "streaming", entry.status == "streaming", previous.streamed, entry.streamed {
+                    messages[index].text = previous.text + entry.text
+                    messages[index].detail = Self.merge(previous.detail, entry.detail)
+                    changed = true
+                } else if !Self.finishedStatuses.contains(previous.status) || !entry.streamed {
+                    if messages[index] != entry {
+                        if !entry.text.isEmpty, entry.text != previous.text {
+                            messages[index].text = entry.text
+                        }
+                        messages[index].status = entry.status
+                        messages[index].detail = Self.merge(previous.detail, entry.detail)
+                        changed = true
+                    }
+                }
+            } else {
+                messages.insert(entry, at: 0)
+                changed = true
+            }
+        }
+        for request in effects.requests {
+            pendingPermissions.removeAll { $0.id == request.id && $0.runtimeId == request.runtimeId }
+            pendingPermissions.append(request)
+            changed = true
+        }
+        if !effects.resolvedRequests.isEmpty {
+            let before = pendingPermissions.count
+            pendingPermissions.removeAll { effects.resolvedRequests.contains($0.id) }
+            changed = changed || pendingPermissions.count != before
+        }
+        if let settle = effects.turnSettled {
+            let terminalStatus = settle.status
+            for index in messages.indices
+            where messages[index].turnId == settle.id
+                && ["streaming", "running", "awaitingApproval"].contains(messages[index].status)
+            {
+                messages[index].status = terminalStatus
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /// Drop adapter approvals owned by a stopped sidecar (desktop clears them
+    /// when the local session ends); returns whether anything was removed.
+    @discardableResult
+    public mutating func clearLocalPermissions(sessionId: String) -> Bool {
+        let runtimeId = "codex-local:\(sessionId)"
+        let before = pendingPermissions.count
+        pendingPermissions.removeAll { $0.runtimeId == runtimeId }
+        return pendingPermissions.count != before
+    }
+
     /// Hydrate folded process entries after a `detail=summary` replay. Full
     /// events for an expanded group's sequence range are projected on a
     /// scratch runtime, then merged back by message id. Only process

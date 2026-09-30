@@ -203,6 +203,34 @@ final class ConversationContainerController: UIViewController {
         }
         sessionChanged()
     }
+    /// iPad hardware keyboards, desktop `COMBOS` parity: ⌘⇧G opens the Git
+    /// actions, ⌘B toggles the workbench sidebar, ⌘W leaves the conversation.
+    override var keyCommands: [UIKeyCommand]? {
+        [
+            UIKeyCommand(
+                title: String(localized: "Git 操作"), action: #selector(gitShortcut),
+                input: "G", modifierFlags: [.command, .shift]),
+            UIKeyCommand(
+                title: String(localized: "切换操作台侧栏"), action: #selector(sidebarShortcut),
+                input: "B", modifierFlags: .command),
+            UIKeyCommand(
+                title: String(localized: "关闭对话"), action: #selector(closeShortcut),
+                input: "W", modifierFlags: .command),
+        ]
+    }
+    @objc private func gitShortcut() { chat.openGit?() }
+    @objc private func sidebarShortcut() {
+        guard workbench != nil else { return }
+        toggleSidebar()
+    }
+    @objc private func closeShortcut() {
+        guard let nav = navigationController else { return }
+        if nav.viewControllers.count > 1 {
+            nav.popViewController(animated: true)
+        } else if nav.presentingViewController != nil {
+            nav.dismiss(animated: true)
+        }
+    }
     private func sessionChanged() {
         let active = (session.runtimes[conversation.id]?.subagents ?? []).filter {
             ["running", "queued"].contains($0["status"].stringValue)

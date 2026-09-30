@@ -111,6 +111,17 @@ extension RealtimeClient: SessionSocket {}
     private var observers: [UUID: () -> Void] = [:]
     private var wireSubscribers: [UUID: AsyncStream<JSONValue>.Continuation] = [:]
     private var legacyCursors: [String: Int] = [:]
+    /// Conversation id → Codex adapter sidecar state. Desktop keeps this on
+    /// the manifest as `localAdapterState` plus a per-conversation `turnIds`
+    /// map; mobile scopes both by conversation id inside the session.
+    private var sidecars: [String: CodexLocalSidecar] = [:]
+    /// Concurrent `codex.local.start`/`thread/start` callers join these tasks
+    /// (desktop `pendingLocalStarts`/`pendingThreadStarts` dedup).
+    private var sidecarStarts: [String: Task<Void, Error>] = [:]
+    private var localThreadStarts: [String: Task<String, Error>] = [:]
+    /// conversationId → adapter thread id. Persisted: the adapter process may
+    /// outlive an app restart, and resuming needs the same thread id.
+    private var localThreads: [String: String] = [:]
     private var revision = UUID()
     private var refreshRevision = UUID()
     private var modelRevisions: [String: UUID] = [:]
@@ -369,6 +380,13 @@ extension RealtimeClient: SessionSocket {}
                     id: UUID().uuidString)
                 try checkRevision(current)
             }
+            // Adapters kept running on the backend while the socket was down:
+            // re-attach to replay the missed sidecar events (desktop
+            // attachWorkspaceConversation on reconnect).
+            for (id, sidecar) in sidecars where [.running, .starting].contains(sidecar.phase) || !sidecar.turnId.isEmpty {
+                guard let conversation = conversations.first(where: { $0.id == id }) else { continue }
+                try? await attachLocal(conversation)
+            }
             if let id = activeConversationID, conversations.contains(where: { $0.id == id }) { try await recover(id) }
             try checkRevision(current)
             reconnectAttempt = 0
@@ -422,6 +440,15 @@ extension RealtimeClient: SessionSocket {}
         queueDispatches.removeAll()
         sending.removeAll()
         completedDuringSend.removeAll()
+        for task in sidecarStarts.values { task.cancel() }
+        sidecarStarts.removeAll()
+        for task in localThreadStarts.values { task.cancel() }
+        localThreadStarts.removeAll()
+        // Adapter processes live on the backend host — their phase survives a
+        // socket drop; only the not-yet-started marker must reset.
+        for id in Array(sidecars.keys) where sidecars[id]?.phase == .starting {
+            sidecars[id]?.phase = .idle
+        }
         for id in Array(runtimes.keys) { runtimes[id]?.beginReplay() }
         pausedQueues.formUnion(queues.keys)
         isConnected = false
@@ -564,6 +591,11 @@ extension RealtimeClient: SessionSocket {}
         rejectedWorkspaces = catalog.rejected
         self.conversations = conversations
         self.providers = providers
+        // A deleted conversation leaves its adapter running on the backend;
+        // stop it rather than leaking the process.
+        for removed in Set(oldScopes.keys).subtracting(conversations.map(\.id)) {
+            discardSidecar(removed)
+        }
         if let remoteTasks = await taskResult {
             mergeRemoteKanbanTasks(remoteTasks)
             // Local additions and tombstones the backend lacks still go up.
@@ -1302,6 +1334,29 @@ extension RealtimeClient: SessionSocket {}
         }
     }
     func respond(_ permission: PendingPermission, conversationId: String, decision: JSONValue) async throws {
+        // Adapter approvals carry the sidecar's session on `runtimeId` and go
+        // through `codex.local.approval.respond`; the conversation-level
+        // `conversation.permission.respond` would misroute them.
+        if permission.runtimeId.hasPrefix("codex-local:") {
+            let sessionId = String(permission.runtimeId.dropFirst("codex-local:".count))
+            guard let conversation = conversations.first(where: { CodexLocal.sessionId(for: $0.id) == sessionId }),
+                let workspace = workspace(for: conversation)
+            else { throw TodexError.invalid(String(localized: "审批已失效，请同步当前记录")) }
+            let codex = permission.payload["codex"]
+            _ = try await command(
+                "codex.local.approval.respond",
+                CodexLocal.approvalRespondPayload(
+                    sessionId: sessionId, tenantId: workspace.tenantId,
+                    requestId: codex["requestId"].stringValue.isEmpty ? permission.id : codex["requestId"].stringValue,
+                    requestType: codex["requestType"].stringValue,
+                    request: permission.payload["details"], decision: decision),
+                timeout: 15)
+            var resolved = CodexLocal.Effects()
+            resolved.resolvedRequests = [permission.id]
+            _ = runtimes[conversation.id]?.applyLocal(resolved)
+            changed()
+            return
+        }
         guard let runtime = runtimes[conversationId], runtime.readyForActions,
             runtime.pendingPermissions.contains(where: { $0.id == permission.id && $0.turnId == permission.turnId })
         else { throw TodexError.invalid(String(localized: "审批已失效，请同步当前记录")) }
@@ -1358,6 +1413,357 @@ extension RealtimeClient: SessionSocket {}
             ])
     }
 
+    // MARK: - Codex local adapter sidecar (desktop `codex.local.*` parity)
+
+    /// Snapshot the UI reads; `threadId` falls back to the persisted value so
+    /// a freshly launched app still knows which thread the adapter owns.
+    func sidecar(for conversationId: String) -> CodexLocalSidecar {
+        var state = sidecars[conversationId] ?? CodexLocalSidecar()
+        if state.threadId.isEmpty { state.threadId = localThreads[conversationId] ?? "" }
+        return state
+    }
+    /// Codex-only gate for the slash table: the sidecar talks to the Codex
+    /// app-server, so other providers must not see these commands fire.
+    func supportsLocalAdapter(_ conversation: ConversationManifest) -> Bool {
+        conversation.provider == "codex"
+    }
+    private func localWorkspace(_ conversation: ConversationManifest) throws -> WorkspaceRecord {
+        guard let workspace = workspace(for: conversation) else {
+            throw TodexError.invalid(String(localized: "找不到对话所属工作区"))
+        }
+        return workspace
+    }
+
+    /// `startLocalAdapter`: lazily boots the adapter process; concurrent
+    /// callers share one flight and an "adapter already owns this session"
+    /// response counts as success because the goal state is reached.
+    @discardableResult
+    func ensureLocalAdapter(_ conversation: ConversationManifest) async throws -> CodexLocalSidecar {
+        let id = conversation.id
+        var sidecar = sidecars[id] ?? CodexLocalSidecar()
+        if sidecar.threadId.isEmpty { sidecar.threadId = localThreads[id] ?? "" }
+        if sidecar.phase == .running { return sidecar }
+        if let task = sidecarStarts[id] {
+            try await task.value
+            return self.sidecar(for: id)
+        }
+        sidecar.phase = .starting
+        sidecar.lastError = ""
+        sidecars[id] = sidecar
+        changed()
+        let task = Task<Void, Error> { [weak self] in
+            guard let self else { throw CancellationError() }
+            let workspace = try localWorkspace(conversation)
+            sidecars[id]?.tenantId = workspace.tenantId
+            let remembered = lastPreferencesByProvider["codex"] ?? ConversationPreferences()
+            do {
+                _ = try await command(
+                    "codex.local.start",
+                    CodexLocal.startPayload(
+                        sessionId: CodexLocal.sessionId(for: id), workspace: workspace,
+                        defaults: (
+                            model: remembered.model, reasoningEffort: remembered.reasoningEffort,
+                            approvalsReviewer: "")),
+                    timeout: 30)
+            } catch {
+                // The session survived an app restart or a desktop client owns it.
+                guard CodexLocal.isAlreadyRunning(error.localizedDescription) else { throw error }
+            }
+        }
+        sidecarStarts[id] = task
+        defer { sidecarStarts.removeValue(forKey: id) }
+        do {
+            try await task.value
+            if sidecars[id]?.phase == .starting { sidecars[id]?.phase = .running }
+            changed()
+            return self.sidecar(for: id)
+        } catch {
+            sidecars[id]?.phase = .error
+            sidecars[id]?.lastError = CodexLocal.describeError(error.localizedDescription)
+            changed()
+            throw error
+        }
+    }
+
+    /// `ensureThreadId`: first call runs `thread/start`; later calls reuse the
+    /// stored id. `forceNew` drops it first (desktop clears the field).
+    @discardableResult
+    func ensureLocalThread(_ conversation: ConversationManifest, forceNew: Bool = false) async throws -> String {
+        try await ensureLocalAdapter(conversation)
+        let id = conversation.id
+        if forceNew {
+            sidecars[id]?.threadId = ""
+            localThreads.removeValue(forKey: id)
+        }
+        if let threadId = sidecars[id]?.threadId, !threadId.isEmpty { return threadId }
+        if let stored = localThreads[id], !stored.isEmpty {
+            sidecars[id]?.threadId = stored
+            return stored
+        }
+        if let task = localThreadStarts[id] { return try await task.value }
+        let task = Task<String, Error> { [weak self] in
+            guard let self else { throw CancellationError() }
+            let workspace = try localWorkspace(conversation)
+            let remembered = lastPreferencesByProvider["codex"] ?? ConversationPreferences()
+            let result = try await command(
+                "codex.local.request",
+                CodexLocal.requestPayload(
+                    sessionId: CodexLocal.sessionId(for: id), tenantId: workspace.tenantId,
+                    method: "thread/start",
+                    params: CodexLocal.threadStartParams(
+                        workspace: workspace,
+                        defaults: (
+                            model: remembered.model, reasoningEffort: remembered.reasoningEffort,
+                            approvalPolicy: "", approvalsReviewer: "", sandboxMode: ""))),
+                timeout: 60)
+            let threadId = CodexLocal.threadId(in: result)
+            guard !threadId.isEmpty else {
+                throw TodexError.unknownOutcome(String(localized: "本地线程已创建但未返回标识"))
+            }
+            return threadId
+        }
+        localThreadStarts[id] = task
+        defer { localThreadStarts.removeValue(forKey: id) }
+        let threadId = try await task.value
+        sidecars[id]?.threadId = threadId
+        localThreads[id] = threadId
+        saveSoon()
+        changed()
+        return threadId
+    }
+
+    /// `sendLocalMethodRequest`: `codex.local.request` on the conversation's
+    /// adapter session. Starts the adapter first when needed.
+    @discardableResult
+    func localRequest(
+        _ method: String, params: JSONValue? = nil, in conversation: ConversationManifest,
+        timeout: TimeInterval = 30
+    ) async throws -> JSONValue {
+        try await ensureLocalAdapter(conversation)
+        let workspace = try localWorkspace(conversation)
+        return try await command(
+            "codex.local.request",
+            CodexLocal.requestPayload(
+                sessionId: CodexLocal.sessionId(for: conversation.id), tenantId: workspace.tenantId,
+                method: method, params: params),
+            timeout: timeout)
+    }
+
+    /// `sendThreadMethod`/`sendNativeThreadAction` folded together: ensure the
+    /// adapter thread exists, then call `method` with `threadId` merged into
+    /// `params`. `requireExisting` matches desktop's action table — fork,
+    /// resume, rollback and unsubscribe never create a thread implicitly.
+    @discardableResult
+    func localThreadRequest(
+        _ method: String, params: JSONValue? = nil, in conversation: ConversationManifest,
+        requireExisting: Bool = false, timeout: TimeInterval = 30
+    ) async throws -> JSONValue {
+        try await ensureLocalAdapter(conversation)
+        let id = conversation.id
+        if requireExisting, sidecar(for: id).threadId.isEmpty {
+            throw TodexError.invalid(String(localized: "当前对话没有可恢复的本地线程"))
+        }
+        let threadId = try await ensureLocalThread(conversation)
+        var body = params ?? .object([:])
+        body["threadId"] = .string(threadId)
+        return try await localRequest(method, params: body, in: conversation, timeout: timeout)
+    }
+
+    /// `sendLocalTurn` (desktop): submits an adapter turn for /init, /review
+    /// targets and side threads. Mirrors the unified composer's permission
+    /// preset so the sidecar obeys the same mode the user picked.
+    func sendLocalTurn(
+        _ text: String, in conversation: ConversationManifest, workMode: String? = nil
+    ) async throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw TodexError.invalid(String(localized: "内容为空")) }
+        let pref = preferences(for: conversation)
+        let workspace = try localWorkspace(conversation)
+        guard let preset = CodexLocal.PermissionPreset.forMode(pref.permissionMode) else {
+            throw TodexError.invalid(String(localized: "当前权限模式无法用于本地 Codex 会话"))
+        }
+        let threadId = try await ensureLocalThread(conversation)
+        let current = revision
+        _ = try await command(
+            "codex.local.turn",
+            CodexLocal.turnPayload(
+                sessionId: CodexLocal.sessionId(for: conversation.id), tenantId: workspace.tenantId,
+                threadId: threadId, input: CodexLocal.inputItems(text: trimmed, images: []),
+                preset: preset, workMode: workMode ?? pref.workMode,
+                model: pref.model.isEmpty ? workspace.model : pref.model,
+                reasoningEffort: pref.reasoningEffort.isEmpty
+                    ? (workspace.reasoningEffort ?? "") : pref.reasoningEffort,
+                serviceTier: workspace.serviceTier),
+            timeout: 45)
+        try checkRevision(current)
+    }
+
+    /// `codex.local.interrupt`: stops the adapter turn, not the unified one —
+    /// `/interrupt` on desktop targets the sidecar thread.
+    func interruptLocal(_ conversation: ConversationManifest) async throws {
+        let sidecar = sidecar(for: conversation.id)
+        guard !sidecar.threadId.isEmpty else {
+            throw TodexError.invalid(String(localized: "当前对话没有运行中的本地任务"))
+        }
+        let workspace = try localWorkspace(conversation)
+        _ = try await command(
+            "codex.local.interrupt",
+            CodexLocal.interruptPayload(
+                sessionId: CodexLocal.sessionId(for: conversation.id), tenantId: workspace.tenantId,
+                threadId: sidecar.threadId, turnId: sidecar.turnId),
+            timeout: 15)
+    }
+
+    /// `codex.local.stop`: ends the adapter process (`/stop`, `/quit`,
+    /// `/exit`, conversation removal). The thread id stays — `thread/resume`
+    /// can reopen it after a fresh start.
+    func stopLocal(_ conversation: ConversationManifest, force: Bool = false) async throws {
+        let workspace = try localWorkspace(conversation)
+        let id = conversation.id
+        _ = try await command(
+            "codex.local.stop",
+            CodexLocal.stopPayload(
+                sessionId: CodexLocal.sessionId(for: id), tenantId: workspace.tenantId, force: force),
+            timeout: 15)
+        sidecars[id]?.phase = .stopped
+        sidecars[id]?.turnId = ""
+        runtimes[id]?.clearLocalPermissions(sessionId: CodexLocal.sessionId(for: id))
+        changed()
+    }
+
+    /// `codex.local.status`: `/status` without a subcommand.
+    func localStatus(_ conversation: ConversationManifest) async throws -> JSONValue {
+        let workspace = try localWorkspace(conversation)
+        return try await command(
+            "codex.local.status",
+            CodexLocal.statusPayload(
+                sessionId: CodexLocal.sessionId(for: conversation.id), tenantId: workspace.tenantId),
+            timeout: 15)
+    }
+
+    /// `codex.local.attach` republishes events after the persisted cursor.
+    /// The backend never sends a correlated ack (RealtimeClient marks it
+    /// unresolvable), so a timeout equals success; other errors propagate.
+    func attachLocal(_ conversation: ConversationManifest) async throws {
+        let workspace = try localWorkspace(conversation)
+        let sessionId = CodexLocal.sessionId(for: conversation.id)
+        do {
+            _ = try await command(
+                "codex.local.attach",
+                CodexLocal.attachPayload(
+                    sessionId: sessionId, tenantId: workspace.tenantId,
+                    afterCursor: legacyCursors[sessionId]),
+                timeout: 10)
+        } catch TodexError.invalid { /* no correlated ack — timing out is the end */ }
+    }
+
+    /// `codex.local.replay` (`/replay`): refetches the recent event window
+    /// from the start when no cursor argument is passed.
+    func replayLocal(_ conversation: ConversationManifest) async throws {
+        let workspace = try localWorkspace(conversation)
+        do {
+            _ = try await command(
+                "codex.local.replay",
+                CodexLocal.replayPayload(
+                    sessionId: CodexLocal.sessionId(for: conversation.id), tenantId: workspace.tenantId),
+                timeout: 10)
+        } catch TodexError.invalid { /* same unacknowledged contract as attach */ }
+    }
+
+    /// `model/list` cached on the sidecar (desktop `modelCatalog`): the CLI's
+    /// own model menu, which also carries per-model service tiers for `/fast`
+    /// and the dynamic tier commands.
+    @discardableResult
+    func localModelCatalog(for conversation: ConversationManifest, forceReload: Bool = false) async throws -> [JSONValue] {
+        if !forceReload, let cached = sidecars[conversation.id]?.models, !cached.isEmpty { return cached }
+        let result = try await localRequest(
+            "model/list", params: ["limit": .number(50), "includeHidden": .bool(false)], in: conversation)
+        let catalog = CodexLocal.modelCatalog(from: result)
+        sidecars[conversation.id]?.models = catalog
+        return catalog
+    }
+
+    /// `thread/fork` (`/fork`, `/side`, `/btw`): clones the adapter thread;
+    /// the clone becomes the sidecar's current thread (desktop `selectResult`).
+    @discardableResult
+    func forkLocalThread(_ conversation: ConversationManifest, ephemeral: Bool) async throws -> JSONValue {
+        let workspace = try localWorkspace(conversation)
+        let remembered = lastPreferencesByProvider["codex"] ?? ConversationPreferences()
+        var params = CodexLocal.threadStartParams(
+            workspace: workspace,
+            defaults: (
+                model: remembered.model, reasoningEffort: remembered.reasoningEffort,
+                approvalPolicy: "", approvalsReviewer: "", sandboxMode: ""))
+        params["ephemeral"] = .bool(ephemeral)
+        let result = try await localThreadRequest(
+            "thread/fork", params: params, in: conversation, requireExisting: true)
+        let forked = CodexLocal.threadId(in: result)
+        if !forked.isEmpty, forked != sidecars[conversation.id]?.threadId {
+            sidecars[conversation.id]?.threadId = forked
+            localThreads[conversation.id] = forked
+            saveSoon()
+            changed()
+        }
+        return result
+    }
+
+    /// Route one `codex.*` frame to its conversation. Session ids map through
+    /// the `v2_<conversationId>` convention; frames for unknown sessions only
+    /// keep their cursor fresh, exactly as the legacy path did.
+    private func routeCodex(_ frame: JSONValue, type: String) {
+        let sessionId = CodexLocal.sessionId(from: frame)
+        guard !sessionId.isEmpty else { return }
+        let cursor = CodexLocal.cursor(of: frame)
+        if cursor > (legacyCursors[sessionId] ?? 0) {
+            legacyCursors[sessionId] = cursor
+            saveSoon()
+        }
+        guard let conversationId = CodexLocal.conversationId(forSessionId: sessionId),
+            conversations.contains(where: { $0.id == conversationId })
+        else { return }
+        var sidecar = sidecars[conversationId] ?? CodexLocalSidecar()
+        if sidecar.threadId.isEmpty { sidecar.threadId = localThreads[conversationId] ?? "" }
+        let effects = CodexLocal.classify(
+            type: type, frame: frame, sessionId: sessionId, activeTurnId: sidecar.turnId)
+        var touched = false
+        if let threadId = effects.threadId, threadId != sidecar.threadId {
+            sidecar.threadId = threadId
+            localThreads[conversationId] = threadId
+            touched = true
+            saveSoon()
+        }
+        if let started = effects.turnStarted { sidecar.turnId = started; touched = true }
+        if effects.turnSettled != nil { sidecar.turnId = ""; touched = true }
+        if let phase = effects.lifecycle, phase != sidecar.phase { sidecar.phase = phase; touched = true }
+        if let alert = effects.alert { sidecar.lastError = alert; touched = true }
+        if let catalog = effects.modelCatalog { sidecar.models = catalog; touched = true }
+        if touched { sidecars[conversationId] = sidecar }
+        let applied = runtimes[conversationId]?.applyLocal(effects) == true
+        if touched || applied { changed() }
+    }
+
+    /// The conversation vanished (delete/other client): stop the adapter
+    /// process it owned so no orphan Codex instance keeps running.
+    private func discardSidecar(_ conversationId: String) {
+        sidecarStarts[conversationId]?.cancel()
+        sidecarStarts.removeValue(forKey: conversationId)
+        localThreadStarts[conversationId]?.cancel()
+        localThreadStarts.removeValue(forKey: conversationId)
+        guard sidecars[conversationId] != nil || localThreads[conversationId] != nil else { return }
+        let tenantId = sidecars[conversationId]?.tenantId ?? ""
+        sidecars.removeValue(forKey: conversationId)
+        localThreads.removeValue(forKey: conversationId)
+        if let socket, isConnected {
+            let sessionId = CodexLocal.sessionId(for: conversationId)
+            Task { [socket] in
+                _ = try? await socket.command(
+                    type: "codex.local.stop",
+                    payload: CodexLocal.stopPayload(sessionId: sessionId, tenantId: tenantId),
+                    timeout: 10, id: UUID().uuidString)
+            }
+        }
+    }
+
     private func receive(_ frame: JSONValue) {
         for continuation in wireSubscribers.values {
             if case .dropped = continuation.yield(frame) {
@@ -1403,12 +1809,7 @@ extension RealtimeClient: SessionSocket {}
                 }
             }
         } else if type.hasPrefix("codex.") {
-            let payload = frame["payload"]
-            let id = frame["payload"]["codex_session_id"].stringValue
-            if !id.isEmpty {
-                legacyCursors[id] = max(legacyCursors[id] ?? 0, payload["cursor"].intValue)
-                saveSoon()
-            }
+            routeCodex(frame, type: type)
         } else if type == "server.error", frame["id"].isNull {
             let payload = frame["payload"]
             // The backend replays after a lag notice; nothing is lost.
@@ -1801,7 +2202,8 @@ extension RealtimeClient: SessionSocket {}
         let snapshot = SessionSnapshot(
             workspaces: workspaces, conversations: conversations, drafts: drafts, preferences: preferences,
             lastPreferencesByProvider: lastPreferencesByProvider, lastAgent: lastAgent,
-            queues: queues, pendingSends: pendingSends, legacyCursors: legacyCursors, readSequences: reads,
+            queues: queues, pendingSends: pendingSends, legacyCursors: legacyCursors,
+            localThreads: localThreads, readSequences: reads,
             pinnedWorkspaces: pinnedWorkspaces, pinnedConversations: pinnedConversations,
             pausedQueues: pausedQueues, activeConversationID: activeConversationID, tasks: tasks,
             sentAttachments: sentAttachments, conversationLabels: conversationLabels,
@@ -1894,6 +2296,10 @@ extension RealtimeClient: SessionSocket {}
         readSequences = [:]
         conversationLabels = [:]
         legacyCursors = [:]
+        sidecars = [:]
+        sidecarStarts = [:]
+        localThreadStarts = [:]
+        localThreads = [:]
         rawEvents = [:]
         historyFloors = [:]
         earlierLoading = [:]
@@ -1934,6 +2340,7 @@ extension RealtimeClient: SessionSocket {}
                 queues = snapshot.queues.merging(queues) { _, edited in edited }
                 pendingSends = snapshot.pendingSends
                 legacyCursors = snapshot.legacyCursors
+                localThreads = snapshot.localThreads.merging(localThreads) { _, live in live }
                 pinnedWorkspaces = Array(Set(snapshot.pinnedWorkspaces + pinnedWorkspaces)).sorted {
                     (snapshot.pinnedWorkspaces.firstIndex(of: $0) ?? Int.max)
                         < (snapshot.pinnedWorkspaces.firstIndex(of: $1) ?? Int.max)

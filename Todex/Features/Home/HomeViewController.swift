@@ -704,12 +704,60 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                 ) { [weak self] _ in self?.session.setTaskStatus(task.id, status) }
             })
     }
-    /// Board actions: open the linked conversation, or offer task operations.
+    /// iPad hardware keyboards, desktop `COMBOS` parity: ⌘N new conversation,
+    /// ⌘⇧N new workspace, ⌘⇧K toggles the task board.
+    override var keyCommands: [UIKeyCommand]? {
+        [
+            UIKeyCommand(
+                title: String(localized: "新建对话"), action: #selector(newConversationShortcut),
+                input: "N", modifierFlags: .command),
+            UIKeyCommand(
+                title: String(localized: "添加工作区"), action: #selector(newWorkspaceShortcut),
+                input: "N", modifierFlags: [.command, .shift]),
+            UIKeyCommand(
+                title: String(localized: "任务看板"), action: #selector(kanbanShortcut),
+                input: "K", modifierFlags: [.command, .shift]),
+        ]
+    }
+    @objc private func newConversationShortcut() { chooseWorkspaceForConversation() }
+    @objc private func newWorkspaceShortcut() { addWorkspace() }
+    @objc private func kanbanShortcut() {
+        filter.selectedSegmentIndex = filter.selectedSegmentIndex == 1 ? 0 : 1
+        reload()
+    }
+    /// Board actions, desktop `openTaskConversation`: linked cards open their
+    /// conversation; unlinked cards create one titled after the task, link it
+    /// and seed the chat draft. Other operations stay on the card's more menu.
     private func openTask(_ task: KanbanTask) {
         if let linked = linkedConversation(task) {
             open(linked)
-        } else if let workspace = session.workspaces.first(where: { $0.id == task.workspaceId }) {
+            return
+        }
+        guard let workspace = session.workspaces.first(where: { $0.id == task.workspaceId }) else { return }
+        guard session.isConnected, let api = session.api,
+            let provider = session.lastAgent?.provider
+                ?? session.providers.first(where: { $0.available })?.id
+        else {
             presentTaskSheet(task, workspace: workspace)
+            return
+        }
+        let profile = session.lastAgent?.provider == provider ? session.lastAgent?.profile : nil
+        Task {
+            do {
+                let conversation = try await api.createConversation(
+                    workspace: workspace, provider: provider, profile: profile, title: task.title)
+                session.rememberAgent(provider: provider, profile: profile)
+                session.attachTask(task.id, conversationId: conversation.id)
+                try await session.refresh()
+                if let remembered = session.rememberedPreferences(for: provider) {
+                    session.updatePreferences(remembered, for: conversation)
+                }
+                var draft = session.drafts[conversation.id] ?? ComposerDraft()
+                draft.text = task.draftText
+                session.drafts[conversation.id] = draft
+                session.saveSoon()
+                open(conversation)
+            } catch { showError(error) }
         }
     }
     /// Column header arrow: open the workspace's latest conversation or create one.

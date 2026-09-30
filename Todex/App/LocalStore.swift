@@ -152,6 +152,10 @@ nonisolated struct SessionSnapshot: Codable, Sendable {
     var queues: [String: [QueuedDraft]] = [:]
     var pendingSends: [String: PendingSend] = [:]
     var legacyCursors: [String: Int] = [:]
+    /// conversationId → Codex adapter thread id. The adapter process can
+    /// outlive the app; keeping the mapping lets a relaunch resume the same
+    /// local thread instead of silently starting a new one.
+    var localThreads: [String: String] = [:]
     var readSequences: [String: Int] = [:]
     var pinnedWorkspaces: [String] = []
     var pinnedConversations: [String] = []
@@ -178,6 +182,7 @@ extension SessionSnapshot {
         queues = try c.decodeIfPresent([String: [QueuedDraft]].self, forKey: .queues) ?? [:]
         pendingSends = try c.decodeIfPresent([String: PendingSend].self, forKey: .pendingSends) ?? [:]
         legacyCursors = try c.decodeIfPresent([String: Int].self, forKey: .legacyCursors) ?? [:]
+        localThreads = try c.decodeIfPresent([String: String].self, forKey: .localThreads) ?? [:]
         readSequences = try c.decodeIfPresent([String: Int].self, forKey: .readSequences) ?? [:]
         pinnedWorkspaces = try c.decodeIfPresent([String].self, forKey: .pinnedWorkspaces) ?? []
         pinnedConversations = try c.decodeIfPresent([String].self, forKey: .pinnedConversations) ?? []

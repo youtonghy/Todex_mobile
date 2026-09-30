@@ -33,7 +33,7 @@ SwiftTerm 的固定版本构建插件只生成源代码版本信息。上述命�
 | --- | --- |
 | 连接 | 多后端配置（首页可查看其他后端缓存的工作区并切换）、Keychain Token、普通/X25519/ML-KEM-768 传输、设备配对；前台无限次退避重连（最长 30 秒），认证或加密配置错误停止重连；每条连接最多 120 个订阅，超出时退订最久未用的空闲对话；未打开的对话也订阅状态，首页实时显示运行、审批与未读 |
 | 对话 | REST 历史和 WebSocket 流式事件共用 reducer；连续序号恢复、去重、审批失效防护、待核对消息保留 |
-| 输入 | 独立草稿、UTF-8 文本和压缩图片附件（可编辑文本附件；粘贴图片或超过 5 行的文本自动转为附件）、Skills 引用、可搜索的模型选择与默认模型的思考深度、权限/计划模式、候选消息队列（支持后端原生队列的 Agent 直接使用原生队列）、首条消息前更换 Agent、本地 `/plan` `/model` `/permissions` `/copy` `/diff` `/skills` `/mcp` `/approve` 命令、iPad 键盘 ⌘↩ 发送 / ⌘. 停止 |
+| 输入 | 独立草稿、UTF-8 文本和压缩图片附件（可编辑文本附件；粘贴图片或超过 5 行的文本自动转为附件）、Skills 引用、可搜索的模型选择与默认模型的思考深度、权限/计划模式、候选消息队列（支持后端原生队列的 Agent 直接使用原生队列）、首条消息前更换 Agent、本地 `/plan` `/model` `/permissions` `/copy` `/diff` `/skills` `/mcp` `/approve` `/rename` `/new` `/archive` 命令、Codex 会话的 `codex.local` 侧车命令（`/review` `/init` `/goal` `/personality` `/memories` `/hooks` `/plugins` `/apps` `/feedback` `/logout` `/status` `/ps` `/stop` `/interrupt` `/attach` `/replay` `/side` `/fork` `/resume` `/fast` 及目录内动态服务档位命令）、iPad 键盘 ⌘↩ 发送 / ⌘. 停止 / ⌘N 新建对话 / ⌘⇧N 添加工作区 / ⌘⇧K 任务看板 / ⌘⇧G Git 操作 / ⌘B 工作台侧栏 / ⌘W 关闭对话 |
 | 消息 | 离线 Markdown、代码复制、表格、KaTeX 公式、工具卡片（名称、关键参数，参数/输出/错误分栏）与思考折叠、进度旁白单独显示、引用、导出；每轮用量与上下文占用环；按阅读位置跟随输出；已发附件回执可预览（本地 JPEG 缩略图与 ≤100 KB 文本，150 条/2 MB 上限） |
 | 审批 | 命令、文件、权限、计划反馈、多问题回答、extension UI、MCP schema 表单与 URL elicitation；多条待审批同时列出；会话级审批跨轮次保留，provider runtime 停止时失效 |
 | 控制 | 根据能力启用取消、引导、实时模型配置、原生队列、重试、分叉（首页可直接分叉未打开的对话）和压缩；运行 2 分钟无进展、压缩失败/完成/建议压缩、配置未生效均有提示 |
@@ -44,7 +44,8 @@ SwiftTerm 的固定版本构建插件只生成源代码版本信息。上述命�
 
 `Packages/TodexCore` 提供 47 个 HTTP method/path 封装和全部 57 个已识别 WebSocket 命令的支持表。详细依据和测试映射见 [API coverage](docs/api-coverage.md)。接口存在、后端实现、远程 Agent 可用性和本次实测是不同层次，应用会保留错误与未确认状态。
 
-- **Codex Fast**：当前统一对话的 prompt/configure 接口没有 serviceTier 字段。独立的 `codex.local.*` adapter 也不能定位统一对话的运行进程，因此禁用 Fast。需要后端增加带能力检查和确认响应的统一 API；移动端不会仅修改按钮状态来表示生效。
+- **Codex 侧车**：Codex 对话支持 `codex.local.*` 适配器会话（与桌面端同为 `v2_<conversationId>` 键控、懒启动、空闲由后端回收）。`/review` `/init` `/side` 等命令、adapter 审批和 `model/list` 目录都走这条通道；`/compact` `/retry` `/fork`（对话级）仍走统一 `conversation.*` 控制，与桌面端刻意不同但语义更正确。适配器事件投影进会话时间线，审批复用现有审批页。
+- **Codex Fast / 服务档位**：`/fast` 和动态档位命令写入 `workspace.serviceTier` 并经 `thread/settings/update` 生效于侧车线程（与桌面端一致）。统一对话主聊天流的 prompt/configure 接口没有 serviceTier 字段，因此 Fast 对统一聊天路径无作用——这与桌面端语义相同，不是缺陷；需要统一路径也支持档位时要后端增加带能力检查和确认响应的 API。
 - **恢复和后台**：iOS 不保证后台长连接。回到前台会立即重连并核对会话历史；断线、后台和应用重启后候选消息队列暂停，需要用户恢复。未确认的发送不自动重试。后端对单个订阅的错误（`EVENT_STREAM_LAGGED`、带 `conversationId` 的转发失败）只重新订阅该对话，不断开整条连接；无法归属的错误仍会断开并把未确认操作标为结果未知。
 - **通知**：开启后，当前没有在看的对话完成时发送本地通知（前台显示横幅）。
 - **语言**：界面支持简体中文、English、日本語、한국어，跟随系统，或在系统「设置 › TodeX › 语言」单独指定；应用设置里的「语言」行会跳转过去。桌面端是在应用内切换语言。
