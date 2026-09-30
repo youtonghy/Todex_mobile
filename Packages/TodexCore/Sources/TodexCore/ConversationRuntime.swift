@@ -10,10 +10,13 @@ public struct TimelineMessage: Identifiable, Sendable, Equatable {
     public var detail: JSONValue
     /// Source event sequence; process-detail hydration merges and orders by it.
     public var sequence: Int
+    /// The row grew from streamed deltas, so a completion carrying the full
+    /// text can cover it; rows created by complete snapshots never do.
+    public var streamed: Bool
 
     public init(
         id: String, turnId: String, role: String, category: String, text: String,
-        status: String, detail: JSONValue, sequence: Int = 0
+        status: String, detail: JSONValue, sequence: Int = 0, streamed: Bool = false
     ) {
         self.id = id
         self.turnId = turnId
@@ -23,6 +26,7 @@ public struct TimelineMessage: Identifiable, Sendable, Equatable {
         self.status = status
         self.detail = detail
         self.sequence = sequence
+        self.streamed = streamed
     }
 }
 
@@ -142,7 +146,8 @@ public struct ConversationRuntime: Sendable {
         }
         let existing = Set(messages.map(\.id))
         let older = scratch.messages.filter { !existing.contains($0.id) }
-        let merged = Self.droppingSupersededProgress(messages + older)
+        let merged = Self.droppingCoveredAssistantSegments(
+            Self.droppingSupersededProgress(messages + older))
         let mergedSubagents = Self.mergingEarlier(scratch.subagents, into: subagents, merge: Self.mergeEarlierSubagent)
         let mergedMemories = Self.mergingEarlier(scratch.memoryEntries, into: memoryEntries)
         guard merged != messages || mergedSubagents != subagents || mergedMemories != memoryEntries
@@ -353,6 +358,12 @@ public struct ConversationRuntime: Sendable {
         let message = payload["message"]
         let role = Self.string(payload["role"], message["role"]).lowercased()
         let user = role == "user" || role == "human"
+        // Events emitted for a subagent's frames (providers tag them from
+        // `parent_tool_use_id`) still fold into the trace but must not reach
+        // the assistant stream.
+        let subagentId = Self.string(
+            payload["subagentId"], payload["subagent_id"],
+            payload["parentToolUseId"], payload["parent_tool_use_id"])
         if type == "message.completed",
             user || message["stopReason"] == "toolUse"
                 || message["stop_reason"] == "toolUse"
@@ -398,7 +409,13 @@ public struct ConversationRuntime: Sendable {
         } else if ["message.created", "message.started", "message.completed", "assistant.delta", "message.delta"]
             .contains(type)
         {
-            category = "assistant_final"
+            // A subagent's message is trace detail: streamed text folds into
+            // one status step per run; its envelopes add nothing the run's
+            // result does not already show — and must never replace or merge
+            // into the main answer.
+            guard subagentId.isEmpty || type == "assistant.delta" || type == "message.delta"
+            else { return }
+            category = subagentId.isEmpty ? "assistant_final" : "status"
         } else if isStub {
             // Summary replays strip the content fields the heuristics match
             // on; preserved tool markers decide between the two detail kinds.
@@ -447,6 +464,12 @@ public struct ConversationRuntime: Sendable {
                 .string(contentIndex == nil ? event.eventId : fallback))
         } else {
             streamID = nativeID.isEmpty ? fallback : nativeID
+        }
+        // A subagent's thinking folds into the trace under its own stream,
+        // never into the main reasoning row it would otherwise corrupt.
+        if !subagentId.isEmpty {
+            if category == "reasoning" { streamID = "subagent-\(subagentId)-thought" }
+            if category == "status" { streamID = "subagent-\(subagentId)-text" }
         }
         if family == "assistant", nativeID.isEmpty {
             if assistantInterrupted {
@@ -509,12 +532,80 @@ public struct ConversationRuntime: Sendable {
             id: id, turnId: turnId,
             role: category == "user" ? "user" : category == "assistant_final" ? "assistant" : "system",
             category: category, text: nextText, status: messageStatus, detail: detail,
-            sequence: event.sequence)
+            sequence: event.sequence,
+            streamed: previous?.streamed ?? (index == nil && phase == "delta" && family == "assistant"))
         if let index { messages[index] = entry } else { messages.insert(entry, at: 0) }
         if category == "assistant_final", !payload["block"]["supersedes"].arrayValue.isEmpty {
             messages = Self.droppingSupersededProgress(messages)
         }
-        if family != "assistant", category != "user" { assistantInterrupted = true }
+        // A full assistant message already carries the text its streamed
+        // fragments were rendered under; covered segments drop so the answer
+        // shows once. A non-matching chain keeps every row.
+        if family == "assistant", phase != "delta", !nextText.isEmpty {
+            dropCoveredAssistantSegments(covering: entry)
+        }
+        // A step between two chunks opens a new segment; steps a provider
+        // tags as a subagent's run alongside the stream and never split it.
+        if family != "assistant", category != "user", subagentId.isEmpty {
+            assistantInterrupted = true
+        }
+    }
+
+    /// `#seg` rows of one turn's anonymous assistant stream whose joined text
+    /// a completion's text already covers. Rows walk newest→oldest; a row
+    /// stays covered only while prepending its text keeps a strict suffix
+    /// match, so an older fragment of a different message ends the chain
+    /// instead of being dropped.
+    private mutating func dropCoveredAssistantSegments(covering entry: TimelineMessage) {
+        var acc = ""
+        var covered: [String] = []
+        for message in messages {
+            guard message.id != entry.id, Self.isAssistantSegment(message, turnId: entry.turnId)
+            else { continue }
+            let joined = message.text + acc
+            guard joined.count <= entry.text.count, entry.text.hasSuffix(joined) else { break }
+            acc = joined
+            covered.append(message.id)
+            if acc == entry.text { break }
+        }
+        guard !covered.isEmpty else { return }
+        messages.removeAll { covered.contains($0.id) }
+    }
+
+    /// A row belongs to a turn's anonymous assistant stream — the stream id
+    /// inside its identity ends in `#seg<n>` — while native-id rows and
+    /// per-subagent steps never do.
+    private static func isAssistantSegment(_ message: TimelineMessage, turnId: String) -> Bool {
+        message.turnId == turnId && message.category == "assistant_final"
+            && message.id.range(of: "#seg[0-9]+$", options: .regularExpression) != nil
+    }
+
+    /// Fragments of a completed message that page in below it carry the head
+    /// of its text, not a suffix: walking the same-turn segments below each
+    /// completion oldest→newest, a fragment is covered while its text
+    /// continues the accumulated prefix exactly. Rows that fail to advance
+    /// the match are skipped, so a middle page completes once the head page
+    /// has arrived.
+    private static func droppingCoveredAssistantSegments(_ messages: [TimelineMessage]) -> [TimelineMessage]
+    {
+        var dropped = Set<String>()
+        for index in messages.indices {
+            let cover = messages[index]
+            guard !dropped.contains(cover.id), cover.category == "assistant_final",
+                !cover.streamed, !cover.text.isEmpty
+            else { continue }
+            var position = cover.text.startIndex
+            for candidate in ((index + 1)..<messages.count).reversed()
+            where !dropped.contains(messages[candidate].id)
+                && isAssistantSegment(messages[candidate], turnId: cover.turnId)
+                && cover.text[position...].hasPrefix(messages[candidate].text)
+            {
+                position = cover.text.index(position, offsetBy: messages[candidate].text.count)
+                dropped.insert(messages[candidate].id)
+                if position == cover.text.endIndex { break }
+            }
+        }
+        return dropped.isEmpty ? messages : messages.filter { !dropped.contains($0.id) }
     }
 
     private mutating func projectConfiguration(_ payload: JSONValue, type: String) {
@@ -989,7 +1080,7 @@ public struct ConversationRuntime: Sendable {
             return content.isEmpty ? value.prettyPrinted : content
         case "approval": values = [payload["title"], payload["question"], payload["message"]]
         case "error": values = [payload["message"], payload["error"], payload["reason"]]
-        default: values = [payload["status"], payload["message"], payload["text"]]
+        default: values = [payload["status"], payload["message"], payload["text"], payload["delta"]]
         }
         for value in values {
             let content = text(value, textOnly: ["assistant_final", "assistant_progress", "user"].contains(category))

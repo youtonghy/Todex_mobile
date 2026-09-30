@@ -1001,4 +1001,112 @@ struct ConversationRuntimeTests {
         #expect(answers().first?.status == "completed")
         #expect(runtime.messages.contains { $0.category == "reasoning" && $0.text == "Plan" })
     }
+
+    // claude.rs: frames carrying `parent_tool_use_id` emit with `subagentId`.
+    // Their tools, thinking and text fold into the trace but must never split
+    // or replace the main answer.
+    @Test func claudeSubagentStepsNeverFragmentOrReplaceTheAnswer() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(
+            try event(
+                2, "message.delta",
+                #"{"provider":"claude-code","turnId":"t","delta":{"type":"text_delta","text":"All "}}"#))
+        runtime.ingest(
+            try event(
+                3, "tool.completed",
+                #"{"provider":"claude-code","turnId":"t","subagentId":"toolu_1","toolCallId":"call-1","result":{"content":[{"type":"text","text":"ok"}]}}"#))
+        runtime.ingest(
+            try event(
+                4, "thought.delta",
+                #"{"provider":"claude-code","turnId":"t","subagentId":"toolu_1","delta":{"type":"thinking_delta","thinking":"sub plan"}}"#))
+        runtime.ingest(
+            try event(
+                5, "message.delta",
+                #"{"provider":"claude-code","turnId":"t","subagentId":"toolu_1","delta":{"type":"text_delta","text":"sub narration"}}"#))
+        // A subagent's completion envelope is trace detail, not a bubble.
+        runtime.ingest(
+            try event(
+                6, "message.completed",
+                #"{"provider":"claude-code","turnId":"t","subagentId":"toolu_1","message":{"id":"msg_sub","role":"assistant","content":[{"type":"text","text":"sub answer"}]}}"#))
+        runtime.ingest(
+            try event(
+                7, "message.delta",
+                #"{"provider":"claude-code","turnId":"t","delta":{"type":"text_delta","text":"keys"}}"#))
+        runtime.ingest(try claudeCompleted(8, #"{"type":"text","text":"All keys"}"#))
+        #expect(runtime.messages.filter { $0.category == "assistant_final" }.map(\.text) == ["All keys"])
+        #expect(runtime.messages.contains { $0.category == "status" && $0.text == "sub narration" })
+        #expect(runtime.messages.contains { $0.category == "reasoning" && $0.text == "sub plan" })
+        #expect(runtime.messages.contains { $0.category == "tool" })
+        #expect(!runtime.messages.contains { $0.text == "sub answer" })
+    }
+
+    // Untagged steps still interrupt; a completion then covers every segment
+    // its text already carries instead of landing beside them.
+    @Test func claudeCompletionCoversInterruptedStreamedSegments() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(
+            try event(
+                2, "message.delta",
+                #"{"provider":"claude-code","turnId":"t","delta":{"type":"text_delta","text":"All "}}"#))
+        runtime.ingest(
+            try event(
+                3, "tool.completed",
+                #"{"provider":"claude-code","turnId":"t","toolCallId":"call-1","result":{"content":[{"type":"text","text":"ok"}]}}"#))
+        runtime.ingest(
+            try event(
+                4, "message.delta",
+                #"{"provider":"claude-code","turnId":"t","delta":{"type":"text_delta","text":"keys"}}"#))
+        #expect(runtime.messages.filter { $0.category == "assistant_final" }.count == 2)
+        runtime.ingest(try claudeCompleted(5, #"{"type":"text","text":"All keys"}"#))
+        #expect(runtime.messages.map(\.text) == ["All keys", "ok"])
+        #expect(runtime.messages.filter { $0.category == "assistant_final" }.map(\.text) == ["All keys"])
+        // A completion whose text the segments do not tile keeps them: two
+        // anonymous fragments make the legacy single-draft merge abstain.
+        runtime.ingest(
+            try event(
+                6, "message.delta",
+                #"{"provider":"claude-code","turnId":"t","delta":{"type":"text_delta","text":"More"}}"#))
+        runtime.ingest(
+            try event(
+                7, "tool.completed",
+                #"{"provider":"claude-code","turnId":"t","toolCallId":"call-2","result":{"content":[{"type":"text","text":"ok2"}]}}"#))
+        runtime.ingest(
+            try event(
+                8, "message.delta",
+                #"{"provider":"claude-code","turnId":"t","delta":{"type":"text_delta","text":" tail"}}"#))
+        runtime.ingest(
+            try event(
+                9, "message.completed",
+                #"{"provider":"claude-code","turnId":"t","message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"Other"}]}}"#))
+        #expect(
+            runtime.messages.filter { $0.category == "assistant_final" }.map(\.text)
+                == ["Other", " tail", "More", "All keys"])
+    }
+
+    // conversation-runtime.test.cjs: fragments of a completed message that
+    // page in below the loaded window must not resurface as extra rows.
+    @Test func prependDropsStreamedFragmentsBelowTheirCompletedMessage() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.seedHistoryFloor(5)
+        runtime.ingest(try claudeCompleted(6, #"{"type":"text","text":"All keys"}"#))
+        runtime.markReplayComplete(highWater: 6)
+        let older = [
+            try event(1, "turn.started", #"{"turnId":"t"}"#),
+            try event(
+                2, "message.delta",
+                #"{"provider":"claude-code","turnId":"t","delta":{"type":"text_delta","text":"All "}}"#),
+            try event(
+                3, "tool.completed",
+                #"{"provider":"claude-code","turnId":"t","toolCallId":"call-1","result":{"content":[{"type":"text","text":"ok"}]}}"#),
+            try event(
+                4, "message.delta",
+                #"{"provider":"claude-code","turnId":"t","delta":{"type":"text_delta","text":"keys"}}"#),
+        ]
+        let prepended = runtime.prepend(older, below: 5)
+        #expect(prepended)
+        #expect(runtime.messages.map(\.text) == ["All keys", "ok"])
+        #expect(runtime.messages.filter { $0.category == "assistant_final" }.map(\.text) == ["All keys"])
+    }
 }
