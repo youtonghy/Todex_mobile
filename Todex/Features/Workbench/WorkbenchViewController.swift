@@ -463,7 +463,7 @@ final class WorkbenchViewController: UIViewController {
             guard let self else { return }
             let removedIndex = self.tabs.firstIndex { $0.id == id } ?? 0
             self.tabs.removeAll { $0.id == id }
-            // Closing the tab ends auto-restart even when the PTY is kept.
+            // Closing the tab ends auto-restart.
             (self.controllers.removeValue(forKey: id) as? WorkbenchTerminalViewController)?.cancelAutoRestart()
             if self.selected == id {
                 self.selected =
@@ -474,18 +474,12 @@ final class WorkbenchViewController: UIViewController {
             self.save()
         }
         if let terminal = controllers[id] as? WorkbenchTerminalViewController {
-            let sheet = UIAlertController(title: String(localized: "关闭终端标签"), message: String(localized: "离开标签不会自动结束后端 PTY。"), preferredStyle: .actionSheet)
-            sheet.addAction(
-                UIAlertAction(title: String(localized: "停止 PTY 并关闭"), style: .destructive) { [weak self, weak terminal] _ in
-                    Task { @MainActor in
-                        do {
-                            try await terminal?.stop()
-                            remove()
-                        } catch { if let self { WBUI.error(error, on: self) } }
-                    }
-                })
-            sheet.addAction(UIAlertAction(title: String(localized: "保留 PTY，仅关闭标签"), style: .default) { _ in remove() })
-            WBUI.presentSheet(sheet, on: self)
+            Task { @MainActor [weak self, weak terminal] in
+                do {
+                    try await terminal?.stop()
+                    remove()
+                } catch { if let self { WBUI.error(error, on: self) } }
+            }
         } else if let file = controllers[id] as? WorkbenchFilesViewController, file.hasUnsavedChanges {
             WBUI.confirm(on: self, title: String(localized: "放弃未保存编辑？"), message: String(localized: "关闭标签会丢失当前文件的本地编辑。"), action: String(localized: "放弃并关闭"), perform: remove)
         } else {

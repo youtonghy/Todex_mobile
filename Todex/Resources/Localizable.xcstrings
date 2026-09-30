@@ -5461,34 +5461,6 @@
         }
       }
     },
-    "保留 PTY，仅关闭标签": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keep PTY, close tab only"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PTY を保持してタブのみ閉じる"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PTY 유지, 탭만 닫기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保留 PTY，仅关闭标签"
-          }
-        }
-      }
-    },
     "保留编辑": {
       "localizations": {
         "en": {
@@ -5793,34 +5765,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "停止"
-          }
-        }
-      }
-    },
-    "停止 PTY 并关闭": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop PTY and close"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PTY を停止して閉じる"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PTY 중지 후 닫기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "停止 PTY 并关闭"
           }
         }
       }
@@ -6353,34 +6297,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "关闭标签会丢失当前文件的本地编辑。"
-          }
-        }
-      }
-    },
-    "关闭终端标签": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Close terminal tab"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ターミナルタブを閉じる"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "터미널 탭 닫기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "关闭终端标签"
           }
         }
       }
@@ -29257,34 +29173,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "禁用页面脚本"
-          }
-        }
-      }
-    },
-    "离开标签不会自动结束后端 PTY。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Leaving the tab won't end the backend PTY."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "タブを離れてもバックエンドの PTY は自動終了しません。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "탭을 떠나도 백엔드 PTY는 자동으로 종료되지 않습니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "离开标签不会自动结束后端 PTY。"
           }
         }
       }
