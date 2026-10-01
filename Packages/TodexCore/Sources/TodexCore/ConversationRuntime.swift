@@ -148,7 +148,8 @@ public struct ConversationRuntime: Sendable {
         let older = scratch.messages.filter { !existing.contains($0.id) }
         let merged = Self.droppingCoveredAssistantSegments(
             Self.droppingSupersededProgress(messages + older))
-        let mergedSubagents = Self.mergingEarlier(scratch.subagents, into: subagents, merge: Self.mergeEarlierSubagent)
+        let mergedSubagents = Self.partitionSettledSubagents(
+            Self.mergingEarlier(scratch.subagents, into: subagents, merge: Self.mergeEarlierSubagent))
         let mergedMemories = Self.mergingEarlier(scratch.memoryEntries, into: memoryEntries)
         guard merged != messages || mergedSubagents != subagents || mergedMemories != memoryEntries
         else { return false }
@@ -779,8 +780,20 @@ public struct ConversationRuntime: Sendable {
             } else if status != "queued" {
                 run["finishedAt"] = .string(event.time)
             }
-            subagents.removeAll { $0["id"] == .string(id) }
-            subagents.insert(run, at: 0)
+            // Runs keep their slot while they update — only a first sighting
+            // or the transition into a settled status changes position, so the
+            // list does not reshuffle on every progress event and finished
+            // runs collect below the active ones.
+            if previous.isNull
+                || Self.settledSubagentStatuses.contains(previousStatus) != Self.settledSubagentStatuses.contains(status) {
+                subagents.removeAll { $0["id"] == .string(id) }
+                let boundary = Self.settledSubagentStatuses.contains(status)
+                    ? (subagents.firstIndex { Self.settledSubagentStatuses.contains($0["status"].stringValue) } ?? subagents.count)
+                    : 0
+                subagents.insert(run, at: boundary)
+            } else if let index = subagents.firstIndex(where: { $0["id"] == .string(id) }) {
+                subagents[index] = run
+            }
         } else if type == "memory.created" || type == "memory.updated" {
             let id = Self.string(payload["memoryId"], payload["id"])
             // An explicitly empty update is valid; configuration-only events are not content.
@@ -1038,6 +1051,21 @@ public struct ConversationRuntime: Sendable {
         }
         return .object(merged)
     }
+
+    private static let settledSubagentStatuses: Set<String> = ["completed", "failed", "cancelled"]
+
+    /// Keep the active-before-settled group order after an earlier page
+    /// merged: a still-running run whose events all sit below the loaded
+    /// window appends at the tail and would otherwise land below finished
+    /// runs. Returns the input unchanged when the order already holds.
+    private static func partitionSettledSubagents(_ runs: [JSONValue]) -> [JSONValue] {
+        guard let firstSettled = runs.firstIndex(where: { settledSubagentStatuses.contains($0["status"].stringValue) }),
+              runs[firstSettled...].contains(where: { !settledSubagentStatuses.contains($0["status"].stringValue) })
+        else { return runs }
+        return runs.filter { !settledSubagentStatuses.contains($0["status"].stringValue) }
+            + runs.filter { settledSubagentStatuses.contains($0["status"].stringValue) }
+    }
+
     /// 'Subagent', '' and 'queued' are placeholders for a run whose start sits
     /// below the loaded window, so the paged-in start replaces them; every
     /// other field keeps the newer projection's value.
