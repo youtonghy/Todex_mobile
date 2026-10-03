@@ -41,6 +41,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private let suggestionBox = UIView()
     private let suggestionList = UIStackView()
     private var mentionTask: Task<Void, Never>?
+    private var suggestionItems: [Suggestion] = []
+    private var suggestionInteractive = false
+    private var suggestionSelection = 0
     private var skillCatalog: [JSONValue]?
     private var mcpCatalog: [JSONValue]?
     private var skillCatalogTask: Task<Void, Never>?
@@ -288,10 +291,22 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     }
     override var keyCommands: [UIKeyCommand]? {
         // iPad hardware keyboards: ⌘↩ sends, ⌘. stops the running turn.
-        [
+        var commands = [
             UIKeyCommand(title: String(localized: "发送"), action: #selector(sendShortcut), input: "\r", modifierFlags: .command),
             UIKeyCommand(title: String(localized: "停止"), action: #selector(stopShortcut), input: ".", modifierFlags: .command),
         ]
+        // With the suggestion list open, arrows/Return act on the highlighted
+        // row instead of the caret, matching the desktop composer; Escape
+        // resets the highlight. Rows still reachable when this is empty.
+        if !suggestionBox.isHidden, !selectableSuggestionIndexes.isEmpty {
+            commands += [
+                UIKeyCommand(title: String(localized: "上一条建议"), action: #selector(moveSuggestionUp), input: UIKeyCommand.inputUpArrow, modifierFlags: []),
+                UIKeyCommand(title: String(localized: "下一条建议"), action: #selector(moveSuggestionDown), input: UIKeyCommand.inputDownArrow, modifierFlags: []),
+                UIKeyCommand(title: String(localized: "选择建议"), action: #selector(applySelectedSuggestion), input: "\r", modifierFlags: []),
+                UIKeyCommand(title: String(localized: "重置建议选择"), action: #selector(resetSuggestionSelection), input: UIKeyCommand.inputEscape, modifierFlags: []),
+            ]
+        }
+        return commands
     }
     @objc private func sendShortcut() { submit() }
     @objc private func stopShortcut() {
@@ -2007,8 +2022,18 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         applyMention(range: range, text: "")
         insertSkill(id, name: name)
     }
+    /// Rows a hardware keyboard can land on: informational rows (`enabled =
+    /// false`) are skipped, and non-interactive lists offer nothing.
+    private var selectableSuggestionIndexes: [Int] {
+        suggestionInteractive
+            ? suggestionItems.indices.filter { suggestionItems[$0].enabled }
+            : []
+    }
     private func showSuggestions(_ items: [Suggestion], interactive: Bool = true) {
         suggestionList.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        suggestionItems = items
+        suggestionInteractive = interactive
+        suggestionSelection = selectableSuggestionIndexes.first ?? 0
         for (index, item) in items.enumerated() {
             var config = UIButton.Configuration.plain()
             config.title = item.title
@@ -2036,10 +2061,36 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             }
             suggestionList.addArrangedSubview(button)
         }
+        updateSuggestionHighlight()
         suggestionBox.isHidden = items.isEmpty
+    }
+    private func updateSuggestionHighlight() {
+        for (index, view) in suggestionList.arrangedSubviews.enumerated() {
+            guard let button = view as? UIButton else { continue }
+            button.configuration?.background.backgroundColor =
+                button.isEnabled && index == suggestionSelection ? Theme.secondary : .clear
+        }
+    }
+    @objc private func moveSuggestionUp() { moveSuggestionSelection(by: -1) }
+    @objc private func moveSuggestionDown() { moveSuggestionSelection(by: 1) }
+    private func moveSuggestionSelection(by delta: Int) {
+        let selectable = selectableSuggestionIndexes
+        guard !selectable.isEmpty else { return }
+        let position = selectable.firstIndex(of: suggestionSelection) ?? 0
+        suggestionSelection = selectable[(position + delta + selectable.count) % selectable.count]
+        updateSuggestionHighlight()
+    }
+    @objc private func applySelectedSuggestion() {
+        guard selectableSuggestionIndexes.contains(suggestionSelection) else { return }
+        suggestionItems[suggestionSelection].apply()
+    }
+    @objc private func resetSuggestionSelection() {
+        suggestionSelection = selectableSuggestionIndexes.first ?? 0
+        updateSuggestionHighlight()
     }
     private func hideSuggestions() {
         if !suggestionBox.isHidden { suggestionBox.isHidden = true }
+        suggestionItems = []
     }
     private func modelMenu() -> UIMenu {
         let pref = session.preferences(for: conversation)
