@@ -698,6 +698,20 @@ extension RealtimeClient: SessionSocket {}
         changed()
     }
 
+    /// Exports another conversation's user and assistant messages as Markdown
+    /// for an `@chat:` reference. Replays the whole journal because the
+    /// conversation may never have been opened on this device.
+    func exportConversationMarkdown(_ target: ConversationManifest, maxBytes: Int) async throws -> String {
+        guard let api, isConnected else { throw TodexError.disconnected }
+        let current = revision
+        let id = target.id
+        let messages = try await ConversationExport.transcript(conversationId: id) { after, limit in
+            try await api.events(conversationId: id, after: after, limit: limit, detail: "summary")
+        }
+        try checkRevision(current)
+        return ConversationExport.markdown(messages, title: target.title ?? "", maxBytes: maxBytes)
+    }
+
     func loadCommands(for conversation: ConversationManifest) async throws {
         guard let api, isConnected else { throw TodexError.disconnected }
         let current = revision

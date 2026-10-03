@@ -1727,6 +1727,16 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         mentionTask?.cancel()
         let range = trigger.range
         let query = trigger.query
+        if let chatQuery = Self.chatMentionQuery(query) {
+            showChatSuggestions(chatQuery, range: range)
+            return
+        }
+        // Listed after the files so the first file stays the top pick.
+        let chatPrefix: [Suggestion] =
+            Self.chatMentionPrefix.hasPrefix(query.lowercased())
+            ? [Suggestion(title: Self.chatMentionPrefix, detail: String(localized: "引用当前工作区的其他对话")) { [weak self] in
+                self?.applyMention(range: range, text: "@" + Self.chatMentionPrefix)
+            }] : []
         showSuggestions([Suggestion(title: String(localized: "正在搜索工作区文件…"), detail: "", apply: {})], interactive: false)
         mentionTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(200))
@@ -1746,13 +1756,72 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                         self?.applyMention(range: range, text: "@\(path)" + (isDirectory ? "" : " "))
                     }
                 }
-                items.isEmpty
+                items.isEmpty && chatPrefix.isEmpty
                     ? self.showSuggestions(
                         [Suggestion(title: String(localized: "没有匹配的文件"), detail: "", apply: {})], interactive: false)
-                    : self.showSuggestions(Array(items))
+                    : self.showSuggestions(Array(items) + chatPrefix)
             } catch {
                 guard !Task.isCancelled, self.mentionTrigger()?.range.location == range.location else { return }
-                self.hideSuggestions()
+                chatPrefix.isEmpty ? self.hideSuggestions() : self.showSuggestions(chatPrefix)
+            }
+        }
+    }
+    /// `@chat:<query>` references another conversation of the same workspace.
+    private static let chatMentionPrefix = "chat:"
+    private static func chatMentionQuery(_ query: String) -> String? {
+        guard query.lowercased().hasPrefix(chatMentionPrefix) else { return nil }
+        return String(query.dropFirst(chatMentionPrefix.count))
+    }
+    private static func conversationTitle(_ item: ConversationManifest) -> String {
+        item.title?.isEmpty == false ? item.title! : String(localized: "新对话")
+    }
+    private func showChatSuggestions(_ query: String, range: NSRange) {
+        mentionTask?.cancel()
+        // The trigger ends at whitespace, so titles match with their spaces removed.
+        let needle = query.lowercased()
+        let items = session.conversations
+            .filter { $0.workspace == conversation.workspace && $0.id != conversation.id && $0.archivedAt == nil }
+            .filter {
+                needle.isEmpty
+                    || Self.conversationTitle($0).lowercased().filter { !$0.isWhitespace }.contains(needle)
+            }
+            .prefix(8)
+            .map { target in
+                Suggestion(title: Self.conversationTitle(target), detail: target.provider) { [weak self] in
+                    self?.attachConversation(target, range: range)
+                }
+            }
+        items.isEmpty
+            ? showSuggestions(
+                [Suggestion(title: String(localized: "没有匹配的对话"), detail: "", apply: {})], interactive: false)
+            : showSuggestions(Array(items))
+    }
+    /// Exports the picked conversation as Markdown and attaches it as a file
+    /// capsule in place of the `@chat:` trigger text.
+    private func attachConversation(_ target: ConversationManifest, range: NSRange) {
+        applyMention(range: range, text: "")
+        let used = draft.attachments.reduce(0) { $0 + $1.data.count }
+        // Same limits as `addAttachment`; a single text file is also capped at
+        // 512 KB like the desktop composer.
+        let budget = min(512 * 1_024, 2_500_000 - used)
+        guard draft.attachments.count < 6, budget > 0 else {
+            showError(TodexError.invalid(String(localized: "附件总大小需小于 2.5 MB，最多 6 个")))
+            return
+        }
+        transientNotice = (String(localized: "正在导出对话…"), .secondaryLabel, Date().addingTimeInterval(30))
+        reload()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let markdown = try await self.session.exportConversationMarkdown(target, maxBytes: budget)
+                // `]` or a newline would end the inline token early.
+                let name = Self.conversationTitle(target).filter { !$0.isNewline && $0 != "[" && $0 != "]" }
+                self.transientNotice = (String(localized: "已将对话以 Markdown 附加"), .secondaryLabel, Date().addingTimeInterval(4))
+                try self.addAttachment(Data(markdown.utf8), name: "\(name).md", mime: "text/markdown")
+            } catch {
+                self.transientNotice = nil
+                self.reload()
+                self.showError(error)
             }
         }
     }

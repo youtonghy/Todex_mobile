@@ -367,6 +367,61 @@ nonisolated final class TodexUITests: XCTestCase {
         app.terminate()
     }
 
+    /// `@chat:` exports another conversation of the workspace as Markdown and
+    /// attaches it; the exported text must reach the agent with the prompt.
+    @MainActor func testChatMentionAttachesConversation() async throws {
+        continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["TODEX_TEST_PORT"] != nil else {
+            throw XCTSkip("Requires the explicitly configured isolated Rust backend fixture")
+        }
+        let workspaces = try await fixtureRequest("GET", "/v2/workspaces")
+        let list = workspaces["workspaces"] as? [[String: Any]] ?? []
+        let path = (list.first { $0["name"] as? String == "Isolated Fixture" } ?? list.first)?["path"] as? String ?? ""
+        XCTAssertFalse(path.isEmpty)
+        let created = try await fixtureRequest(
+            "POST", "/v2/conversations", body: ["workspace": path, "provider": "codex", "title": "ExportSource"])
+        let sourceId = try XCTUnwrap(
+            created["id"] as? String ?? (created["conversation"] as? [String: Any])?["id"] as? String)
+        _ = try await fixtureRequest("POST", "/v2/conversations/\(sourceId)/prompt", body: ["text": "export-marker-42"])
+        let app = application()
+        app.launch()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Isolated Fixture")).firstMatch
+                .waitForExistence(timeout: 30))
+        app.buttons["新建"].tap()
+        app.buttons["新建对话"].tap()
+        app.sheets["选择工作区"].buttons["Isolated Fixture"].tap()
+        app.sheets["选择 Agent"].buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Codex")).firstMatch.tap()
+        let input = app.textViews["chat.composer"]
+        XCTAssertTrue(input.waitForExistence(timeout: 15))
+        input.tap()
+        input.typeText("@")
+        let prefix = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat.suggestion.", "chat:")).firstMatch
+        XCTAssertTrue(prefix.waitForExistence(timeout: 15), "@ 没有提供 chat: 入口")
+        prefix.tap()
+        input.typeText("exportsource")
+        let source = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat.suggestion.", "ExportSource"))
+            .firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 10), "@chat: 没有列出同工作区的对话")
+        source.tap()
+        let attached = expectation(for: NSPredicate(format: "value CONTAINS %@", "ExportSource.md"), evaluatedWith: input)
+        await fulfillment(of: [attached], timeout: 15)
+        XCTAssertFalse((input.value as? String ?? "").contains("@chat:"), "@chat: 触发文本未移除")
+        input.typeText("summarize")
+        let send = app.buttons["chat.send"]
+        let enabled = expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: send)
+        await fulfillment(of: [enabled], timeout: 20)
+        send.tap()
+        // The fixture agent echoes its input, so the exported transcript shows
+        // up in the reply.
+        let echoed = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "export-marker-42")).firstMatch
+        XCTAssertTrue(echoed.waitForExistence(timeout: 20), "导出的对话内容没有随消息发送")
+        app.terminate()
+    }
+
     // MARK: - Desktop-parity additions
 
     /// REST helpers let the test drive the fixture while the app is

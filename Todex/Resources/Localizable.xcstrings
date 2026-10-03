@@ -15037,6 +15037,34 @@
         }
       }
     },
+    "已将对话以 Markdown 附加": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation attached as Markdown"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会話を Markdown として添付しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화를 Markdown으로 첨부했습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已将对话以 Markdown 附加"
+          }
+        }
+      }
+    },
     "已开启": {
       "localizations": {
         "en": {
@@ -16517,6 +16545,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "引用到输入框"
+          }
+        }
+      }
+    },
+    "引用当前工作区的其他对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reference another conversation in this workspace"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このワークスペースの別の会話を参照"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 워크스페이스의 다른 대화 참조"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "引用当前工作区的其他对话"
           }
         }
       }
@@ -25033,6 +25089,34 @@
         }
       }
     },
+    "正在导出对话…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exporting conversation…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会話をエクスポート中…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화 내보내는 중…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在导出对话…"
+          }
+        }
+      }
+    },
     "正在工作": {
       "localizations": {
         "en": {
@@ -26457,6 +26541,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "没有匹配的 Skill 或 MCP"
+          }
+        }
+      }
+    },
+    "没有匹配的对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching conversations"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一致する会話はありません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일치하는 대화 없음"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有匹配的对话"
           }
         }
       }
