@@ -51,6 +51,14 @@ struct ConversationRuntimeTests {
         #expect(runtime.readyForActions)
     }
 
+    @Test func agentSideViewEventsStayOutOfTheTimeline() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "ssh.exec.started", #"{"execId":"a","host":"web","command":"uname -a"}"#))
+        runtime.ingest(try event(2, "desktop.browser.action", #"{"actionId":"x","tool":"browser_snapshot","ok":true,"summary":"snapshot","deviceId":"dev","deviceName":"Mac"}"#))
+        runtime.ingest(try event(3, "desktop.browser.grant", #"{"status":"granted","deviceId":"dev"}"#))
+        #expect(runtime.messages.isEmpty)
+    }
+
     @Test func deviceRestrictedPermissionsNameTheirAnsweringDevices() {
         let open = PendingPermission(id: "p", turnId: "t", payload: ["options": []])
         #expect(open.requiredDeviceNames(for: nil) == nil)
