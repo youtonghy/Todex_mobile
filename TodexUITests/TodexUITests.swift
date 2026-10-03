@@ -356,14 +356,39 @@ nonisolated final class TodexUITests: XCTestCase {
             for: NSPredicate(format: "hittable == false"), evaluatedWith: slash)
         wait(for: [hidden], timeout: 5)
         input.typeText("\u{8}\u{8}\u{8}\u{8}")
-        // "@" searches workspace entries and inserts the file path.
+        // "@" first lists reference types; "@file:" then searches files and
+        // inserts the provider-facing "@path".
         input.typeText("@")
-        let mention = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat.suggestion.", "README"))
-            .firstMatch
+        let suggestion = { (label: String) in
+            app.buttons.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat.suggestion.", label)
+            ).firstMatch
+        }
+        XCTAssertTrue(suggestion("@mcp:").waitForExistence(timeout: 5), "@ 没有列出引用类型")
+        suggestion("@file:").tap()
+        XCTAssertTrue((input.value as? String ?? "").contains("@file:"))
+        let mention = suggestion("README")
         XCTAssertTrue(mention.waitForExistence(timeout: 15))
         mention.tap()
-        XCTAssertTrue((input.value as? String ?? "").contains("@README.md"))
+        let inserted = expectation(for: NSPredicate(format: "value CONTAINS %@", "@README.md"), evaluatedWith: input)
+        wait(for: [inserted], timeout: 5)
+        XCTAssertFalse((input.value as? String ?? "").contains("@file:"), "类型前缀不应进入草稿：\(input.value ?? "")")
+        // "@folder:" lists folders only and inserts "@dir/".
+        input.typeText("@folder:")
+        let folder = suggestion("@docs/")
+        XCTAssertTrue(folder.waitForExistence(timeout: 15), "@folder: 没有列出文件夹")
+        XCTAssertFalse(suggestion("README").exists, "@folder: 不应列出文件")
+        folder.tap()
+        XCTAssertTrue((input.value as? String ?? "").contains("@docs/"))
+        // "@skill:" attaches the same chip as "#".
+        input.typeText(" @skill:")
+        let skill = suggestion("fixture-skill")
+        XCTAssertTrue(skill.waitForExistence(timeout: 15), "@skill: 没有列出 fixture skill")
+        skill.tap()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "fixture-skill", "移除"))
+                .firstMatch.waitForExistence(timeout: 5), "@skill: 选择后没有生成 chip")
+        XCTAssertFalse((input.value as? String ?? "").contains("@skill:"))
         app.terminate()
     }
 
@@ -397,8 +422,8 @@ nonisolated final class TodexUITests: XCTestCase {
         input.tap()
         input.typeText("@")
         let prefix = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat.suggestion.", "chat:")).firstMatch
-        XCTAssertTrue(prefix.waitForExistence(timeout: 15), "@ 没有提供 chat: 入口")
+            NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat.suggestion.", "@chat:")).firstMatch
+        XCTAssertTrue(prefix.waitForExistence(timeout: 15), "@ 没有提供 @chat: 类型")
         prefix.tap()
         input.typeText("exportsource")
         let source = app.buttons.matching(

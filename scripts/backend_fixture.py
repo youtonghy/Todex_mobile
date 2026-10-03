@@ -76,6 +76,9 @@ def start(binary):
     workspace = root / "workspaces/project"
     (workspace / "README.md").write_text("# TodeX isolated fixture\n\nUse fixture:permission or fixture:hold in chat.\n")
     (workspace / "sample + 中文.md").write_text("original text\n")
+    # UI tests pick this folder from the "@folder:" reference menu.
+    (workspace / "docs").mkdir(exist_ok=True)
+    (workspace / "docs/guide.md").write_text("# Fixture guide\n")
     # UI tests resolve "#" skills from the provider project skill root.
     skill = workspace / ".codex/skills/fixture-skill"
     skill.mkdir(parents=True, exist_ok=True)

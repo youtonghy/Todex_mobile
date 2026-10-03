@@ -1508,10 +1508,12 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         nav.modalPresentationStyle = .fullScreen
         WBUI.presentModal(nav, on: self)
     }
-    // MARK: - Inline suggestions (/ commands, @ file mentions, # skills)
+    // MARK: - Inline suggestions (/ commands, @ reference menu, # skills)
     private struct Suggestion {
         let title: String
         let detail: String
+        /// False for informational rows inside an otherwise tappable list.
+        var enabled = true
         let apply: () -> Void
     }
     /// Commands handled locally in `runClientCommand`; provider-advertised
@@ -1723,54 +1725,92 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         else { return nil }
         return (NSRange(location: found.location, length: end - found.location), query)
     }
+    /// `@` opens a type menu and `@type:query` searches one type; see
+    /// `ReferenceMenu` for the shared rules.
     private func fetchMentionSuggestions(_ trigger: (range: NSRange, query: String)) {
         mentionTask?.cancel()
         let range = trigger.range
-        let query = trigger.query
-        if let chatQuery = Self.chatMentionQuery(query) {
-            showChatSuggestions(chatQuery, range: range)
-            return
+        switch ReferenceMenu.state(trigger.query) {
+        case .type(let prefix):
+            let types = ReferenceMenu.types(matching: prefix).map { type in
+                Suggestion(title: "@\(type.rawValue):", detail: Self.referenceTypeDetail(type)) { [weak self] in
+                    self?.applyMention(range: range, text: "@\(type.rawValue):")
+                }
+            }
+            // A bare `@` only offers types; typed text also searches files as before.
+            if prefix.isEmpty {
+                showSuggestions(types)
+            } else {
+                fetchEntrySuggestions(query: prefix, mode: .any, range: range, leading: types)
+            }
+        case .item(.file, let query):
+            fetchEntrySuggestions(query: query, mode: .file, range: range)
+        case .item(.folder, let query):
+            fetchEntrySuggestions(query: query, mode: .folder, range: range)
+        case .item(.chat, let query):
+            showChatSuggestions(query, range: range)
+        case .item(.skill, let query):
+            fetchSkillSuggestions((range, query), only: .skill)
+        case .item(.mcp, let query):
+            fetchSkillSuggestions((range, query), only: .mcp)
         }
-        // Listed after the files so the first file stays the top pick.
-        let chatPrefix: [Suggestion] =
-            Self.chatMentionPrefix.hasPrefix(query.lowercased())
-            ? [Suggestion(title: Self.chatMentionPrefix, detail: String(localized: "引用当前工作区的其他对话")) { [weak self] in
-                self?.applyMention(range: range, text: "@" + Self.chatMentionPrefix)
-            }] : []
-        showSuggestions([Suggestion(title: String(localized: "正在搜索工作区文件…"), detail: "", apply: {})], interactive: false)
+    }
+    private static func referenceTypeDetail(_ type: ReferenceType) -> String {
+        switch type {
+        case .file: String(localized: "工作区文件")
+        case .folder: String(localized: "工作区文件夹")
+        case .chat: String(localized: "当前工作区的其他对话（以 Markdown 附加）")
+        case .skill: String(localized: "Agent 目录中的 Skill")
+        case .mcp: String(localized: "Agent 目录中的 MCP 服务")
+        }
+    }
+    private func fetchEntrySuggestions(
+        query: String, mode: ReferenceMenu.EntryMode, range: NSRange, leading: [Suggestion] = []
+    ) {
+        showSuggestions(
+            leading + [Suggestion(title: String(localized: "正在搜索工作区文件…"), detail: "", enabled: false, apply: {})])
+        // The backend has no kind filter: typed lists fetch more and filter here.
+        let limit = mode == .any ? 40 : ReferenceMenu.typedEntryFetchLimit
         mentionTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(200))
             guard let self, !Task.isCancelled else { return }
             guard let api = self.session.api else { self.hideSuggestions(); return }
             do {
                 let result = try await api.workspaceEntries(
-                    cwd: self.conversation.workspace, query: query, limit: 40)
+                    cwd: self.conversation.workspace, query: query, limit: limit)
                 guard !Task.isCancelled, self.mentionTrigger()?.range.location == range.location else { return }
-                let items = result["entries"].arrayValue.prefix(8).map { entry in
-                    let isDirectory = entry["kind"].stringValue == "directory"
-                    let path = entry["path"].stringValue
-                    return Suggestion(
-                        title: entry["name"].stringValue + (isDirectory ? "/" : ""),
-                        detail: path
-                    ) { [weak self] in
-                        self?.applyMention(range: range, text: "@\(path)" + (isDirectory ? "" : " "))
+                let entries = result["entries"].arrayValue
+                let items = entries
+                    .filter { ReferenceMenu.shows(isDirectory: $0["kind"].stringValue == "directory", in: mode) }
+                    .prefix(ReferenceMenu.suggestionLimit)
+                    .map { entry in
+                        let isDirectory = entry["kind"].stringValue == "directory"
+                        let path = entry["path"].stringValue
+                        let insert = ReferenceMenu.entryInsert(path: path, isDirectory: isDirectory, mode: mode)
+                        return Suggestion(
+                            title: ReferenceMenu.entryLabel(path: path, isDirectory: isDirectory),
+                            detail: entry["name"].stringValue
+                        ) { [weak self] in
+                            self?.applyMention(range: range, text: insert)
+                        }
                     }
+                var rows = leading + items
+                if mode == .folder, entries.count >= limit, items.count < ReferenceMenu.suggestionLimit {
+                    rows.append(Suggestion(
+                        title: String(localized: "仅显示前部结果中的文件夹，继续输入路径以缩小范围"), detail: "",
+                        enabled: false, apply: {}))
                 }
-                items.isEmpty && chatPrefix.isEmpty
+                rows.isEmpty
                     ? self.showSuggestions(
-                        [Suggestion(title: String(localized: "没有匹配的文件"), detail: "", apply: {})], interactive: false)
-                    : self.showSuggestions(Array(items) + chatPrefix)
+                        [Suggestion(
+                            title: mode == .folder ? String(localized: "没有匹配的文件夹") : String(localized: "没有匹配的文件"),
+                            detail: "", apply: {})], interactive: false)
+                    : self.showSuggestions(rows)
             } catch {
                 guard !Task.isCancelled, self.mentionTrigger()?.range.location == range.location else { return }
-                chatPrefix.isEmpty ? self.hideSuggestions() : self.showSuggestions(chatPrefix)
+                leading.isEmpty ? self.hideSuggestions() : self.showSuggestions(leading)
             }
         }
-    }
-    /// `@chat:<query>` references another conversation of the same workspace.
-    private static let chatMentionPrefix = "chat:"
-    private static func chatMentionQuery(_ query: String) -> String? {
-        guard query.lowercased().hasPrefix(chatMentionPrefix) else { return nil }
-        return String(query.dropFirst(chatMentionPrefix.count))
     }
     private static func conversationTitle(_ item: ConversationManifest) -> String {
         item.title?.isEmpty == false ? item.title! : String(localized: "新对话")
@@ -1900,7 +1940,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             updateSuggestions()
         }
     }
-    private func fetchSkillSuggestions(_ trigger: (range: NSRange, query: String)) {
+    /// `#` lists both kinds; `@skill:` / `@mcp:` pass `only` and show bare names.
+    private func fetchSkillSuggestions(_ trigger: (range: NSRange, query: String), only: ReferenceType? = nil) {
         mentionTask?.cancel()
         let range = trigger.range
         let query = trigger.query.lowercased()
@@ -1911,7 +1952,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             return
         }
         var seenSkills = Set<String>()
-        let matchedSkills = skills.filter { item in
+        let marker = only == nil ? "#" : ""
+        let matchedSkills = only == .mcp ? [] : skills.filter { item in
             guard item["valid"].boolValue, !(item["resourceId"].optionalString ?? "").isEmpty
             else { return false }
             let name = item["name"].optionalString ?? ""
@@ -1921,7 +1963,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             seenSkills.insert("\(item["resourceId"].stringValue):\(item["name"].stringValue)").inserted
         }
         var seenMcps = Set<String>()
-        let matchedMcps = mcps.filter { item in
+        let matchedMcps = only == .skill ? [] : mcps.filter { item in
             guard item["enabled"].boolValue else { return false }
             let name = item["name"].optionalString ?? ""
             return query.isEmpty || name.lowercased().contains(query)
@@ -1938,7 +1980,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             let detail = item["description"].optionalString ?? item["source"].stringValue
             let state = attached.contains(where: { $0.id == id }) ? String(localized: " · 已附加") : ""
             return Suggestion(
-                title: "#\(name)",
+                title: "\(marker)\(name)",
                 detail: "Skill\(state)\(detail.isEmpty ? "" : " · \(detail)")"
             ) { [weak self] in
                 self?.applySkillMention(range: range, id: id, name: name)
@@ -1947,7 +1989,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         items += matchedMcps.map { item -> Suggestion in
             let name = item["name"].optionalString ?? String(localized: "未命名")
             return Suggestion(
-                title: "#\(name)",
+                title: "\(marker)\(name)",
                 detail: "MCP · \(item["transport"].stringValue) · \(item["source"].stringValue)"
             ) { [weak self] in
                 self?.applyMention(range: range, text: "#\(name) ")
@@ -1988,8 +2030,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             let button = UIButton(configuration: config)
             button.contentHorizontalAlignment = .leading
             button.accessibilityIdentifier = "chat.suggestion.\(index)"
-            button.isEnabled = interactive
-            if interactive {
+            button.isEnabled = interactive && item.enabled
+            if interactive && item.enabled {
                 button.addAction(UIAction { _ in item.apply() }, for: .touchUpInside)
             }
             suggestionList.addArrangedSubview(button)

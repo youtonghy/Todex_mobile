@@ -1877,6 +1877,62 @@
         }
       }
     },
+    "Agent 目录中的 MCP 服务": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MCP server from the agent catalog"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントカタログの MCP サーバー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "에이전트 카탈로그의 MCP 서버"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent 目录中的 MCP 服务"
+          }
+        }
+      }
+    },
+    "Agent 目录中的 Skill": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skill from the agent catalog"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントカタログの Skill"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "에이전트 카탈로그의 Skill"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent 目录中的 Skill"
+          }
+        }
+      }
+    },
     "Agent 请求未确认：%@": {
       "localizations": {
         "en": {
@@ -4281,6 +4337,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "仅恢复 PTY 标识；离开操作台期间的输出和历史滚屏无法重放。"
+          }
+        }
+      }
+    },
+    "仅显示前部结果中的文件夹，继续输入路径以缩小范围": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing folders among the first results; type more of the path to narrow down"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先頭の結果に含まれるフォルダーのみ表示中。パスを続けて入力すると絞り込めます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "앞쪽 결과의 폴더만 표시됩니다. 경로를 더 입력해 범위를 좁히세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅显示前部结果中的文件夹，继续输入路径以缩小范围"
           }
         }
       }
@@ -13749,6 +13833,62 @@
         }
       }
     },
+    "工作区文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace file"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペースのファイル"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "워크스페이스 파일"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工作区文件"
+          }
+        }
+      }
+    },
+    "工作区文件夹": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace folder"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペースのフォルダー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "워크스페이스 폴더"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工作区文件夹"
+          }
+        }
+      }
+    },
     "工作区文件预览 · 已为此标签启用页面脚本；相对路径资源不会加载。": {
       "localizations": {
         "en": {
@@ -16549,34 +16689,6 @@
         }
       }
     },
-    "引用当前工作区的其他对话": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reference another conversation in this workspace"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このワークスペースの別の会話を参照"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 워크스페이스의 다른 대화 참조"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "引用当前工作区的其他对话"
-          }
-        }
-      }
-    },
     "引用路径": {
       "localizations": {
         "en": {
@@ -17301,6 +17413,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "当前对话还没有消息，将改用新的 Agent 重新创建。"
+          }
+        }
+      }
+    },
+    "当前工作区的其他对话（以 Markdown 附加）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another conversation in this workspace (attached as Markdown)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このワークスペースの別の会話（Markdown として添付）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 워크스페이스의 다른 대화 (Markdown으로 첨부)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前工作区的其他对话（以 Markdown 附加）"
           }
         }
       }
@@ -26597,6 +26737,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "没有匹配的文件"
+          }
+        }
+      }
+    },
+    "没有匹配的文件夹": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching folders"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一致するフォルダーはありません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일치하는 폴더 없음"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有匹配的文件夹"
           }
         }
       }
