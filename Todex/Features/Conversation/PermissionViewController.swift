@@ -182,6 +182,21 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
             content.addArrangedSubview(editor)
         }
 
+        let deviceID = session.connection.flatMap { DeviceIdentity(secretKeyBase64URL: $0.deviceSecret)?.deviceID }
+        if let devices = permission.requiredDeviceNames(for: deviceID) {
+            // The daemon rejects answers from other devices; do not offer them.
+            let notice = devices.isEmpty
+                ? String(localized: "请在将执行它的桌面端上确认")
+                : String(localized: "请在 \(devices.joined(separator: ", ")) 上确认")
+            let label = Theme.label(notice, style: .callout, color: .secondaryLabel)
+            label.accessibilityIdentifier = "permission.otherDevice"
+            content.addArrangedSubview(label)
+            let close = Theme.button(String(localized: "关闭"), icon: "xmark") { [weak self] in self?.done() }
+            closeButton = close
+            content.addArrangedSubview(close)
+            return
+        }
+
         let actionHeading = Theme.label(String(localized: "请选择操作"), style: .headline)
         actionHeading.accessibilityTraits.insert(.header)
         content.addArrangedSubview(actionHeading)

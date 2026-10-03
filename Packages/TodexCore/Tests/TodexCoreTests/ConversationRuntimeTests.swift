@@ -51,6 +51,22 @@ struct ConversationRuntimeTests {
         #expect(runtime.readyForActions)
     }
 
+    @Test func deviceRestrictedPermissionsNameTheirAnsweringDevices() {
+        let open = PendingPermission(id: "p", turnId: "t", payload: ["options": []])
+        #expect(open.requiredDeviceNames(for: nil) == nil)
+        let gated = PendingPermission(id: "p", turnId: "t", payload: [
+            "allowedDeviceIds": ["dev_desk", "dev_other"],
+            "details": ["executors": [
+                ["deviceId": "dev_desk", "deviceName": "Studio Mac"],
+                ["deviceId": "dev_other"],
+                ["deviceId": "dev_unlisted", "deviceName": "Nope"],
+            ]],
+        ])
+        #expect(gated.requiredDeviceNames(for: "dev_desk") == nil)
+        #expect(gated.requiredDeviceNames(for: "dev_phone") == ["Studio Mac", "dev_other"])
+        #expect(gated.requiredDeviceNames(for: nil) == ["Studio Mac", "dev_other"])
+    }
+
     @Test func partialAndFailedReplayNeverEnableHistoricalApprovals() throws {
         var runtime = ConversationRuntime(conversationId: "c")
         runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))

@@ -33041,6 +33041,62 @@
         }
       }
     },
+    "请在 %@ 上确认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm this on %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ で確認してください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 확인하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请在 %@ 上确认"
+          }
+        }
+      }
+    },
+    "请在将执行它的桌面端上确认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm this on the desktop that will run it"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "実行するデスクトップで確認してください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실행할 데스크톱에서 확인하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请在将执行它的桌面端上确认"
+          }
+        }
+      }
+    },
     "请填写 Shell 的绝对路径，或留空使用后端默认。": {
       "localizations": {
         "en": {

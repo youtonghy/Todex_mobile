@@ -49,6 +49,24 @@ public struct PendingPermission: Identifiable, Sendable {
         self.runtimeId = runtimeId
     }
     public var isSessionScoped: Bool { scope == "session" }
+
+    /// Whether `deviceID` may answer. Requests that name their answering
+    /// devices (`allowedDeviceIds`) are rejected by the daemon from any other
+    /// device; `nil` means allowed, otherwise the names to show (from
+    /// `details.executors`, possibly empty). Mirrors `permissionDeviceGate`.
+    public func requiredDeviceNames(for deviceID: String?) -> [String]? {
+        guard case .array(let raw) = payload["allowedDeviceIds"] else { return nil }
+        let allowed = raw.compactMap(\.optionalString)
+        if let deviceID, allowed.contains(deviceID) { return nil }
+        var names: [String] = []
+        for executor in payload["details"]["executors"].arrayValue {
+            guard let id = executor["deviceId"].optionalString, allowed.contains(id) else { continue }
+            let name = executor["deviceName"].stringValue.trimmingCharacters(in: .whitespaces)
+            let label = name.isEmpty ? id : name
+            if !names.contains(label) { names.append(label) }
+        }
+        return names
+    }
 }
 
 /// A single value projection shared by REST replay and live delivery. As in the
