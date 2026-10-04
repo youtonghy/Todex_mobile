@@ -56,6 +56,8 @@ struct ConversationRuntimeTests {
         runtime.ingest(try event(1, "ssh.exec.started", #"{"execId":"a","host":"web","command":"uname -a"}"#))
         runtime.ingest(try event(2, "desktop.browser.action", #"{"actionId":"x","tool":"browser_snapshot","ok":true,"summary":"snapshot","deviceId":"dev","deviceName":"Mac"}"#))
         runtime.ingest(try event(3, "desktop.browser.grant", #"{"status":"granted","deviceId":"dev"}"#))
+        runtime.ingest(try event(4, "desktop.computer.action", #"{"actionId":"y","tool":"computer_act","ok":true,"summary":"click e1","deviceId":"dev","deviceName":"Mac"}"#))
+        runtime.ingest(try event(5, "desktop.computer.session", #"{"status":"started","deviceId":"dev"}"#))
         #expect(runtime.messages.isEmpty)
     }
 

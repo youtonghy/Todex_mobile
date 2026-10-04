@@ -438,10 +438,10 @@ public struct ConversationRuntime: Sendable {
     }
 
     private mutating func projectMessage(_ event: ConversationEvent, type: String, turnId: String) {
-        // Agent SSH commands and desktop-browser actions already show as the
+        // Agent SSH commands and desktop browser / Computer Use actions already show as the
         // agent's MCP tool call (as in the shared TS classifier); their own
         // events belong to side views, not the timeline.
-        if type.hasPrefix("ssh.exec.") || type.hasPrefix("desktop.browser.") { return }
+        if type.hasPrefix("ssh.exec.") || type.hasPrefix("desktop.") { return }
         let payload = event.payload
         let isStub = payload["detailStub"].boolValue
         let block = payload["block"]
