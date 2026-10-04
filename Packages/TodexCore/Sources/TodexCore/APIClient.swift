@@ -183,6 +183,12 @@ public final class APIClient: Sendable {
             ])
     }
 
+    /// `GET /v2/ssh/hosts` returns `{ hosts, ftpSites }`; each host carries
+    /// `alias`, `agentAccess` and a `resolved` block (`hostName`, `user`, `port`).
+    public func sshHosts() async throws -> JSONValue {
+        try await http.request(path: "/v2/ssh/hosts")
+    }
+
     public func workspaceDirectories(path: String? = nil, limit: Int? = nil) async throws -> JSONValue {
         var query: [String: String] = [:]
         query["path"] = path

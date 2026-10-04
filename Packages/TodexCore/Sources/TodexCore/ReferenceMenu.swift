@@ -6,7 +6,7 @@ import Foundation
 /// chip, `#mcp`, a conversation export), matching
 /// `@todex/protocol/referenceMenu` on desktop/web.
 public enum ReferenceType: String, CaseIterable, Sendable {
-    case file, folder, chat, skill, mcp
+    case file, folder, chat, skill, mcp, ssh
 }
 
 public enum ReferenceMenuState: Equatable, Sendable {

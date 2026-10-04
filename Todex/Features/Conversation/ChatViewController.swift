@@ -47,6 +47,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private var skillCatalog: [JSONValue]?
     private var mcpCatalog: [JSONValue]?
     private var skillCatalogTask: Task<Void, Never>?
+    private var sshHostCache: [JSONValue]?
+    private var sshHostTask: Task<Void, Never>?
     private var draft: ComposerDraft { session.drafts[conversation.id] ?? ComposerDraft() }
     private var submitting = false
     var openFile: ((String) -> Void)?
@@ -1768,6 +1770,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             fetchSkillSuggestions((range, query), only: .skill)
         case .item(.mcp, let query):
             fetchSkillSuggestions((range, query), only: .mcp)
+        case .item(.ssh, let query):
+            fetchSshSuggestions(query: query, range: range)
         }
     }
     private static func referenceTypeDetail(_ type: ReferenceType) -> String {
@@ -1777,6 +1781,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         case .chat: String(localized: "当前工作区的其他对话（以 Markdown 附加）")
         case .skill: String(localized: "Agent 目录中的 Skill")
         case .mcp: String(localized: "Agent 目录中的 MCP 服务")
+        case .ssh: String(localized: "已开启 Agent 访问的 SSH 主机")
         }
     }
     private func fetchEntrySuggestions(
@@ -1826,6 +1831,57 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 leading.isEmpty ? self.hideSuggestions() : self.showSuggestions(leading)
             }
         }
+    }
+    /// `@ssh:` offers only hosts with Agent access on; picking one inserts an
+    /// `@ssh:<alias>` mention the agent resolves through its `ssh_exec` tool.
+    private func fetchSshSuggestions(query: String, range: NSRange) {
+        guard let hosts = sshHostCache else {
+            showSuggestions(
+                [Suggestion(title: String(localized: "正在读取 SSH 主机…"), detail: "", apply: {})],
+                interactive: false)
+            loadSshHosts()
+            return
+        }
+        let needle = query.lowercased()
+        let items = hosts
+            .filter { $0["agentAccess"].boolValue }
+            .filter {
+                needle.isEmpty
+                    || $0["alias"].stringValue.lowercased().contains(needle)
+                    || Self.sshEndpoint($0).lowercased().contains(needle)
+            }
+            .prefix(ReferenceMenu.suggestionLimit)
+            .map { host in
+                let alias = host["alias"].stringValue
+                return Suggestion(title: alias, detail: Self.sshEndpoint(host)) { [weak self] in
+                    self?.applyMention(range: range, text: "@ssh:\(alias) ")
+                }
+            }
+        items.isEmpty
+            ? showSuggestions(
+                [Suggestion(title: String(localized: "没有已开启 Agent 访问的 SSH 主机"), detail: "", apply: {})],
+                interactive: false)
+            : showSuggestions(Array(items))
+    }
+    /// Hosts are cached like the capability catalogs; keystrokes only refilter.
+    private func loadSshHosts() {
+        guard sshHostTask == nil else { return }
+        sshHostTask = Task { [weak self] in
+            defer { self?.sshHostTask = nil }
+            guard let self, let api = session.api else { return }
+            guard let value = try? await api.sshHosts(), !Task.isCancelled else { return }
+            sshHostCache = value["hosts"].arrayValue
+            updateSuggestions()
+        }
+    }
+    /// `user@hostName:port` as resolved by `ssh -G`, falling back to the alias
+    /// (matches `sshHostEndpoint` in `@todex/protocol/ssh`).
+    private static func sshEndpoint(_ host: JSONValue) -> String {
+        let resolved = host["resolved"]
+        let name = resolved["hostName"].optionalString ?? host["alias"].stringValue
+        let user = resolved["user"].optionalString.map { "\($0)@" } ?? ""
+        let port = resolved["port"].doubleValue.map { ":\(Int($0))" } ?? ""
+        return "\(user)\(name)\(port)"
     }
     private static func conversationTitle(_ item: ConversationManifest) -> String {
         item.title?.isEmpty == false ? item.title! : String(localized: "新对话")
