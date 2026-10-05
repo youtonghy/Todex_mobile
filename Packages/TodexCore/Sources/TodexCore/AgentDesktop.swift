@@ -152,3 +152,95 @@ extension DesktopComputerState {
         if actions.count > desktopActionLimit { actions.removeFirst(actions.count - desktopActionLimit) }
     }
 }
+
+// MARK: - REST models
+
+/// Whether the daemon's host can run Computer Use.
+public struct ComputerHostStatus: Codable, Sendable, Equatable {
+    public struct Permissions: Codable, Sendable, Equatable {
+        public var screen: Bool
+        public var accessibility: Bool
+    }
+    /// The host's OS and session can run it at all.
+    public var supported: Bool
+    /// Supported, permitted, and someone at the host can confirm grants.
+    public var available: Bool
+    /// Why it is not available.
+    public var reason: String?
+    /// The computer agents would control.
+    public var host: String
+    /// `macos`, `windows`, `linux`, ...
+    public var platform: String
+    /// OS permissions granted to the TodeX backend on the host.
+    public var permissions: Permissions
+}
+
+/// The daemon's pinned Chromium (Chrome for Testing).
+public struct AgentBrowserInstall: Codable, Sendable, Equatable {
+    public var version: String
+    public var installed: Bool
+    public var downloading: Bool
+    /// 0...1 while downloading.
+    public var progress: Double?
+    public var error: String?
+    /// `TODEX_AGENT_BROWSER_PATH` points at another Chromium.
+    public var overridden: Bool
+}
+
+/// Whether the daemon's host can run the agent browser.
+public struct AgentBrowserStatus: Codable, Sendable, Equatable {
+    public var available: Bool
+    public var reason: String?
+    /// The computer the browser runs on (its `localhost`).
+    public var host: String
+    public var chromium: AgentBrowserInstall
+}
+
+/// `GET|PUT /v2/agent-desktop`. A 404 means the daemon predates desktop tools.
+public struct AgentDesktopSettings: Codable, Sendable, Equatable {
+    /// Agents get the `todex_desktop` MCP server. Off by default.
+    public var enabled: Bool
+    /// Agents also get the `computer_*` tools (needs `enabled`). Off by default.
+    public var computerEnabled: Bool
+    /// Absent from daemons where Computer Use still ran on desktops.
+    public var computer: ComputerHostStatus?
+    /// Absent from daemons where the browser still ran on desktops.
+    public var browser: AgentBrowserStatus?
+}
+
+public struct AgentBrowserProfile: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var name: String
+    /// Unix milliseconds.
+    public var createdAt: Double
+}
+
+/// `GET /v2/agent-browser/profiles` (and the result of every profile change).
+public struct AgentBrowserProfiles: Codable, Sendable, Equatable {
+    public var profiles: [AgentBrowserProfile]
+    /// Workspace id (path for workspaces without one) → profile id.
+    public var workspaces: [String: String]
+}
+
+/// A JPEG of the host's screen, a browser tab or a journaled shot
+/// (`ComputerFrame` / `AgentShot`); `dataUrl` is a base64 `data:` URL.
+public struct AgentDesktopImage: Codable, Sendable, Equatable {
+    public var shotId: String?
+    public var mimeType: String
+    public var dataUrl: String
+
+    /// The image bytes of `dataUrl`, or nil when it is not a base64 data URL.
+    public var data: Data? {
+        guard dataUrl.hasPrefix("data:"), let comma = dataUrl.firstIndex(of: ","),
+            dataUrl[..<comma].hasSuffix(";base64")
+        else { return nil }
+        return Data(base64Encoded: String(dataUrl[dataUrl.index(after: comma)...]))
+    }
+}
+
+/// What `revokeAgentDesktop(conversationId:capability:)` stops.
+public enum AgentDesktopCapability: String, Sendable {
+    case browser
+    /// Computer Use.
+    case screen
+}

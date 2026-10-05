@@ -38,6 +38,17 @@ struct APIClientTests {
     }
 
     @Test
+    func agentDesktopModelsAcceptLegacyDaemonsAndDecodeDataURLs() throws {
+        // Daemons where the browser and Computer Use still ran on desktops omit both statuses.
+        let legacy: JSONValue = ["enabled": true, "computerEnabled": false, "executors": []]
+        let settings = try legacy.decoded(AgentDesktopSettings.self)
+        #expect(settings.enabled && settings.computer == nil && settings.browser == nil)
+        let image = AgentDesktopImage(shotId: nil, mimeType: "image/jpeg", dataUrl: "data:image/jpeg;base64,AQID")
+        #expect(image.data == Data([1, 2, 3]))
+        #expect(AgentDesktopImage(shotId: nil, mimeType: "image/jpeg", dataUrl: "https://x.test/a.jpg").data == nil)
+    }
+
+    @Test
     func workspaceCatalogKeepsRejectedRecordsApart() throws {
         let workspace = try JSONValue(encoding: WorkspaceRecord(id: "w", name: "项目", path: "/work/project"))
         let plain = try WorkspaceCatalog(response: ["workspaces": [workspace], "updatedAt": 1])
@@ -766,6 +777,71 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
             name: "replaceKanbanTasks", method: "PUT", path: "/v2/kanban/tasks",
             body: ["tasks": .array([])], response: ["tasks": .array([])], expectedResult: .array([])
         ) { try JSONValue(encoding: await $0.replaceKanbanTasks([])) },
+        .init(name: "agentDesktop", method: "GET", path: "/v2/agent-desktop", response: agentDesktop) {
+            try JSONValue(encoding: await $0.agentDesktop())
+        },
+        .init(
+            name: "setAgentDesktop", method: "PUT", path: "/v2/agent-desktop", body: ["computerEnabled": true],
+            response: ["enabled": true, "computerEnabled": true]
+        ) { try JSONValue(encoding: await $0.setAgentDesktop(computerEnabled: true)) },
+        .init(
+            name: "requestComputerPermissions", method: "POST", path: "/v2/agent-desktop/computer/permissions",
+            response: agentDesktop
+        ) { try JSONValue(encoding: await $0.requestComputerPermissions()) },
+        .init(
+            name: "agentDesktopFrame", method: "GET", path: "/v2/conversations/\(escaped)/agent-desktop/frame",
+            query: ["capability": "browser"], response: frame
+        ) { try JSONValue(encoding: await $0.agentDesktopFrame(conversationId: id, capability: .browser)) },
+        .init(
+            name: "revokeAgentDesktop", method: "DELETE", path: "/v2/conversations/\(escaped)/agent-desktop",
+            query: ["capability": "screen"]
+        ) { try await $0.revokeAgentDesktop(conversationId: id, capability: .screen) },
+        .init(
+            name: "agentShot", method: "GET", path: "/v2/conversations/\(escaped)/agent-shots/\(escaped)",
+            response: ["shotId": "shot_1", "mimeType": "image/jpeg", "dataUrl": "data:image/jpeg;base64,/9j/"]
+        ) { try JSONValue(encoding: await $0.agentShot(conversationId: id, shotId: id)) },
+        .init(
+            name: "installAgentBrowser", method: "POST", path: "/v2/agent-browser/install", response: agentDesktop
+        ) { try JSONValue(encoding: await $0.installAgentBrowser()) },
+        .init(name: "agentBrowserProfiles", method: "GET", path: "/v2/agent-browser/profiles", response: profiles) {
+            try JSONValue(encoding: await $0.agentBrowserProfiles())
+        },
+        .init(
+            name: "createAgentBrowserProfile", method: "POST", path: "/v2/agent-browser/profiles",
+            body: ["name": "工作 &+?"], response: ["id": "p2", "name": "工作 &+?", "createdAt": 1_789_000_000_001]
+        ) { try JSONValue(encoding: await $0.createAgentBrowserProfile(name: "工作 &+?")) },
+        .init(
+            name: "renameAgentBrowserProfile", method: "PUT", path: "/v2/agent-browser/profiles/\(escaped)",
+            body: ["name": "个人"], response: profiles
+        ) { try JSONValue(encoding: await $0.renameAgentBrowserProfile(id: id, name: "个人")) },
+        .init(
+            name: "deleteAgentBrowserProfile", method: "DELETE", path: "/v2/agent-browser/profiles/\(escaped)",
+            response: profiles
+        ) { try JSONValue(encoding: await $0.deleteAgentBrowserProfile(id: id)) },
+        .init(
+            name: "assignAgentBrowserProfile", method: "PUT", path: "/v2/agent-browser/workspaces",
+            body: ["workspace": .string(workspacePath), "profileId": "p1"], response: profiles
+        ) { try JSONValue(encoding: await $0.assignAgentBrowserProfile(workspace: workspacePath, profileId: "p1")) },
+    ]
+
+    static let agentDesktop: JSONValue = [
+        "enabled": true, "computerEnabled": false,
+        "computer": [
+            "supported": true, "available": false, "reason": "Accessibility is not granted", "host": "Mac",
+            "platform": "macos", "permissions": ["screen": true, "accessibility": false],
+        ],
+        "browser": [
+            "available": true, "host": "Mac",
+            "chromium": [
+                "version": "141.0.7390.54", "installed": false, "downloading": true, "progress": 0.5,
+                "overridden": false,
+            ],
+        ],
+    ]
+    static let frame: JSONValue = ["mimeType": "image/jpeg", "dataUrl": "data:image/jpeg;base64,/9j/"]
+    static let profiles: JSONValue = [
+        "profiles": [["id": "p1", "name": "默认", "createdAt": 1_789_000_000_000]],
+        "workspaces": [workspacePath: "p1"],
     ]
 }
 

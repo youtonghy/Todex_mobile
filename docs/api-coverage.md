@@ -1,16 +1,16 @@
 # Swift API 覆盖与验证
 
-核对日期：2026-09-10；CLI 安装与 Agent 供应商导出/导入于 2026-09-28 补充。以当前后端源码为准：
+核对日期：2026-09-10；CLI 安装与 Agent 供应商导出/导入于 2026-09-28 补充；Agent 桌面工具（Agent 浏览器、Computer Use）于 2026-10-06 补充。以当前后端源码为准：
 
 - 路由：[routes.rs](../../TodeX_backend/src/server/routes.rs)、[v2.rs](../../TodeX_backend/src/server/v2.rs)、[device_pairing.rs](../../TodeX_backend/src/server/device_pairing.rs)。
 - WS 分派及 wire：[websocket.rs](../../TodeX_backend/src/server/websocket.rs)、[protocol.rs](../../TodeX_backend/src/server/protocol.rs)。
 - 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。共享客户端 [v2.ts](../../TodeX_protocol/src/v2.ts) 仅作交叉参考。
 
-**55/55 个普通 HTTP method + path 已封装，57/57 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 55 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
+**67/67 个普通 HTTP method + path 已封装，57/57 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 67 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
 ## 验证范围
 
-[APIClientTests.swift](../Packages/TodexCore/Tests/TodexCoreTests/APIClientTests.swift) 最近于 2026-09-28 在 Swift 6.4、macOS 上以 `swift test --package-path Packages/TodexCore` 通过：17 个 Swift Testing 测试函数，其中 `endpointWire` 包含 55 个参数用例，`httpErrors` 包含 4 个参数用例，其余 15 个函数分别验证模型、默认值、分页、错误、协议、CLI 安装字段与供应商导出文件。依赖使用本机已缓存的 swift-sodium 0.11.0；包副本的 Package.swift 与工作区原文件一致。
+[APIClientTests.swift](../Packages/TodexCore/Tests/TodexCoreTests/APIClientTests.swift) 最近于 2026-09-28 在 Swift 6.4、macOS 上以 `swift test --package-path Packages/TodexCore` 通过：18 个 Swift Testing 测试函数，其中 `endpointWire` 包含 67 个参数用例，`httpErrors` 包含 4 个参数用例，其余 16 个函数分别验证模型、默认值、分页、错误、协议、CLI 安装字段、供应商导出文件与 Agent 桌面工具模型（2026-10-06 起）。依赖使用本机已缓存的 swift-sodium 0.11.0；包副本的 Package.swift 与工作区原文件一致。
 
 这里的通过是 **URLProtocol 拦截 URLSession 实际构造请求后的本地契约测试**：逐项检查 HTTP method、编码后的 path、按后端规则解码的 query、设备签名头（x-todex-device-id/auth-ts/auth-nonce/auth-sig）、Accept/Content-Type、JSON body、返回值。fixture 使用独立的 .invalid 主机和 session；所有请求都被拦截。上述 URLProtocol 阶段没有启动或访问真实 backend，也没有调用真实 provider、Git、PTY、MCP、配对批准、升级或云任务。该阶段 WS 只验证编码、解码与源码支持状态；后续真实协议集成结果见文末。表中“已封装”不代表真实服务实测通过。
 
@@ -87,6 +87,18 @@ swift test --package-path /path/to/TodexCore-copy \
 | POST | `/v2/conversations/{conversation_id}/permissions/{permission_id}` | `respondPermission(conversationId:permissionId:decision:)` | 已封装；认证；JSONValue 原样发送 | `endpointWire(respondPermission)` |
 | GET | `/v2/kanban/tasks` | `kanbanTasks()` | 已封装；认证；解包 tasks | `endpointWire(kanbanTasks)` |
 | PUT | `/v2/kanban/tasks` | `replaceKanbanTasks(_:)` | 已封装；认证；墓碑合并语义由后端负责 | `endpointWire(replaceKanbanTasks)` |
+| GET | `/v2/agent-desktop` | `agentDesktop()` | 已封装；设备签名；解码为 `AgentDesktopSettings`；HTTP 404 表示后端早于桌面工具，缺少 `computer`/`browser` 表示旧版（桌面端执行）后端 | `endpointWire(agentDesktop)`、`agentDesktopModelsAcceptLegacyDaemonsAndDecodeDataURLs` |
+| PUT | `/v2/agent-desktop` | `setAgentDesktop(enabled:computerEnabled:)` | 已封装；设备签名；只发送给出的字段（`enabled` 和/或 `computerEnabled`） | `endpointWire(setAgentDesktop)` |
+| POST | `/v2/agent-desktop/computer/permissions` | `requestComputerPermissions()` | 已封装；设备签名；在后端主机上弹出屏幕录制/辅助功能授权 | `endpointWire(requestComputerPermissions)` |
+| GET | `/v2/conversations/{conversation_id}/agent-desktop/frame` | `agentDesktopFrame(conversationId:capability:)` | 已封装；设备签名；`.screen`（默认，无 query）为 Computer Use 画面，未控制屏幕时 404；`.browser` 加 `?capability=browser` 为浏览器标签页，无标签页时 404 | `endpointWire(agentDesktopFrame)` |
+| DELETE | `/v2/conversations/{conversation_id}/agent-desktop` | `revokeAgentDesktop(conversationId:capability:)` | 已封装；设备签名；`capability` 为 `browser`/`screen`，缺省同时撤销 | `endpointWire(revokeAgentDesktop)` |
+| GET | `/v2/conversations/{conversation_id}/agent-shots/{shot_id}` | `agentShot(conversationId:shotId:)` | 已封装；设备签名；`desktop.*.action` 事件记录的截图 | `endpointWire(agentShot)` |
+| POST | `/v2/agent-browser/install` | `installAgentBrowser()` | 已封装；设备签名；开始下载固定版本 Chromium，进度见 `browser.chromium` | `endpointWire(installAgentBrowser)` |
+| GET | `/v2/agent-browser/profiles` | `agentBrowserProfiles()` | 已封装；设备签名 | `endpointWire(agentBrowserProfiles)` |
+| POST | `/v2/agent-browser/profiles` | `createAgentBrowserProfile(name:)` | 已封装；设备签名；返回新档案 | `endpointWire(createAgentBrowserProfile)` |
+| PUT | `/v2/agent-browser/profiles/{id}` | `renameAgentBrowserProfile(id:name:)` | 已封装；设备签名；返回全部档案 | `endpointWire(renameAgentBrowserProfile)` |
+| DELETE | `/v2/agent-browser/profiles/{id}` | `deleteAgentBrowserProfile(id:)` | 已封装；设备签名；连同 Cookie、存储与缓存删除 | `endpointWire(deleteAgentBrowserProfile)` |
+| PUT | `/v2/agent-browser/workspaces` | `assignAgentBrowserProfile(workspace:profileId:)` | 已封装；设备签名；`workspace` 为工作区 id（无 id 时为路径），该工作区已打开的标签页会关闭 | `endpointWire(assignAgentBrowserProfile)` |
 
 ## Wire 与兼容细节
 

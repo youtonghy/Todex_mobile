@@ -447,6 +447,95 @@ public final class APIClient: Sendable {
             body: decision)
     }
 
+    // MARK: Agent desktop tools (agent browser and Computer Use on the daemon's host)
+
+    /// `GET /v2/agent-desktop`; an HTTP 404 (`TodexError.server(code: "404")`)
+    /// means the daemon predates desktop tools.
+    public func agentDesktop() async throws -> AgentDesktopSettings {
+        try await http.request(path: "/v2/agent-desktop").decoded(AgentDesktopSettings.self)
+    }
+
+    /// Desktop tools on or off; Computer Use additionally needs `computerEnabled`.
+    public func setAgentDesktop(enabled: Bool? = nil, computerEnabled: Bool? = nil) async throws
+        -> AgentDesktopSettings
+    {
+        var body: [String: JSONValue] = [:]
+        body["enabled"] = enabled.map(JSONValue.bool)
+        body["computerEnabled"] = computerEnabled.map(JSONValue.bool)
+        return try await http.request(.put, path: "/v2/agent-desktop", body: .object(body))
+            .decoded(AgentDesktopSettings.self)
+    }
+
+    /// Shows the OS permission prompts (Screen Recording, Accessibility) on the daemon's host.
+    public func requestComputerPermissions() async throws -> AgentDesktopSettings {
+        try await http.request(.post, path: "/v2/agent-desktop/computer/permissions")
+            .decoded(AgentDesktopSettings.self)
+    }
+
+    /// The host's screen now (404 unless the conversation controls it), or
+    /// with `.browser` the conversation's tab (404 without one).
+    public func agentDesktopFrame(conversationId: String, capability: AgentDesktopCapability = .screen)
+        async throws -> AgentDesktopImage
+    {
+        let query = capability == .browser ? ["capability": "browser"] : [:]
+        return try await http.request(path: "\(conversationPath(conversationId))/agent-desktop/frame", query: query)
+            .decoded(AgentDesktopImage.self)
+    }
+
+    /// Stops the agent's browser and/or Computer Use for one conversation
+    /// (both when `capability` is nil); its next tool call asks again.
+    public func revokeAgentDesktop(conversationId: String, capability: AgentDesktopCapability? = nil)
+        async throws -> JSONValue
+    {
+        var query: [String: String] = [:]
+        query["capability"] = capability?.rawValue
+        return try await http.request(
+            .delete, path: "\(conversationPath(conversationId))/agent-desktop", query: query)
+    }
+
+    /// A screenshot journaled with a `desktop.*.action` event.
+    public func agentShot(conversationId: String, shotId: String) async throws -> AgentDesktopImage {
+        try await http.request(
+            path: "\(conversationPath(conversationId))/agent-shots/\(HTTPClient.segment(shotId))"
+        ).decoded(AgentDesktopImage.self)
+    }
+
+    /// Starts downloading the daemon's pinned Chromium; progress shows in `browser.chromium`.
+    public func installAgentBrowser() async throws -> AgentDesktopSettings {
+        try await http.request(.post, path: "/v2/agent-browser/install").decoded(AgentDesktopSettings.self)
+    }
+
+    public func agentBrowserProfiles() async throws -> AgentBrowserProfiles {
+        try await http.request(path: "/v2/agent-browser/profiles").decoded(AgentBrowserProfiles.self)
+    }
+
+    public func createAgentBrowserProfile(name: String) async throws -> AgentBrowserProfile {
+        try await http.request(.post, path: "/v2/agent-browser/profiles", body: ["name": .string(name)])
+            .decoded(AgentBrowserProfile.self)
+    }
+
+    public func renameAgentBrowserProfile(id: String, name: String) async throws -> AgentBrowserProfiles {
+        try await http.request(
+            .put, path: "/v2/agent-browser/profiles/\(HTTPClient.segment(id))", body: ["name": .string(name)]
+        ).decoded(AgentBrowserProfiles.self)
+    }
+
+    /// Deletes the profile with its cookies, storage and cache.
+    public func deleteAgentBrowserProfile(id: String) async throws -> AgentBrowserProfiles {
+        try await http.request(.delete, path: "/v2/agent-browser/profiles/\(HTTPClient.segment(id))")
+            .decoded(AgentBrowserProfiles.self)
+    }
+
+    /// `workspace`: workspace id (path for workspaces without one). Its open tabs close.
+    public func assignAgentBrowserProfile(workspace: String, profileId: String) async throws
+        -> AgentBrowserProfiles
+    {
+        try await http.request(
+            .put, path: "/v2/agent-browser/workspaces",
+            body: ["workspace": .string(workspace), "profileId": .string(profileId)]
+        ).decoded(AgentBrowserProfiles.self)
+    }
+
     private func conversationPath(_ id: String) -> String {
         "/v2/conversations/\(HTTPClient.segment(id))"
     }
