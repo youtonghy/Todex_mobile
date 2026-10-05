@@ -600,6 +600,47 @@ nonisolated final class TodexUITests: XCTestCase {
         app.buttons["settings.done"].tap()
     }
 
+    /// Agent desktop tools page: reads the backend's settings, the main switch
+    /// reveals the agent browser (Chromium status, profiles) and Computer Use
+    /// sections, and switching off hides them again. Never requests host
+    /// permissions or downloads explicitly; enabling starts the fixture
+    /// backend's own Chromium download into its temporary data directory.
+    @MainActor func testAgentDesktopSettingsPage() throws {
+        continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["TODEX_TEST_PORT"] != nil else {
+            throw XCTSkip("Requires the explicitly configured isolated Rust backend fixture")
+        }
+        let app = application()
+        app.launch()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Isolated Fixture")).firstMatch
+                .waitForExistence(timeout: 30))
+        app.buttons["连接与设置"].tap()
+        revealSettingsCell(app, containing: "Agent 桌面工具").tap()
+        XCTAssertTrue(app.navigationBars["Agent 桌面工具"].waitForExistence(timeout: 5))
+        let toggle = app.switches["agentDesktop.enabled.switch"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 15), "没有读取到后端的桌面工具设置")
+        let browser = app.cells["agentBrowser.chromium"]
+        let computer = app.cells["computerUse.enabled"]
+        if toggle.value as? String == "1" {
+            // A previous run left it on: start from off.
+            toggle.tap()
+            XCTAssertTrue(computer.waitForNonExistence(timeout: 10))
+        }
+        XCTAssertFalse(browser.exists, "关闭时不应显示 Agent 浏览器")
+        toggle.tap()
+        XCTAssertTrue(browser.waitForExistence(timeout: 10), "开启后没有显示 Chromium 状态")
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Chromium")).firstMatch.exists)
+        let table = app.tables.firstMatch
+        for _ in 0..<6 where !computer.exists { table.swipeUp() }
+        XCTAssertTrue(computer.waitForExistence(timeout: 5), "开启后没有显示 Computer Use")
+        for _ in 0..<6 where !toggle.isHittable { table.swipeDown() }
+        toggle.tap()
+        XCTAssertTrue(browser.waitForNonExistence(timeout: 10), "关闭后仍显示 Agent 浏览器")
+        XCTAssertEqual(toggle.value as? String, "0")
+    }
+
     /// `#` lists backend skills and inserting one produces the same removable
     /// chip as the catalog attach flow; a photo attachment becomes an inline
     /// composer capsule and renders a persisted receipt card that survives

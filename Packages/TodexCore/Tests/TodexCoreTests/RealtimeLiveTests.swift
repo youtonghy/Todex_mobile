@@ -49,6 +49,31 @@ struct RealtimeLiveTests {
         }
     }
 
+    /// Read-only against the fixture: settings, profiles, and a browser watch
+    /// on a conversation without a tab (the backend answers `closed`).
+    @Test func actualAgentDesktopSettingsAndBrowserWatch() async throws {
+        let fixture = try LiveFixture()
+        let api = APIClient(connection: fixture.connection)
+        let settings = try await api.agentDesktop()
+        #expect(settings.browser != nil && settings.computer != nil)
+        _ = try await api.agentBrowserProfiles()
+        do {
+            _ = try await api.agentDesktopFrame(conversationId: fixture.conversationID, capability: .browser)
+            Issue.record("A conversation without a tab returned a browser frame")
+        } catch TodexError.server(let code, _) {
+            #expect(["404", "NOT_FOUND"].contains(code))
+        }
+        try await withLiveClient(fixture.connection) { client, frames in
+            let payload: JSONValue = ["conversationId": .string(fixture.conversationID)]
+            #expect(try await client.command(type: "agentBrowser.watch", payload: payload, timeout: 10) == ["watching": true])
+            var iterator = client.browserFrames.makeAsyncIterator()
+            let frame = try #require(await iterator.next())
+            #expect(AgentBrowserFrame(payload: frame) == AgentBrowserFrame(conversationId: fixture.conversationID, content: .closed))
+            #expect(!frames.snapshot.contains { $0["type"] == "agentBrowser.frame" })
+            #expect(try await client.command(type: "agentBrowser.unwatch", payload: payload, timeout: 10) == ["watching": false])
+        }
+    }
+
     @Test(arguments: ["codex", "claude-code"])
     func actualSwiftPromptPermissionCompletionAndReconnect(_ provider: String) async throws {
         let fixture = try LiveFixture()

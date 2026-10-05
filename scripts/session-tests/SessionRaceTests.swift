@@ -161,6 +161,16 @@ actor FakeSocket: SessionSocket {
     var ledgerStore: LocalStore?
     var ledgerKey: String?
     var ledgerChecks: [Bool] = []
+    /// `agentBrowser.watch:<id>` / `agentBrowser.unwatch:<id>` in send order.
+    var browserWatches: [String] = []
+    /// Each connection iterates a fresh frame stream, like a new RealtimeClient.
+    nonisolated let frameSink = Mutex<AsyncStream<JSONValue>.Continuation?>(nil)
+    nonisolated var browserFrames: AsyncStream<JSONValue> {
+        let (stream, sink) = AsyncStream<JSONValue>.makeStream()
+        frameSink.withLock { $0 = sink }
+        return stream
+    }
+    nonisolated func emitBrowserFrame(_ payload: JSONValue) { frameSink.withLock { _ = $0?.yield(payload) } }
     init(backend: Backend) {
         self.backend = backend
         (events, continuation) = AsyncStream<JSONValue>.makeStream()
@@ -176,6 +186,10 @@ actor FakeSocket: SessionSocket {
     func emitFrame(_ frame: JSONValue) { continuation.yield(frame) }
     func command(type: String, payload: JSONValue, timeout: TimeInterval, id: String) async throws -> JSONValue {
         if type == "conversation.control" { controls.append(payload); return ["accepted": true] }
+        if type.hasPrefix("agentBrowser.") {
+            browserWatches.append("\(type):\(payload["conversationId"].stringValue)")
+            return ["watching": .bool(type == "agentBrowser.watch")]
+        }
         if type == "conversation.unsubscribe" {
             unsubscribes.append(payload["conversationId"].stringValue)
             return ["conversationId": payload["conversationId"], "unsubscribed": true]
@@ -820,6 +834,39 @@ actor FakeSocket: SessionSocket {
     try check(h.session.isConnected && h.session.lastConnectionError == nil, "diagnostic survived a successful connect")
     h.session.disconnect()
 }
+@MainActor func agentDesktopStateAndBrowserWatches() async throws {
+    let h = try Harness([event(1, "desktop.computer.grant", ["status": "requested", "deviceName": "Mac"])])
+    try await h.ready()
+    try check(h.session.runtimes["c"]?.desktopComputer.awaitingHost == true, "replayed grant request not projected")
+    try await h.socket.emit(event(2, "desktop.computer.session", ["status": "started", "deviceId": "d", "deviceName": "Mac"]))
+    try await eventually("live session projected") { h.session.runtimes["c"]?.desktopComputer.active == true }
+    try check(h.session.runtimes["c"]?.messages.isEmpty == true, "desktop events reached the timeline")
+    final class Frames { var items: [AgentBrowserFrame] = [] }
+    let first = Frames(), second = Frames()
+    let a = h.session.watchAgentBrowser("c") { first.items.append($0) }
+    let b = h.session.watchAgentBrowser("c") { second.items.append($0) }
+    try await eventually("one socket watch for two views") { await h.socket.browserWatches == ["agentBrowser.watch:c"] }
+    h.socket.emitBrowserFrame(["conversationId": "c", "seq": 1, "mimeType": "image/jpeg", "data": "AQID", "width": 1, "height": 1])
+    h.socket.emitBrowserFrame(["conversationId": "other", "closed": true])
+    h.socket.emitBrowserFrame(["conversationId": "c", "closed": true])
+    try await eventually("frames delivered to both views") { first.items.count == 2 && second.items.count == 2 }
+    try check(first.items.first?.content == .image(seq: 1, base64: "AQID", width: 1, height: 1), "frame decoded wrong")
+    try check(first.items.last?.content == .closed, "closed frame lost")
+    try check(h.session.runtimes["c"]?.appliedSequence == 2, "a frame entered the journal")
+    h.session.disconnect()
+    await h.session.connect()
+    try await eventually("reconnect watches again") {
+        await h.socket.browserWatches == ["agentBrowser.watch:c", "agentBrowser.watch:c"]
+    }
+    h.socket.emitBrowserFrame(["conversationId": "c", "closed": true])
+    try await eventually("frames resume on the new socket") { first.items.count == 3 }
+    h.session.unwatchAgentBrowser(a)
+    try await Task.sleep(for: .milliseconds(50))
+    try check(await h.socket.browserWatches.count == 2, "unwatched while another view remained")
+    h.session.unwatchAgentBrowser(b)
+    try await eventually("last view unwatches") { await h.socket.browserWatches.last == "agentBrowser.unwatch:c" }
+    h.session.disconnect()
+}
 @main struct SessionRaceRunner {
     @MainActor static func main() async {
         let tests: [(String, @MainActor () async throws -> Void)] = [
@@ -849,7 +896,8 @@ actor FakeSocket: SessionSocket {
             ("follow-up native queue + permission guard", followUpQueueAndPermissionGuard),
             ("home parity: fork, labels, task details, other backend cache", homeParity),
             ("usage ledger persists across conversations", usageLedgerPersistsAcrossRestart),
-            ("connection diagnostic error lifecycle", connectFailureKeepsDiagnosticError)
+            ("connection diagnostic error lifecycle", connectFailureKeepsDiagnosticError),
+            ("agent desktop state + browser watches", agentDesktopStateAndBrowserWatches)
         ]
         var failures = 0
         for (name, run) in tests {
