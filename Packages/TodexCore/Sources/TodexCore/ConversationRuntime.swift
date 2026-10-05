@@ -94,6 +94,12 @@ public struct ConversationRuntime: Sendable {
     public private(set) var compaction: JSONValue = ["status": "idle", "recommended": false, "updatedAt": ""]
     public private(set) var subagents: [JSONValue] = []
     public private(set) var memoryEntries: [JSONValue] = []
+    /// Agent desktop browser: grant, open tab and newest actions
+    /// (`desktop.browser.*`). History pages do not extend it.
+    public private(set) var desktopBrowser = DesktopBrowserState()
+    /// Computer Use: session, host grant and newest actions
+    /// (`desktop.computer.*`). History pages do not extend it.
+    public private(set) var desktopComputer = DesktopComputerState()
     public private(set) var lastProgressAt: Date?
 
     public static let maximumBufferedEvents = 1_024
@@ -769,7 +775,13 @@ public struct ConversationRuntime: Sendable {
 
     private mutating func projectAuxiliary(_ event: ConversationEvent, type: String, turnId: String) {
         let payload = event.payload
-        if type.hasPrefix("subagent.") {
+        if type == "desktop.browser.action" || type == "desktop.browser.grant" {
+            desktopBrowser.apply(type: type, payload: payload, time: event.time)
+        } else if type == "desktop.computer.action" || type == "desktop.computer.session"
+            || type == "desktop.computer.grant"
+        {
+            desktopComputer.apply(type: type, payload: payload, time: event.time)
+        } else if type.hasPrefix("subagent.") {
             let id = Self.string(payload["subagentId"], payload["agentId"], payload["id"])
             guard !id.isEmpty else { return }
             let previous = subagents.first { $0["id"] == .string(id) } ?? .null

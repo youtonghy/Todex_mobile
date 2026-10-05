@@ -61,6 +61,104 @@ struct ConversationRuntimeTests {
         #expect(runtime.messages.isEmpty)
     }
 
+    /// Runtime after `events` in order, each at the next sequence.
+    private func applied(_ events: [(String, JSONValue)], to base: [(String, JSONValue)] = []) throws
+        -> ConversationRuntime
+    {
+        var runtime = ConversationRuntime(conversationId: "c")
+        for (index, item) in (base + events).enumerated() {
+            let payload = String(decoding: try JSONEncoder().encode(item.1), as: UTF8.self)
+            runtime.ingest(try event(index + 1, item.0, payload))
+        }
+        return runtime
+    }
+
+    @Test func desktopBrowserGrantsAndActionsCollectWithoutTouchingTheTimeline() throws {
+        // conversation-runtime.test.cjs: desktop browser grants and actions.
+        func action(_ id: String, _ extra: [String: JSONValue] = [:]) -> (String, JSONValue) {
+            let payload: [String: JSONValue] = [
+                "actionId": .string(id), "tool": "browser_snapshot", "ok": true, "summary": "snapshot",
+                "deviceId": "dev_desk", "deviceName": "Desk",
+            ]
+            return ("desktop.browser.action", .object(payload.merging(extra) { $1 }))
+        }
+        let base: [(String, JSONValue)] = [
+            ("desktop.browser.grant", ["status": "granted", "deviceId": "dev_desk", "deviceName": "Desk"]),
+            action("a", ["url": "http://localhost:5173/", "shotId": "shot_1"]),
+            action("a"),
+            action("b", ["ok": false, "error": ["code": "NO_TAB", "message": "x"]]),
+        ]
+        let state = try applied(base)
+        #expect(state.messages.isEmpty)
+        #expect(state.desktopBrowser.granted)
+        #expect(state.desktopBrowser.deviceName == "Desk")
+        #expect(state.desktopBrowser.actions.map(\.actionId) == ["a", "b"])
+        #expect(state.desktopBrowser.actions.map(\.ok) == [true, false])
+        #expect(state.desktopBrowser.actions.map(\.shotId) == ["shot_1", nil])
+        #expect(state.desktopBrowser.actions.first?.url == "http://localhost:5173/")
+        #expect(state.desktopBrowser.actions.last?.error?.code == "NO_TAB")
+        // A failed call for want of a tab means none is open.
+        #expect(state.desktopBrowser.tabOpen == false)
+        let opened = base + [action("c", ["tool": "browser_open", "url": "http://localhost:5173/"])]
+        #expect(try applied(opened).desktopBrowser.tabOpen == true)
+        #expect(try applied([action("d", ["tool": "browser_close"])], to: opened).desktopBrowser.tabOpen == false)
+        let revoked = try applied([("desktop.browser.grant", ["status": "revoked", "reason": "user"])], to: opened)
+        #expect(!revoked.desktopBrowser.granted)
+        #expect(revoked.desktopBrowser.tabOpen == false)
+        #expect(revoked.desktopBrowser.deviceName == nil)
+        #expect(revoked.desktopBrowser.actions.count == 3)
+        let many = try applied((0..<(desktopActionLimit + 5)).map { action("x\($0)") })
+        #expect(many.desktopBrowser.actions.count == desktopActionLimit)
+        #expect(many.desktopBrowser.actions.first?.actionId == "x5")
+        // Without an earlier report, a failed open leaves no tab and other
+        // failures imply one.
+        #expect(try applied([action("o", ["tool": "browser_open", "ok": false])]).desktopBrowser.tabOpen == false)
+        #expect(try applied([action("s", ["ok": false])]).desktopBrowser.tabOpen == true)
+        // Acting implies a grant even when the grant event lies below the window.
+        #expect(try applied([action("g")]).desktopBrowser.granted)
+    }
+
+    @Test func computerUseSessionsAndActionsCollectWithoutTouchingTheTimeline() throws {
+        // conversation-runtime.test.cjs: computer use sessions and actions.
+        func action(_ id: String, _ extra: [String: JSONValue] = [:]) -> (String, JSONValue) {
+            let payload: [String: JSONValue] = [
+                "actionId": .string(id), "tool": "computer_act", "ok": true, "summary": "click e3",
+                "deviceId": "dev_mac", "deviceName": "Mac",
+            ]
+            return ("desktop.computer.action", .object(payload.merging(extra) { $1 }))
+        }
+        let asking: [(String, JSONValue)] = [
+            ("desktop.computer.grant", ["status": "requested", "deviceId": "host", "deviceName": "Mac"])
+        ]
+        let waiting = try applied(asking)
+        #expect(waiting.desktopComputer.awaitingHost)
+        #expect(waiting.desktopComputer.deviceName == "Mac")
+        #expect(!waiting.desktopComputer.active)
+        let started = asking + [
+            ("desktop.computer.grant", ["status": "granted", "deviceId": "host", "deviceName": "Mac"]),
+            ("desktop.computer.session", ["status": "started", "deviceId": "dev_mac", "deviceName": "Mac"]),
+            action("a", ["app": "TextEdit", "path": "background", "shotId": "shot_1"]),
+            action("a"),
+        ]
+        let state = try applied(started)
+        #expect(state.messages.isEmpty)
+        #expect(state.desktopComputer.active)
+        #expect(!state.desktopComputer.awaitingHost)
+        #expect(state.desktopComputer.deviceId == "dev_mac")
+        #expect(state.desktopComputer.deviceName == "Mac")
+        #expect(state.desktopComputer.actions.map(\.actionId) == ["a"])
+        #expect(state.desktopComputer.actions.first?.path == "background")
+        #expect(state.desktopComputer.actions.first?.shotId == "shot_1")
+        #expect(state.desktopComputer.actions.first?.app == "TextEdit")
+        let ended = try applied([("desktop.computer.session", ["status": "ended", "reason": "done"])], to: started)
+        #expect(!ended.desktopComputer.active)
+        // Ending keeps the host so the journal can still name it.
+        #expect(ended.desktopComputer.deviceName == "Mac")
+        #expect(ended.desktopComputer.actions.count == 1)
+        let declined = try applied([("desktop.computer.grant", ["status": "declined"])], to: asking)
+        #expect(!declined.desktopComputer.awaitingHost)
+    }
+
     @Test func deviceRestrictedPermissionsNameTheirAnsweringDevices() {
         let open = PendingPermission(id: "p", turnId: "t", payload: ["options": []])
         #expect(open.requiredDeviceNames(for: nil) == nil)
