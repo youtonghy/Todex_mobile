@@ -6,7 +6,7 @@
 - WS 分派及 wire：[websocket.rs](../../TodeX_backend/src/server/websocket.rs)、[protocol.rs](../../TodeX_backend/src/server/protocol.rs)。
 - 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。共享客户端 [v2.ts](../../TodeX_protocol/src/v2.ts) 仅作交叉参考。
 
-**67/67 个普通 HTTP method + path 已封装，57/57 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 67 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
+**67/67 个普通 HTTP method + path 已封装，59/59 个 WS 可识别命令已编目。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 67 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
 ## 验证范围
 
@@ -181,6 +181,8 @@ swift test --package-path /path/to/TodexCore-copy \
 | `codex.cloudTask.listSiblingAttempts` | Unsupported | 缺少云 HTTP adapter 调用，处理器拒绝。 |
 | `codex.cloudTask.applyPreflight` | Unsupported | 缺少云 HTTP adapter 调用，处理器拒绝。 |
 | `codex.cloudTask.apply` | Unsupported | 缺少云 HTTP adapter 调用，处理器拒绝。 |
+| `agentBrowser.watch` | Supported | 2026-10-06 补充。开始推送该会话 Agent 浏览器标签页的 `agentBrowser.frame`（base64 JPEG；连接慢时只保留最新帧；`closed: true` 表示无标签页）；每连接最多 8 个。`RealtimeClient` 把帧放入独立的 `browserFrames`（只保留最新 8 帧），不进入 `events` 与事件日志；`AppSession` 重连后重新发送仍在观看的会话。 |
+| `agentBrowser.unwatch` | Supported | 停止该会话的帧推送；幂等。 |
 
 协议清单还明确区分会话事件的 sequence 与旧 gateway 的 cursor。未知未来 command 的 descriptor 返回 nil；开放 event type/payload 仍可解码。加密协商、socket 连接和重连生命周期不由这两个 envelope 执行。
 

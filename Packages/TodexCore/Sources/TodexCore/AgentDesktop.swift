@@ -244,3 +244,35 @@ public enum AgentDesktopCapability: String, Sendable {
     /// Computer Use.
     case screen
 }
+
+/// `agentBrowser.frame` payload after `agentBrowser.watch { conversationId }`
+/// on `/v2/ws`. Only the latest frame is kept when the connection is slow.
+public struct AgentBrowserFrame: Sendable, Equatable {
+    public enum Content: Sendable, Equatable {
+        /// Base64 JPEG (no data-URL prefix); decode off the main thread.
+        case image(seq: Int, base64: String, width: Int, height: Int)
+        /// The conversation has no tab.
+        case closed
+    }
+    public var conversationId: String
+    public var content: Content
+
+    public init(conversationId: String, content: Content) {
+        self.conversationId = conversationId
+        self.content = content
+    }
+
+    public init?(payload: JSONValue) {
+        guard let id = payload["conversationId"].optionalString, !id.isEmpty else { return nil }
+        conversationId = id
+        if payload["closed"] == true {
+            content = .closed
+        } else if let data = payload["data"].optionalString, !data.isEmpty {
+            content = .image(
+                seq: payload["seq"].intValue, base64: data, width: payload["width"].intValue,
+                height: payload["height"].intValue)
+        } else {
+            return nil
+        }
+    }
+}

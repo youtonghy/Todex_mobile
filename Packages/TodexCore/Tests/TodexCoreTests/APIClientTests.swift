@@ -343,6 +343,7 @@ struct APIClientTests {
             codex.mcp.resource.read codex.mcp.tool.call codex.mcp.server.refresh codex.mcp.oauth.login codex.mcp.elicitation.respond
             codex.cloudTask.create codex.cloudTask.list codex.cloudTask.getSummary codex.cloudTask.getDiff codex.cloudTask.getMessages
             codex.cloudTask.getText codex.cloudTask.listSiblingAttempts codex.cloudTask.applyPreflight codex.cloudTask.apply
+            agentBrowser.watch agentBrowser.unwatch
             """.split(whereSeparator: \.isWhitespace).map(String.init))
         #expect(Set(ProtocolCatalog.commands.map(\.type)) == expected)
         #expect(ProtocolCatalog.commands.count == expected.count)

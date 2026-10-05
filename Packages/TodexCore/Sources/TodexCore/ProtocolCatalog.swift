@@ -11,7 +11,7 @@ public enum ProtocolCatalog {
         case unsupported = "Unsupported"
     }
 
-    /// All types recognized by is_v2_native_command or ClientMessageKind.
+    /// All types recognized by is_v2_native_command, is_agent_desktop_frame (watch only) or ClientMessageKind.
     public enum Command: String, Codable, CaseIterable, Sendable {
         case conversationSubscribe = "conversation.subscribe"
         case conversationUnsubscribe = "conversation.unsubscribe"
@@ -70,6 +70,8 @@ public enum ProtocolCatalog {
         case codexCloudTaskListSiblingAttempts = "codex.cloudTask.listSiblingAttempts"
         case codexCloudTaskApplyPreflight = "codex.cloudTask.applyPreflight"
         case codexCloudTaskApply = "codex.cloudTask.apply"
+        case agentBrowserWatch = "agentBrowser.watch"
+        case agentBrowserUnwatch = "agentBrowser.unwatch"
     }
 
     public struct CommandDescriptor: Sendable, Identifiable, Equatable {
@@ -160,6 +162,10 @@ public enum ProtocolCatalog {
         case .serverPing:
             support = .supported
             detail = "Returns server.result with pong = true."
+        case .agentBrowserWatch, .agentBrowserUnwatch:
+            support = .supported
+            detail =
+                "Starts or stops agentBrowser.frame for one owned conversation's agent browser tab (latest frame wins, at most 8 per connection); idempotent."
         }
         return CommandDescriptor(command: command, support: support, detail: detail)
     }

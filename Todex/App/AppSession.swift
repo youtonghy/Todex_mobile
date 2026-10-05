@@ -7,11 +7,17 @@ import TodexCore
 /// The sole transport seam needed for deterministic recovery/send race tests.
 nonisolated protocol SessionSocket: Sendable {
     var events: AsyncStream<JSONValue> { get }
+    /// `agentBrowser.frame` payloads, delivered apart from `events`.
+    var browserFrames: AsyncStream<JSONValue> { get }
     func connect() async throws
     func disconnect() async
     func command(type: String, payload: JSONValue, timeout: TimeInterval, id: String) async throws -> JSONValue
 }
 extension RealtimeClient: SessionSocket {}
+extension SessionSocket {
+    /// Sockets without live browser views (test doubles) never yield frames.
+    var browserFrames: AsyncStream<JSONValue> { AsyncStream { $0.finish() } }
+}
 
 @MainActor final class AppSession {
     private(set) var connections: [BackendConnection] = []
@@ -74,6 +80,11 @@ extension RealtimeClient: SessionSocket {}
     private let makeSocket: (BackendConnection) -> any SessionSocket
     private let saveCredential: (String, String) throws -> Void
     private var frameTask: Task<Void, Never>?
+    private var browserFrameTask: Task<Void, Never>?
+    /// Conversation id → live agent-browser views (token → frame handler).
+    /// A conversation is watched on the socket while it has any; reconnects
+    /// watch them again. Frames are only handed over, never stored.
+    private var browserWatchers: [String: [UUID: (AgentBrowserFrame) -> Void]] = [:]
     private var connectTask: Task<Void, Never>?
     private var connectingConfiguration: BackendConnection?
     private var reconnectTask: Task<Void, Never>?
@@ -259,6 +270,43 @@ extension RealtimeClient: SessionSocket {}
         return stream
     }
 
+    /// Streams the conversation's agent browser tab to `onFrame` until
+    /// `unwatchAgentBrowser(_:)`. The socket watch is shared by every view of
+    /// the conversation and restored after reconnects.
+    func watchAgentBrowser(_ conversationID: String, onFrame: @escaping (AgentBrowserFrame) -> Void) -> UUID {
+        let token = UUID()
+        let first = browserWatchers[conversationID]?.isEmpty ?? true
+        browserWatchers[conversationID, default: [:]][token] = onFrame
+        if first, isConnected { sendBrowserWatch(conversationID, watching: true) }
+        return token
+    }
+
+    func unwatchAgentBrowser(_ token: UUID) {
+        guard let id = browserWatchers.first(where: { $0.value[token] != nil })?.key else { return }
+        browserWatchers[id]?.removeValue(forKey: token)
+        guard browserWatchers[id]?.isEmpty == true else { return }
+        browserWatchers.removeValue(forKey: id)
+        if isConnected { sendBrowserWatch(id, watching: false) }
+    }
+
+    private func sendBrowserWatch(_ conversationID: String, watching: Bool) {
+        guard let socket else { return }
+        let current = revision
+        Task { [weak self] in
+            do {
+                _ = try await socket.command(
+                    type: watching ? "agentBrowser.watch" : "agentBrowser.unwatch",
+                    payload: ["conversationId": .string(conversationID)], timeout: 15, id: UUID().uuidString)
+            } catch {
+                // The view falls back to screenshots; a reconnect watches again.
+                guard let self, current == self.revision, !(error is CancellationError) else { return }
+                DebugLog.record(
+                    "agentBrowser.watch.failed",
+                    ["watching": "\(watching)", "error": String(describing: error)], level: .warn)
+            }
+        }
+    }
+
     func saveConnections(_ values: [BackendConnection], selected: String?) throws {
         guard Set(values.map(\.id)).count == values.count else { throw TodexError.invalid(String(localized: "后端标识重复")) }
         // Settings persists an unfinished row while the user enters its address.
@@ -362,12 +410,21 @@ extension RealtimeClient: SessionSocket {}
                 receive(frame)
             }
         }
+        browserFrameTask = Task { [weak self] in
+            for await payload in socket.browserFrames {
+                guard let self, self.revision == current, !Task.isCancelled else { return }
+                guard let frame = AgentBrowserFrame(payload: payload) else { continue }
+                for handler in Array((browserWatchers[frame.conversationId] ?? [:]).values) { handler(frame) }
+            }
+        }
         do {
             try await socket.connect()
             try checkRevision(current)
             isConnecting = false
             isConnected = true
             connectionStatus = String(localized: "已连接")
+            // A new socket has no watches; restore the views still open.
+            for id in browserWatchers.keys { sendBrowserWatch(id, watching: true) }
             DebugLog.record("connection.open", level: .info)
             startHealthChecks()
             checkBackendVersion(api)
@@ -425,6 +482,8 @@ extension RealtimeClient: SessionSocket {}
         reconnectTask = nil
         frameTask?.cancel()
         frameTask = nil
+        browserFrameTask?.cancel()
+        browserFrameTask = nil
         healthTask?.cancel()
         healthTask = nil
         healthLatencyMs = nil

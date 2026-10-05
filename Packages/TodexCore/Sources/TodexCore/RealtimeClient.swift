@@ -6,6 +6,11 @@ public actor RealtimeClient {
     /// Consume with one iterator. On overflow the retained prefix is followed by
     /// connection.closed and end-of-stream; create a fresh client to reconnect.
     public nonisolated let events: AsyncStream<JSONValue>
+    /// `agentBrowser.frame` payloads (after `agentBrowser.watch`), kept out of
+    /// `events` so live JPEGs never queue behind or crowd out journal events.
+    /// Latest wins: when the consumer lags, older frames are dropped.
+    public nonisolated let browserFrames: AsyncStream<JSONValue>
+    private nonisolated let browserFrameSink: AsyncStream<JSONValue>.Continuation
     private let eventQueue: RealtimeEventQueue
     private let connection: BackendConnection
     private let http: HTTPClient
@@ -41,7 +46,15 @@ public actor RealtimeClient {
         let queue = RealtimeEventQueue(capacity: eventCapacity)
         eventQueue = queue
         events = AsyncStream(unfolding: { await queue.next() }, onCancel: { queue.finish() })
+        (browserFrames, browserFrameSink) = AsyncStream.makeStream(
+            of: JSONValue.self,
+            bufferingPolicy: .bufferingNewest(Self.browserFrameBuffer))
     }
+
+    deinit { browserFrameSink.finish() }
+
+    /// One slot per live browser view the backend allows on a connection.
+    static let browserFrameBuffer = 8
 
     public func connect() async throws {
         guard !eventQueue.isFinished else { throw TodexError.invalid(String(localized: "事件流已结束，请创建新的连接", bundle: .module)) }
@@ -185,6 +198,10 @@ public actor RealtimeClient {
                 let text = try crypto?.decrypt(raw) ?? raw
                 let frame = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
                 guard let response = RealtimeResponse(frame) else { throw TodexError.invalid(String(localized: "后端事件格式无效", bundle: .module)) }
+                if response.type == "agentBrowser.frame" {
+                    browserFrameSink.yield(response.payload)
+                    continue
+                }
                 if let id = response.requestID, let request = pending[id],
                     let resolution = response.resolution(for: request.command)
                 {
@@ -304,6 +321,7 @@ struct RealtimeCommand: Sendable {
         [
             "server.ping", "session.resume", "conversation.subscribe", "conversation.unsubscribe", "terminal.status", "codex.local.status",
             "codex.local.replay", "codex.local.snapshot", "codex.local.attach", "mcp.list",
+            "agentBrowser.watch", "agentBrowser.unwatch",
         ].contains(type)
     }
 }

@@ -245,6 +245,50 @@ struct RealtimeClientTests {
         await client.disconnect()
     }
 
+    @Test func agentBrowserFramesBypassTheEventQueueAndKeepOnlyTheNewest() async throws {
+        let fixture = NetworkHTTPFixture { _ in .json(["requiredProtocol": "none"]) }
+        defer { fixture.close() }
+        let socket = ScriptedRealtimeSocket()
+        let client = RealtimeClient(
+            connection: fixture.client().connection, http: fixture.client(), makeSocket: { _ in socket })
+        try await client.connect()
+        let watch = Task {
+            try await client.command(type: "agentBrowser.watch", payload: ["conversationId": "c"], id: "w")
+        }
+        await socket.waitForSent(2)
+        try socket.push(["type": "server.result", "id": "w", "payload": ["watching": true]])
+        #expect(try await watch.value == ["watching": true])
+        let total = RealtimeClient.browserFrameBuffer + 3
+        for seq in 1...total {
+            try socket.push([
+                "type": "agentBrowser.frame",
+                "payload": [
+                    "conversationId": "c", "seq": .number(Double(seq)), "mimeType": "image/jpeg", "data": "AQID",
+                    "width": 2, "height": 1,
+                ],
+            ])
+        }
+        try socket.push(["type": "agentBrowser.frame", "payload": ["conversationId": "c", "closed": true]])
+        // A ping round trip is a receive-loop barrier for every frame.
+        _ = try await client.command(type: "server.ping", payload: [:])
+        var frames: [JSONValue] = []
+        for await frame in client.browserFrames {
+            frames.append(frame)
+            if frame["closed"] == true { break }
+        }
+        #expect(frames.count == RealtimeClient.browserFrameBuffer)
+        #expect(frames.dropLast().map(\.["seq"].intValue) == Array((total - frames.count + 2)...total))
+        #expect(frames.last?["closed"] == true)
+        var iterator = client.events.makeAsyncIterator()
+        var types: [String] = []
+        // Two pings, connection.ready and the watch result.
+        while types.count < 4, let frame = await iterator.next() { types.append(frame["type"].stringValue) }
+        #expect(types.filter { $0 == "server.result" }.count == 3)
+        #expect(!types.contains("agentBrowser.frame"))
+        #expect(!socket.isCancelled)
+        await client.disconnect()
+    }
+
     @Test func permanentConnectionFailuresAreMarkedNotRetryable() {
         #expect(TodexError.stopsReconnect(TodexError.configuration("key")))
         #expect(TodexError.stopsReconnect(TodexError.server(code: "401", message: "")))
