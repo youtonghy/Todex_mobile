@@ -186,7 +186,12 @@ final class AgentLiveView: UIView {
     private func syncComputer() {
         let watching = isActive && computerShown && !collapsed(.computer)
         if watching, framePoll == nil {
-            framePoll = Task { [weak self] in await self?.pollFrames() }
+            // Holds the view only per tick, so a dropped view ends the loop.
+            framePoll = Task { [weak self] in
+                while !Task.isCancelled, let delay = await self?.pollFrame() {
+                    do { try await Task.sleep(for: delay) } catch { return }
+                }
+            }
         } else if !watching, let poll = framePoll {
             poll.cancel()
             framePoll = nil
@@ -203,32 +208,29 @@ final class AgentLiveView: UIView {
         }
     }
 
-    private func pollFrames() async {
-        while !Task.isCancelled {
-            var delay = Self.frameInterval
-            // A chat hidden behind the compact workbench pane keeps the view
-            // in the window; skip fetching until it shows again.
-            if isVisibleOnScreen {
-                do {
-                    guard let api = session.api else { throw TodexError.disconnected }
-                    let frame = try await api.agentDesktopFrame(conversationId: conversationID)
-                    let image = try await Self.decode(frame.data)
-                    guard !Task.isCancelled else { return }
-                    computerPanel.imageView.image = image
-                    if !computerLive {
-                        computerLive = true
-                        render()
-                    }
-                } catch {
-                    if Task.isCancelled { return }
-                    if computerLive {
-                        computerLive = false
-                        render()
-                    }
-                    delay = Self.frameRetry
-                }
+    /// One Computer Use frame; returns the delay before the next.
+    private func pollFrame() async -> Duration {
+        // A chat hidden behind the compact workbench pane keeps the view in
+        // the window; skip fetching until it shows again.
+        guard isVisibleOnScreen else { return Self.frameInterval }
+        do {
+            guard let api = session.api else { throw TodexError.disconnected }
+            let frame = try await api.agentDesktopFrame(conversationId: conversationID)
+            let image = try await Self.decode(frame.data)
+            guard !Task.isCancelled else { return Self.frameInterval }
+            computerPanel.imageView.image = image
+            if !computerLive {
+                computerLive = true
+                render()
             }
-            do { try await Task.sleep(for: delay) } catch { return }
+            return Self.frameInterval
+        } catch {
+            // Not controlling (404), session ending, offline: the latest shot stands in.
+            if !Task.isCancelled, computerLive {
+                computerLive = false
+                render()
+            }
+            return Self.frameRetry
         }
     }
 
