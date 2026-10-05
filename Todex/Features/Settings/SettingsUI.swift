@@ -12,6 +12,10 @@ struct SettingsRow {
     var checked = false
     var activity = false
     var action: (@MainActor () -> Void)? = nil
+    /// Shows a switch with this value instead of a disclosure; `onSwitch`
+    /// receives changes (the switch is disabled with the row).
+    var switchValue: Bool? = nil
+    var onSwitch: (@MainActor (Bool) -> Void)? = nil
 }
 
 @MainActor
@@ -72,6 +76,19 @@ class SettingsListController: UITableViewController {
         cell.backgroundColor = Theme.surface
         cell.accessibilityIdentifier = row.id
         cell.accessoryType = row.checked ? .checkmark : (row.action == nil ? .none : .disclosureIndicator)
+        if let value = row.switchValue {
+            let toggle = UISwitch()
+            toggle.isOn = value
+            toggle.isEnabled = row.enabled && row.onSwitch != nil
+            toggle.onTintColor = Theme.accent
+            toggle.accessibilityIdentifier = "\(row.id).switch"
+            toggle.accessibilityLabel = row.title
+            if let onSwitch = row.onSwitch {
+                toggle.addAction(UIAction { [weak toggle] _ in onSwitch(toggle?.isOn ?? value) }, for: .valueChanged)
+            }
+            cell.accessoryView = toggle
+            cell.accessoryType = .none
+        }
         if row.activity {
             let spinner = UIActivityIndicatorView(style: .medium)
             spinner.startAnimating()

@@ -220,6 +220,10 @@ public struct AgentBrowserProfiles: Codable, Sendable, Equatable {
     public var profiles: [AgentBrowserProfile]
     /// Workspace id (path for workspaces without one) → profile id.
     public var workspaces: [String: String]
+    public init(profiles: [AgentBrowserProfile] = [], workspaces: [String: String] = [:]) {
+        self.profiles = profiles
+        self.workspaces = workspaces
+    }
 }
 
 /// A JPEG of the host's screen, a browser tab or a journaled shot

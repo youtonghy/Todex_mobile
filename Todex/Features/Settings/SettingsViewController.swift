@@ -159,6 +159,15 @@ final class SettingsViewController: SettingsListController {
                 })
             rows.append(
                 SettingsRow(
+                    title: String(localized: "Agent 桌面工具"), detail: String(localized: "Agent 浏览器与 Computer Use，在后端所在的电脑上运行"),
+                    symbol: "macwindow.on.rectangle", id: "settings.agentDesktop"
+                ) { [weak self] in
+                    guard let self else { return }
+                    self.navigationController?.pushViewController(
+                        AgentDesktopSettingsViewController(connection: connection, session: self.session), animated: true)
+                })
+            rows.append(
+                SettingsRow(
                     title: String(localized: "使用统计"), detail: String(localized: "本机为此后端保存的最近 2000 条 token 用量，含已关闭的对话"), symbol: "chart.bar",
                     id: "settings.usage"
                 ) { [weak self] in

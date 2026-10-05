@@ -29,6 +29,7 @@
 		86C38986A674B9CDE0CEBFDC /* TimelineViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D967855CE742B8058D64D347 /* TimelineViewController.swift */; };
 		89B1CFAADFE78FB74B0A21DA /* UsageViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93278CF3C223560572013664 /* UsageViewController.swift */; };
 		8E0652E1B702E7B0460DD145 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 5EA42E70C96AE47DA0A8CF55 /* SwiftTerm */; };
+		EA7ADEC65A7DB1A37280454C /* AgentDesktopSettingsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B046503611738807C579F509 /* AgentDesktopSettingsViewController.swift */; };
 		94558318C2912CBD02D73075 /* AgentProvidersViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FAB4DDC0336E6D09338BB0 /* AgentProvidersViewController.swift */; };
 		A5794D37A904DD9ACC9EA14F /* Chat in Resources */ = {isa = PBXBuildFile; fileRef = E45D1797EEA72BE5FF1B4AFC /* Chat */; };
 		AB3953D149903B61FAE00E38 /* WorkbenchBrowserViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D53C9CFD11BD6B0243D37B /* WorkbenchBrowserViewController.swift */; };
@@ -74,6 +75,7 @@
 		62B4BB75B1AB6E27238B47FA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F451B746771C19B33AECD3B5 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		A1C0DE5E1F0A7B2C3D4E5F61 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
+		B046503611738807C579F509 /* AgentDesktopSettingsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDesktopSettingsViewController.swift; sourceTree = "<group>"; };
 		69FAB4DDC0336E6D09338BB0 /* AgentProvidersViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProvidersViewController.swift; sourceTree = "<group>"; };
 		6E485163C78FED62D3F25EF1 /* WorkbenchTerminalViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchTerminalViewController.swift; sourceTree = "<group>"; };
 		71EFB1B95610C55EA0C3C6D7 /* WorkbenchViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchViewController.swift; sourceTree = "<group>"; };
@@ -228,6 +230,7 @@
 			isa = PBXGroup;
 			children = (
 				B0C3871008BC1CDD5EC6A6BF /* AboutViewController.swift */,
+				B046503611738807C579F509 /* AgentDesktopSettingsViewController.swift */,
 				69FAB4DDC0336E6D09338BB0 /* AgentProvidersViewController.swift */,
 				CD4992CC1CD7B78D9050C05A /* CatalogViewController.swift */,
 				C63AE09ECFA35413A032814D /* CLIViewController.swift */,
@@ -368,6 +371,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EF61661475F4CD89A8655828 /* AboutViewController.swift in Sources */,
+				EA7ADEC65A7DB1A37280454C /* AgentDesktopSettingsViewController.swift in Sources */,
 				94558318C2912CBD02D73075 /* AgentProvidersViewController.swift in Sources */,
 				D77BB42F7E3FA641974BA2DC /* AppDelegate.swift in Sources */,
 				E8612533DA5CE3F28E6E0B42 /* AppSession.swift in Sources */,
