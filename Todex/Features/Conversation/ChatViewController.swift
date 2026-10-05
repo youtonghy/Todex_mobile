@@ -28,6 +28,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private let status = Theme.label(String(localized: "正在同步…"), style: .caption1, color: .secondaryLabel)
     private let chips = UIStackView()
     private let alerts = UIStackView()
+    /// Computer Use / agent browser previews; persistent, unlike `alerts`.
+    private lazy var liveView = AgentLiveView(session: session, conversationID: conversation.id)
+    private var appearing = false
+    private var lifecycleObservers: [NSObjectProtocol] = []
     private let modelChip = Theme.chip(String(localized: "模型"), icon: "cpu")
     private let permissionChip = UIButton(configuration: Theme.iconChipConfiguration(icon: "hand.raised.fill", tint: .systemOrange))
     private let workModeChip = UIButton(configuration: Theme.iconChipConfiguration(icon: "bolt.fill", tint: Theme.accent))
@@ -62,6 +66,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     isolated deinit {
         if let observer { session.removeObserver(observer) }
         if let contentSizeObserver { NotificationCenter.default.removeObserver(contentSizeObserver) }
+        for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) }
         stallTicker?.cancel()
     }
     override func viewDidLoad() {
@@ -244,6 +249,17 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         inputStack.addArrangedSubview(toolbar)
         stack.addArrangedSubview(footer)
         timeline.view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        liveView.reportError = { [weak self] title, message in self?.showNotice(title: title, message: message) }
+        liveView.setContentHuggingPriority(.required, for: .vertical)
+        liveView.setContentCompressionResistancePriority(.required, for: .vertical)
+        stack.insertArrangedSubview(liveView, at: stack.arrangedSubviews.firstIndex(of: footer) ?? stack.arrangedSubviews.count)
+        // Live previews stop in the background and resume in the foreground.
+        for name in [UIApplication.didEnterBackgroundNotification, UIApplication.willEnterForegroundNotification] {
+            lifecycleObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.syncLiveViewActivity() }
+                })
+        }
         observer = session.observe { [weak self] in self?.reload() }
         reload()
     }
@@ -264,6 +280,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         session.viewingConversationID = conversation.id
+        appearing = true
+        syncLiveViewActivity()
         // Model catalogs are discovered live by the backend; refresh whenever the
         // conversation is shown again so CLI config edits are reflected.
         Task { [weak self] in
@@ -287,6 +305,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if session.viewingConversationID == conversation.id { session.viewingConversationID = nil }
+        appearing = false
+        syncLiveViewActivity()
         stallTicker?.cancel()
         stallTicker = nil
         session.persist()
@@ -309,6 +329,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             ]
         }
         return commands
+    }
+    /// Previews poll or stream only while the chat is on screen in the foreground.
+    private func syncLiveViewActivity() {
+        liveView.setActive(appearing && UIApplication.shared.applicationState != .background)
     }
     @objc private func sendShortcut() { submit() }
     @objc private func stopShortcut() {
@@ -654,6 +678,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 })
         }
         chips.isHidden = chips.arrangedSubviews.isEmpty
+        liveView.update(
+            computer: runtime?.desktopComputer ?? DesktopComputerState(),
+            browser: runtime?.desktopBrowser ?? DesktopBrowserState())
         alerts.arrangedSubviews.forEach { $0.removeFromSuperview() }
         if let pending = session.pendingSends[conversation.id] {
             alerts.addArrangedSubview(
