@@ -223,7 +223,11 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
     private func addDetails(_ details: JSONValue) {
         guard !details.isNull else { return }
         let summaries: [(String, String)] = [
-            ("command", String(localized: "命令")), ("cwd", String(localized: "工作目录")), ("reason", String(localized: "原因")), ("message", String(localized: "说明")),
+            ("command", String(localized: "命令")), ("cwd", String(localized: "工作目录")),
+            // Agent desktop prompts: desktop_browser (host), desktop_computer_app
+            // (app, action), desktop_*_action (action, reason).
+            ("host", String(localized: "电脑")), ("app", String(localized: "应用")), ("action", String(localized: "操作")),
+            ("reason", String(localized: "原因")), ("message", String(localized: "说明")),
             ("path", String(localized: "路径")), ("filePath", String(localized: "文件")), ("files", String(localized: "文件")), ("changes", String(localized: "文件变更")),
             ("patch", String(localized: "补丁")), ("diff", String(localized: "差异")), ("permissions", String(localized: "请求的权限")),
             ("grantRoot", String(localized: "授权目录")), ("toolCall", String(localized: "工具调用")), ("rawInput", String(localized: "输入")),
