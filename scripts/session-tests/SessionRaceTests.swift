@@ -485,7 +485,7 @@ actor FakeSocket: SessionSocket {
     // e2e retry (§7): the backend cannot read the prompt back, so the client
     // sends the newest decrypted user prompt.
     try await h.socket.emit(event(6, "turn.completed", ["turnId": "t2"]))
-    for (n, turn, prompt) in [(7, "t3", "first secret prompt"), (10, "t4", "latest secret prompt")] {
+    for (n, turn, prompt) in [(7, "t3", "first secret prompt"), (10, "t4", "  latest secret prompt\n")] {
         try await h.socket.emit(event(n, "turn.started", ["turnId": .string(turn)]))
         try await h.socket.emit(try sealed(n + 1, turn: turn, text: prompt, type: "message.created", role: "user"))
         try await h.socket.emit(event(n + 2, "turn.completed", ["turnId": .string(turn)]))
@@ -493,7 +493,23 @@ actor FakeSocket: SessionSocket {
     try await eventually("prompts applied") { h.session.runtimes["c"]?.appliedSequence == 12 }
     _ = try await h.session.control("retry", conversation: h.manifest)
     let retry = await h.socket.retries.first ?? .null
-    try check(retry == ["conversationId": "c", "prompt": "latest secret prompt"], "e2e retry payload: \(retry)")
+    try check(retry == ["conversationId": "c", "prompt": "  latest secret prompt\n"], "e2e retry payload: \(retry)")
+    // A newer user message this device cannot open: retry is refused here
+    // instead of sending an older prompt the backend would reject.
+    let unreadable = HistoryCrypto.SegmentKey.generate()
+    var lockedPrompt = try sealed(14, turn: "t5", text: "unreadable prompt", type: "message.created", role: "user")
+    lockedPrompt.payload["$enc"]["kid"] = .string(HistoryEncryption.encodeID(unreadable.kid))
+    try await h.socket.emit(event(13, "turn.started", ["turnId": "t5"]))
+    try await h.socket.emit(lockedPrompt)
+    try await h.socket.emit(event(15, "turn.completed", ["turnId": "t5"]))
+    try await eventually("locked prompt applied") { h.session.runtimes["c"]?.appliedSequence == 15 }
+    do {
+        _ = try await h.session.control("retry", conversation: h.manifest)
+        try check(false, "retry sent an older prompt past a locked one")
+    } catch let error as TodexError {
+        try check("\(error)".contains("读不到上一轮"), "unexpected retry error: \(error)")
+    }
+    try check(await h.socket.retries.count == 1, "a refused retry reached the socket")
     h.session.disconnect()
 }
 @MainActor func corruptCacheIsOptional() async throws {

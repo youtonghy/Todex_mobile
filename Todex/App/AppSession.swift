@@ -1634,14 +1634,17 @@ extension SessionSocket {
         else { throw TodexError.invalid(String(localized: "当前 Agent 不支持此操作")) }
         var payload: JSONValue = ["conversationId": .string(conversation.id)]
         // An e2e backend cannot read the last prompt back; retry sends the
-        // decrypted original text (history v3 §7).
+        // decrypted original text (history v3 §7). Only the newest user
+        // message will do: when a locked run is newer, an older prompt would
+        // just be refused (CONFLICT), so say why instead.
         if action == "retry", historyEncryption?.isEnabled == true || encryptedConversations.contains(conversation.id) {
             guard
-                let prompt = runtimes[conversation.id]?.messages.first(where: {
-                    $0.role == "user" && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                })?.text
+                let latest = runtimes[conversation.id]?.messages.first(where: {
+                    $0.role == "user" || $0.category == ConversationRuntime.lockedCategory
+                }),
+                latest.role == "user", !latest.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { throw TodexError.invalid(String(localized: "此设备读不到上一轮的原始消息，无法重试")) }
-            payload["prompt"] = .string(prompt)
+            payload["prompt"] = .string(latest.text)
         }
         return try await command("conversation.\(action)", payload, timeout: action == "compact" ? 310 : 45)
     }
