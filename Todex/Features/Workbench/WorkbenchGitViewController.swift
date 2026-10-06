@@ -20,11 +20,13 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     private let table = UITableView(frame: .zero, style: .insetGrouped)
     private let info = UILabel()
     private let operationInfo = UILabel()
-    private var snapshot: JSONValue?
+    private var snapshot: JSONValue? { didSet { menuStateChanged() } }
     private var summary: JSONValue?
     private var repository: JSONValue?
     /// Repositories found under the workspace by /v2/git/scan.
-    private var repositories: [JSONValue] = []
+    private var repositories: [JSONValue] = [] { didSet { menuStateChanged() } }
+    /// Error of the last full read; the menu status page shows it.
+    private(set) var readError: String? { didSet { menuStateChanged() } }
     /// User-chosen target repository; nil targets the workspace root.
     private var selectedRepo: String?
     // Header summary polling (desktop useGitStatus): 5 s while the Agent is
@@ -33,7 +35,6 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     private var polling = false
     private var snapshotAt: Date?
     private var reading = false
-    private var refreshWaiters: [@MainActor () -> Void] = []
     /// Conversation header hook, fed by both polls and full refreshes.
     var onHeaderStatus: (@MainActor (GitHeaderSummary) -> Void)?
     private var readTask: Task<Void, Never>?
@@ -44,10 +45,12 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     /// Identifies the in-flight PR fetch so a cancelled one cannot clear its successor.
     private var prToken = UUID()
     // Last direct-operation failure; drives the "交给 Agent 核对" menu entry.
-    private var lastFailure: (title: String, operation: JSONValue?, error: String, unknown: Bool)?
-    private var writing = false
-    private var outcomeUnknown = false
-    private var refreshedAfterUnknown = false
+    private var lastFailure: (title: String, operation: JSONValue?, error: String, unknown: Bool)? {
+        didSet { menuStateChanged() }
+    }
+    private var writing = false { didSet { menuStateChanged() } }
+    private var outcomeUnknown = false { didSet { menuStateChanged() } }
+    private var refreshedAfterUnknown = false { didSet { menuStateChanged() } }
     // Inline per-file diffs under expanded change rows.
     private var expandedPaths = Set<String>()
     private var fileDiffs: [String: JSONValue] = [:]
@@ -58,9 +61,14 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     private var controlResults: [(String, JSONValue)] = []
     private var readRevision = UUID()
     // When the header Git menu drives operations while this tab is off-screen,
-    // sheets and alerts anchor to the conversation container instead.
+    // sheets and alerts anchor to the open menu, else the conversation container.
     private weak var presentationHost: UIViewController?
-    private var presenter: UIViewController { presentationHost ?? self }
+    private weak var menuPage: GitMenuViewController?
+    private var menuUpdateScheduled = false
+    private var presenter: UIViewController {
+        if let menuPage, menuPage.viewIfLoaded?.window != nil { return menuPage }
+        return presentationHost ?? self
+    }
     var hasUnresolvedOperation: Bool { writing || outcomeUnknown }
 
     init(
@@ -124,24 +132,38 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
         table.refreshControl?.endRefreshing()
     }
 
-    /// Header entry point: returns a menu whose items rebuild on every open and
-    /// present sheets on the conversation container while the tab is hidden.
-    /// Like the desktop Git panel, opening it refetches state that is older
-    /// than the current poll interval; the menu waits for that read.
-    func gitMenu(host: UIViewController) -> UIMenu {
-        UIMenu(children: [
-            UIDeferredMenuElement.uncached { [weak self] provide in
-                guard let self else { provide([]); return }
-                self.presentationHost = host
-                let stale = self.snapshotAt.map { Date().timeIntervalSince($0) > self.pollInterval } ?? true
-                guard stale, !self.writing else {
-                    provide(self.menuElements())
-                    return
-                }
-                self.refreshWaiters.append { [weak self] in provide(self?.menuElements() ?? []) }
-                if !self.reading { self.refresh() }
-            }
-        ])
+    /// Header entry point (desktop GitActionsModal): a sheet with a read-only
+    /// status page and the searchable action list. Forms and confirmations
+    /// present on the sheet while it is open, else on `host`.
+    func presentMenu(from host: UIViewController) {
+        presentationHost = host
+        guard menuPage == nil else { return }
+        let page = GitMenuViewController(git: self, api: APIClient(connection: connection))
+        menuPage = page
+        let nav = UINavigationController(rootViewController: page)
+        nav.modalPresentationStyle = .pageSheet
+        if let sheet = nav.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+        WBUI.presentModal(nav, on: host)
+        refreshIfStale()
+    }
+    /// Like the desktop Git panel, opening the menu refetches state that is
+    /// older than the current poll interval.
+    func refreshIfStale() {
+        let stale = snapshotAt.map { Date().timeIntervalSince($0) > pollInterval } ?? true
+        if stale, !writing, !reading { refresh() }
+    }
+    /// Coalesces state changes into one menu reload per run-loop turn.
+    private func menuStateChanged() {
+        guard menuPage != nil, !menuUpdateScheduled else { return }
+        menuUpdateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.menuUpdateScheduled = false
+            self.menuPage?.gitStateChanged()
+        }
     }
 
     // MARK: Header status polling
@@ -159,6 +181,7 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     }
     /// Running/idle transitions change the interval; poll now and re-arm.
     func agentStateChanged() {
+        menuStateChanged()
         guard polling else { return }
         schedulePoll()
     }
@@ -218,7 +241,7 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
         let files = repo["files"].arrayValue.count
         return String(localized: "\(branch == "UNKNOWN" ? String(localized: "未知分支") : branch) · \(files) 个变更 · +\(repo["additions"].intValue) −\(repo["deletions"].intValue)")
     }
-    private func repositoryMenu() -> UIMenu {
+    func repositoryMenu() -> UIMenu {
         UIMenu(
             title: String(localized: "目标仓库（\(repositories.count)）"), image: Theme.icon("externaldrive.connected.to.line.below", pointSize: 13),
             children: repositories.map { repo in
@@ -274,125 +297,116 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     }
     /// Mirrors the desktop GitActionsModal catalog: each action is either run
     /// directly by the workspace backend (/v2/git/operation) or reviewed and
-    /// delegated to the conversation Agent.
-    private func menuElements() -> [UIMenuElement] {
-        func direct(_ title: String, _ icon: String, enabled: Bool = true, action: @escaping @MainActor () -> Void) -> UIAction {
-            let item = UIAction(
-                title: title, subtitle: String(localized: "直接执行"), image: Theme.icon(icon, pointSize: 13)
-            ) { _ in action() }
-            if !enabled { item.attributes = .disabled }
-            return item
+    /// delegated to the conversation Agent. Group ids match desktop so status
+    /// sections can jump to them.
+    var menuGroups: [GitMenuGroup] {
+        let directMode = String(localized: "直接执行")
+        func direct(_ title: String, _ icon: String, enabled: Bool = true, action: @escaping @MainActor () -> Void) -> GitMenuAction {
+            GitMenuAction(title: title, subtitle: directMode, icon: icon, enabled: enabled, run: action)
         }
-        func agent(_ title: String, _ request: String) -> UIAction {
-            UIAction(title: title, subtitle: "Agent") { [weak self] _ in
-                self?.delegate(title: title, request: request)
-            }
+        func agent(_ title: String, _ key: String) -> GitMenuAction {
+            GitMenuAction(title: title, subtitle: "Agent", icon: "person.crop.circle", run: { [weak self] in
+                self?.delegate(title: title, request: Self.requests[key] ?? "")
+            })
         }
-        var elements: [UIMenuElement] = [
-            UIAction(title: String(localized: "刷新状态"), image: Theme.icon("arrow.clockwise", pointSize: 13)) {
-                [weak self] _ in self?.refresh()
-            }
-        ]
-        if repositories.count > 1 { elements.append(repositoryMenu()) }
+        var notices: [GitMenuAction] = []
         if agentBusy() {
-            elements.append(
-                UIAction(
-                    title: Self.busyMessage, attributes: UIMenuElement.Attributes.disabled
-                ) { _ in })
+            notices.append(GitMenuAction(title: Self.busyMessage, icon: "hourglass", enabled: false, run: {}))
         }
         if outcomeUnknown {
-            elements.append(
-                UIAction(
-                    title: String(localized: "上次写入结果未知，请先核对仓库和远端"),
-                    attributes: UIMenuElement.Attributes.disabled
-                ) { _ in })
+            notices.append(
+                GitMenuAction(
+                    title: String(localized: "上次写入结果未知，请先核对仓库和远端"), icon: "exclamationmark.triangle",
+                    enabled: false, run: {}))
         }
         if let failure = lastFailure {
-            elements.append(
-                UIAction(
-                    title: String(localized: "交给 Agent 核对：\(failure.title)"),
-                    subtitle: "Agent", image: Theme.icon("person.crop.circle.badge.questionmark", pointSize: 13)
-                ) { [weak self] _ in
-                    self?.delegate(title: String(localized: "核对 Git 操作：\(failure.title)"), request: self?.failurePrompt(failure) ?? "")
-                })
+            notices.append(
+                GitMenuAction(
+                    title: String(localized: "交给 Agent 核对：\(failure.title)"), subtitle: "Agent",
+                    icon: "person.crop.circle.badge.questionmark",
+                    run: { [weak self] in
+                        guard let self else { return }
+                        self.delegate(title: String(localized: "核对 Git 操作：\(failure.title)"), request: self.failurePrompt(failure))
+                    }))
         }
         if outcomeUnknown {
-            let unlock = UIAction(
-                title: String(localized: "已核对实际结果，解除写保护"),
-                image: Theme.icon("lock.open", pointSize: 13)
-            ) { [weak self] _ in
-                guard let self else { return }
-                WBUI.confirm(
-                    on: presenter, title: String(localized: "已核对仓库和远端？"), message: String(localized: "状态刷新不能证明提交、推送或 PR 是否成功。确认已检查实际结果后才可继续。"), action: String(localized: "已核对")
-                ) { [weak self] in
-                    self?.outcomeUnknown = false
-                    self?.refreshedAfterUnknown = false
-                    self?.operationInfo.text = String(localized: "已由用户解除写保护；请避免重复已生效的操作。")
-                }
-            }
-            if !(refreshedAfterUnknown && !writing) { unlock.attributes = .disabled }
-            elements.append(unlock)
+            notices.append(
+                GitMenuAction(
+                    title: String(localized: "已核对实际结果，解除写保护"), icon: "lock.open",
+                    enabled: refreshedAfterUnknown && !writing,
+                    run: { [weak self] in
+                        guard let self else { return }
+                        WBUI.confirm(
+                            on: presenter, title: String(localized: "已核对仓库和远端？"), message: String(localized: "状态刷新不能证明提交、推送或 PR 是否成功。确认已检查实际结果后才可继续。"), action: String(localized: "已核对")
+                        ) { [weak self] in
+                            self?.outcomeUnknown = false
+                            self?.refreshedAfterUnknown = false
+                            self?.operationInfo.text = String(localized: "已由用户解除写保护；请避免重复已生效的操作。")
+                        }
+                    }))
         }
         let canCommit = canWrite && initialized && !branch.isEmpty
-        elements.append(
-            UIMenu(title: String(localized: "仓库与提交"), children: [
+        var groups: [GitMenuGroup] = []
+        if !notices.isEmpty {
+            groups.append(GitMenuGroup(id: "notices", title: String(localized: "需要注意"), actions: notices))
+        }
+        groups.append(
+            GitMenuGroup(id: "repository", title: String(localized: "仓库与提交"), actions: [
                 direct(String(localized: "初始化仓库"), "plus.square", enabled: canWrite && !initialized) { [weak self] in
                     self?.confirmOperation(["action": "init"], title: String(localized: "初始化仓库"))
                 },
-                agent(String(localized: "提交更改"), Self.requests["commit"] ?? ""),
-                agent(String(localized: "提交并推送"), Self.requests["commit-and-push"] ?? ""),
+                agent(String(localized: "提交更改"), "commit"),
+                agent(String(localized: "提交并推送"), "commit-and-push"),
                 direct(String(localized: "推送当前分支"), "arrow.up.circle", enabled: canCommit) { [weak self] in
                     self?.confirmOperation(["action": "push"], title: String(localized: "推送当前分支"))
                 },
             ]))
-        elements.append(
-            UIMenu(
-                title: String(localized: "分支（\(branches.count)）"),
-                children: [
+        groups.append(
+            GitMenuGroup(
+                id: "branches", title: String(localized: "分支（\(branches.count)）"),
+                actions: [
                     direct(String(localized: "创建分支…"), "arrow.triangle.branch", enabled: canWrite && initialized) {
                         [weak self] in self?.branchForm()
                     }
                 ] + branches.map { branch in
-                    UIAction(
-                        title: branch["name"].stringValue, subtitle: String(localized: "直接执行"),
-                        image: Theme.icon(
-                            branch["current"].boolValue ? "checkmark.circle" : "arrow.triangle.branch",
-                            pointSize: 13)
-                    ) { [weak self] _ in self?.showBranch(branch) }
+                    GitMenuAction(
+                        title: branch["name"].stringValue, subtitle: directMode,
+                        icon: branch["current"].boolValue ? "checkmark.circle" : "arrow.triangle.branch",
+                        run: { [weak self] in self?.showBranch(branch) })
                 }))
-        elements.append(
-            UIMenu(
-                title: String(localized: "工作树（\(worktrees.count)）"),
-                children: [
+        groups.append(
+            GitMenuGroup(
+                id: "worktrees", title: String(localized: "工作树（\(worktrees.count)）"),
+                actions: [
                     direct(String(localized: "创建工作树…"), "square.stack.3d.up", enabled: canWrite && initialized) {
                         [weak self] in self?.worktreeForm()
                     }
                 ] + worktrees.map { tree in
-                    UIAction(
+                    GitMenuAction(
                         title: (tree["path"].stringValue as NSString).lastPathComponent,
-                        subtitle: tree["branch"].optionalString,
-                        image: Theme.icon("square.stack.3d.up", pointSize: 13)
-                    ) { [weak self] _ in self?.showWorktree(tree) }
+                        subtitle: tree["branch"].optionalString, icon: "square.stack.3d.up",
+                        accessibilityIdentifier: "git.worktree.\(tree["path"].stringValue)",
+                        run: { [weak self] in self?.showWorktree(tree) })
                 }))
-        elements.append(
-            UIMenu(title: String(localized: "任务交接"), children: [agent("Handoff", Self.requests["handoff"] ?? "")]))
-        elements.append(
-            UIMenu(title: String(localized: "PR 与代码更改"), children: [
+        groups.append(
+            GitMenuGroup(id: "collaboration", title: String(localized: "任务交接"), actions: [agent("Handoff", "handoff")]))
+        groups.append(
+            GitMenuGroup(id: "pull-requests", title: String(localized: "PR 与代码更改"), actions: [
                 direct(String(localized: "查看 PR"), "doc.text.magnifyingglass", enabled: initialized) { [weak self] in
                     self?.showPullRequest()
                 },
                 direct(String(localized: "创建 PR…"), "arrow.up.doc", enabled: canCommit) { [weak self] in self?.prForm() },
-                agent(String(localized: "解释代码更改"), Self.requests["explain-pr"] ?? ""),
+                agent(String(localized: "解释代码更改"), "explain-pr"),
             ]))
-        elements.append(
-            UIMenu(title: String(localized: "PR 修复"), children: [
-                agent(String(localized: "处理审查评论"), Self.requests["fix-pr-comments"] ?? ""),
-                agent(String(localized: "修复失败检查"), Self.requests["fix-pr-checks"] ?? ""),
-                agent(String(localized: "解决合并冲突"), Self.requests["resolve-pr-conflicts"] ?? ""),
-                agent(String(localized: "处理全部 PR 问题"), Self.requests["fix-pr-all"] ?? ""),
+        groups.append(
+            GitMenuGroup(id: "pr-fixes", title: String(localized: "PR 修复"), actions: [
+                agent(String(localized: "处理审查评论"), "fix-pr-comments"),
+                agent(String(localized: "修复失败检查"), "fix-pr-checks"),
+                agent(String(localized: "解决合并冲突"), "resolve-pr-conflicts"),
+                agent(String(localized: "处理全部 PR 问题"), "fix-pr-all"),
             ]))
-        elements.append(
-            UIMenu(title: String(localized: "PR 合并"), children: [
+        groups.append(
+            GitMenuGroup(id: "pr-merge", title: String(localized: "PR 合并"), actions: [
                 direct(String(localized: "合并 PR…"), "arrow.triangle.merge", enabled: canWrite) { [weak self] in
                     self?.mergeForm(autoMerge: false)
                 },
@@ -403,9 +417,9 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
                     self?.prOperation(["action": "disable-pr-auto-merge"], title: String(localized: "取消自动合并"))
                 },
             ]))
-        elements.append(
-            UIMenu(title: String(localized: "PR 管理"), children: [
-                agent(String(localized: "管理 PR"), Self.requests["manage-pr"] ?? ""),
+        groups.append(
+            GitMenuGroup(id: "pr-management", title: String(localized: "PR 管理"), actions: [
+                agent(String(localized: "管理 PR"), "manage-pr"),
                 direct(String(localized: "转为草稿"), "doc", enabled: canWrite) { [weak self] in
                     self?.prOperation(["action": "draft-pr"], title: String(localized: "转为草稿"))
                 },
@@ -419,20 +433,24 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
                     self?.prOperation(["action": "reopen-pr"], title: String(localized: "重新打开 PR"))
                 },
             ]))
-        elements.append(
-            UIAction(
-                title: "Legacy Diff", image: Theme.icon("doc.text.magnifyingglass", pointSize: 13)
-            ) { [weak self] _ in self?.loadDiff() })
-        return elements
+        groups.append(
+            GitMenuGroup(id: "legacy", title: "Legacy", actions: [
+                GitMenuAction(title: "Legacy Diff", icon: "doc.text.magnifyingglass", run: { [weak self] in self?.loadDiff() })
+            ]))
+        return groups
     }
+    // Read-only state for the menu status page.
+    var repositoryPath: String { repoPath }
+    var repositoryCount: Int { repositories.count }
+    var statusSummary: JSONValue? { summary }
+    var workspaceSnapshot: JSONValue? { snapshot }
+    /// Per-file changes come only from the scan; empty until it covers the repository.
+    var scannedFiles: [JSONValue] { changedFiles }
+    var scannedFilesTruncated: Bool { repository?["filesTruncated"].boolValue ?? false }
+    var lastReadAt: Date? { snapshotAt }
+    var isReading: Bool { reading }
     private var canWrite: Bool { !writing && !outcomeUnknown && snapshot != nil && !agentBusy() }
     private static let busyMessage = String(localized: "当前对话正在运行或等待确认，暂时不能修改 Git 状态。")
-    private func flushRefreshWaiters() {
-        reading = false
-        let waiters = refreshWaiters
-        refreshWaiters.removeAll()
-        waiters.forEach { $0() }
-    }
     private var initialized: Bool { snapshot?["initialized"].boolValue ?? false }
     private var dirty: Bool { snapshot?["dirty"].boolValue ?? true }
     private var branch: String { snapshot?["currentBranch"].optionalString ?? "" }
@@ -440,12 +458,13 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
     private var worktrees: [JSONValue] { snapshot?["worktrees"].arrayValue ?? [] }
     private var changedFiles: [JSONValue] { repository?["files"].arrayValue ?? [] }
 
-    private func refresh() {
+    func refresh() {
         readTask?.cancel()
         readRevision = UUID()
         let revision = readRevision
         let target = repoPath
         reading = true
+        readError = nil
         info.text = String(localized: "正在读取 Git 状态…")
         // Old snapshots remain inspectable but cannot authorize a write while a fresh read is pending.
         snapshot = nil
@@ -500,13 +519,14 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
                 self.publishHeader(summary)
                 self.table.reloadData()
                 self.endRefreshing()
-                self.flushRefreshWaiters()
+                self.reading = false
             } catch {
                 guard revision == self.readRevision, !Task.isCancelled else { return }
+                self.readError = error.localizedDescription
                 self.info.text = String(localized: "Git 状态不可用：\(error.localizedDescription)")
                 self.table.reloadData()
                 self.endRefreshing()
-                self.flushRefreshWaiters()
+                self.reading = false
             }
         }
     }
@@ -813,6 +833,8 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
             do {
                 try await self.openWorktree(path)
                 self.operationInfo.text = String(localized: "已打开工作树「\((path as NSString).lastPathComponent)」。")
+                // Desktop closes the Git menu once the worktree conversation is open.
+                self.menuPage?.dismiss(animated: true)
             } catch {
                 self.operationInfo.text = String(localized: "工作树未能自动打开：\(error.localizedDescription)")
                 WBUI.message(
@@ -1137,6 +1159,8 @@ final class WorkbenchGitViewController: UIViewController, UITableViewDataSource,
                 let queued = try await self.sendToAgent(text)
                 self.operationInfo.text =
                     queued ? String(localized: "Agent 正忙，请求已加入候选队列，将在当前任务结束后发送。") : String(localized: "已提交给 Agent；执行结果请查看对话。")
+                // Desktop closes the Git menu after a confirmed send so the conversation shows.
+                self.menuPage?.dismiss(animated: true)
             } catch {
                 self.operationInfo.text = String(localized: "Agent 请求未确认：\(error.localizedDescription)")
                 WBUI.error(error, on: presenter)
@@ -1169,4 +1193,23 @@ struct GitHeaderSummary: Equatable {
     var deletions = 0
     var truncated = false
     var error: String?
+}
+
+/// One row of the Git menu's action page.
+struct GitMenuAction {
+    var title: String
+    /// Execution mode ("直接执行" / "Agent") or item detail such as a worktree branch.
+    var subtitle: String?
+    var icon: String
+    var enabled = true
+    /// Distinguishes rows that share a title, e.g. a worktree and its branch.
+    var accessibilityIdentifier: String?
+    var run: @MainActor () -> Void
+}
+
+/// A desktop GitActionsModal group; `id` is the jump target from status sections.
+struct GitMenuGroup {
+    var id: String
+    var title: String
+    var actions: [GitMenuAction]
 }

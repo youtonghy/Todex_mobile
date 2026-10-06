@@ -165,8 +165,7 @@ final class ConversationContainerController: UIViewController {
         subagentItem.isHidden = true
         var items = [more, subagentItem]
         if let workbench {
-            gitButton.menu = workbench.gitMenu(host: self)
-            gitButton.showsMenuAsPrimaryAction = true
+            gitButton.addAction(UIAction { [weak self] _ in self?.presentGitMenu() }, for: .touchUpInside)
             gitButton.accessibilityLabel = String(localized: "Git 操作")
             gitButton.accessibilityIdentifier = "conversation.git"
             renderGitButton()
@@ -218,7 +217,8 @@ final class ConversationContainerController: UIViewController {
                 input: "W", modifierFlags: .command),
         ]
     }
-    @objc private func gitShortcut() { chat.openGit?() }
+    @objc private func gitShortcut() { presentGitMenu() }
+    private func presentGitMenu() { workbench?.presentGitMenu(from: self) }
     @objc private func sidebarShortcut() {
         guard workbench != nil else { return }
         toggleSidebar()

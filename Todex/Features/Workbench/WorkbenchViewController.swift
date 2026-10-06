@@ -370,7 +370,7 @@ final class WorkbenchViewController: UIViewController {
         sharedGit = controller
         return controller
     }
-    func gitMenu(host: UIViewController) -> UIMenu { git().gitMenu(host: host) }
+    func presentGitMenu(from host: UIViewController) { git().presentMenu(from: host) }
     /// The shared Git surface, for header status polling by the conversation container.
     var gitController: WorkbenchGitViewController { git() }
     /// Pushes the connection latency label into every terminal header.

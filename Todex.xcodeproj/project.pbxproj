@@ -25,6 +25,7 @@
 		6B7A7D7F0B3BB9A0CA92ED3F /* ConversationContainerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA55EE3C9574508B34FF25E6 /* ConversationContainerController.swift */; };
 		6F4586857B6DB936801ABA79 /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F221C4394429D796D00CBB9F /* LocalStore.swift */; };
 		7A61C87DEEA2D93B7356EBCB /* CodeHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E94641F64C898CE786F92167 /* CodeHighlighter.swift */; };
+		F8C58C57A01ADB97492E3AF6 /* GitMenuViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D2CFE4B246A9238FBE8DA8E /* GitMenuViewController.swift */; };
 		80CFEA452D2B24F25FA5DE4D /* WorkbenchGitViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E97168BC2449D0FD45B2BCC7 /* WorkbenchGitViewController.swift */; };
 		86C38986A674B9CDE0CEBFDC /* TimelineViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D967855CE742B8058D64D347 /* TimelineViewController.swift */; };
 		89B1CFAADFE78FB74B0A21DA /* UsageViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93278CF3C223560572013664 /* UsageViewController.swift */; };
@@ -97,6 +98,7 @@
 		E0817D5BCA31F65AABAE304D /* TodexUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodexUITests.swift; sourceTree = "<group>"; };
 		E45D1797EEA72BE5FF1B4AFC /* Chat */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Chat; path = Todex/Resources/Chat; sourceTree = SOURCE_ROOT; };
 		E94641F64C898CE786F92167 /* CodeHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeHighlighter.swift; sourceTree = "<group>"; };
+		2D2CFE4B246A9238FBE8DA8E /* GitMenuViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitMenuViewController.swift; sourceTree = "<group>"; };
 		E97168BC2449D0FD45B2BCC7 /* WorkbenchGitViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchGitViewController.swift; sourceTree = "<group>"; };
 		F221C4394429D796D00CBB9F /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
 		FA55EE3C9574508B34FF25E6 /* ConversationContainerController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationContainerController.swift; sourceTree = "<group>"; };
@@ -204,6 +206,7 @@
 				E94641F64C898CE786F92167 /* CodeHighlighter.swift */,
 				A1D53C9CFD11BD6B0243D37B /* WorkbenchBrowserViewController.swift */,
 				7D9683C59EB937E7F975E784 /* WorkbenchFilesViewController.swift */,
+				2D2CFE4B246A9238FBE8DA8E /* GitMenuViewController.swift */,
 				E97168BC2449D0FD45B2BCC7 /* WorkbenchGitViewController.swift */,
 				6E485163C78FED62D3F25EF1 /* WorkbenchTerminalViewController.swift */,
 				71EFB1B95610C55EA0C3C6D7 /* WorkbenchViewController.swift */,
@@ -402,6 +405,7 @@
 				89B1CFAADFE78FB74B0A21DA /* UsageViewController.swift in Sources */,
 				AB3953D149903B61FAE00E38 /* WorkbenchBrowserViewController.swift in Sources */,
 				CB66D398ACAB1C5AB7CE90DA /* WorkbenchFilesViewController.swift in Sources */,
+				F8C58C57A01ADB97492E3AF6 /* GitMenuViewController.swift in Sources */,
 				80CFEA452D2B24F25FA5DE4D /* WorkbenchGitViewController.swift in Sources */,
 				01FACA805C38441CAC41958C /* WorkbenchTerminalViewController.swift in Sources */,
 				24A1EF2CFE74EB2191537078 /* WorkbenchViewController.swift in Sources */,
