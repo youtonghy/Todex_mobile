@@ -77,6 +77,18 @@ public enum ProtocolCatalog {
         case codexCloudTaskApply = "codex.cloudTask.apply"
         case agentBrowserWatch = "agentBrowser.watch"
         case agentBrowserUnwatch = "agentBrowser.unwatch"
+        case historyEncryptionGet = "history.encryption.get"
+        case historyEncryptionEnable = "history.encryption.enable"
+        case historyEncryptionDisable = "history.encryption.disable"
+        case historyRecipientRegister = "history.recipient.register"
+        case historyRecipientRevoke = "history.recipient.revoke"
+        case historyRecoverySet = "history.recovery.set"
+        case historyGrantRequest = "history.grant.request"
+        case historyGrantList = "history.grant.list"
+        case historyGrantDismiss = "history.grant.dismiss"
+        case historyKeysList = "history.keys.list"
+        case historyKeysWraps = "history.keys.wraps"
+        case historyGrantFulfill = "history.grant.fulfill"
     }
 
     public struct CommandDescriptor: Sendable, Identifiable, Equatable {
@@ -176,6 +188,12 @@ public enum ProtocolCatalog {
             support = .supported
             detail =
                 "Starts or stops agentBrowser.frame for one owned conversation's agent browser tab (latest frame wins, at most 8 per connection); idempotent."
+        case .historyEncryptionGet, .historyEncryptionEnable, .historyEncryptionDisable, .historyRecipientRegister,
+            .historyRecipientRevoke, .historyRecoverySet, .historyGrantRequest, .historyGrantList, .historyGrantDismiss,
+            .historyKeysList, .historyKeysWraps, .historyGrantFulfill:
+            support = .conditional
+            detail =
+                "History v3 key management (docs/history-encryption.md section 7); requires a backend with history encryption and a device-authenticated connection. The backend never sees a DEK."
         }
         return CommandDescriptor(command: command, support: support, detail: detail)
     }

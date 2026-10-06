@@ -190,7 +190,7 @@ struct APIClientTests {
     func paginationUsesAfterSequenceAndExplicitLimit() async throws {
         let fixture = APIFixture { request in
             let url = try #require(request.url)
-            #expect(url.query == "afterSequence=0&limit=17")
+            #expect(url.query == "afterSequence=0&historyEncryption=1&limit=17")
             return try .json(TestWire.replay)
         }
         defer { fixture.close() }
@@ -204,7 +204,7 @@ struct APIClientTests {
     func paginationUsesBeforeSequenceForTailWindows() async throws {
         let fixture = APIFixture { request in
             let url = try #require(request.url)
-            #expect(url.query == "beforeSequence=40&detail=summary&limit=17")
+            #expect(url.query == "beforeSequence=40&detail=summary&historyEncryption=1&limit=17")
             return try .json(TestWire.replay)
         }
         defer { fixture.close() }
@@ -345,6 +345,9 @@ struct APIClientTests {
             codex.cloudTask.create codex.cloudTask.list codex.cloudTask.getSummary codex.cloudTask.getDiff codex.cloudTask.getMessages
             codex.cloudTask.getText codex.cloudTask.listSiblingAttempts codex.cloudTask.applyPreflight codex.cloudTask.apply
             agentBrowser.watch agentBrowser.unwatch
+            history.encryption.get history.encryption.enable history.encryption.disable history.recipient.register
+            history.recipient.revoke history.recovery.set history.grant.request history.grant.list history.grant.dismiss
+            history.keys.list history.keys.wraps history.grant.fulfill
             """.split(whereSeparator: \.isWhitespace).map(String.init))
         #expect(Set(ProtocolCatalog.commands.map(\.type)) == expected)
         #expect(ProtocolCatalog.commands.count == expected.count)
@@ -730,7 +733,7 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
         },
         .init(
             name: "events", method: "GET", path: "/v2/conversations/\(escaped)/events",
-            query: ["afterSequence": "7", "limit": "200"], response: TestWire.replay
+            query: ["afterSequence": "7", "limit": "200", "historyEncryption": "1"], response: TestWire.replay
         ) { try await $0.events(conversationId: id, after: 7) },
         .init(
             name: "createConversation", method: "POST", path: "/v2/conversations",

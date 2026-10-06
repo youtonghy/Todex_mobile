@@ -321,7 +321,8 @@ struct RealtimeCommand: Sendable {
         [
             "server.ping", "session.resume", "conversation.subscribe", "conversation.unsubscribe", "terminal.status", "codex.local.status",
             "codex.local.replay", "codex.local.snapshot", "codex.local.attach", "mcp.list",
-            "agentBrowser.watch", "agentBrowser.unwatch",
+            "agentBrowser.watch", "agentBrowser.unwatch", "history.encryption.get", "history.grant.list",
+            "history.keys.list", "history.keys.wraps",
         ].contains(type)
     }
 }

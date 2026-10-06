@@ -114,6 +114,10 @@ public enum TodexError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .invalid(let s), .configuration(let s): s
+        case .server(HistoryEncryption.clientUpgradeRequired, _):
+            String(localized: "此后端已开启会话历史端到端加密，当前客户端无法读取，请更新 TodeX 应用。", bundle: .module)
+        case .server(HistoryEncryption.storageLow, _), .server("507", _):
+            String(localized: "后端所在电脑的磁盘可用空间不足 1 GiB，暂时无法发送新消息。请清理磁盘后重试。", bundle: .module)
         case .server(_, let message): message
         case .disconnected: String(localized: "连接已断开，请重新连接后端", bundle: .module)
         case .unknownOutcome(let s): String(localized: "操作结果未知：\(s)。请先核对记录，避免重复执行。", bundle: .module)

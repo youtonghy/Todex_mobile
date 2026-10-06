@@ -456,6 +456,10 @@ public struct ConversationRuntime: Sendable {
         // events belong to side views, not the timeline.
         if type.hasPrefix("ssh.exec.") || type.hasPrefix("desktop.") { return }
         let payload = event.payload
+        if HistoryEncryption.isLocked(payload) {
+            projectLocked(event, type: type, turnId: turnId)
+            return
+        }
         let isStub = payload["detailStub"].boolValue
         let block = payload["block"]
         let message = payload["message"]
@@ -653,6 +657,29 @@ public struct ConversationRuntime: Sendable {
             assistantInterrupted = true
         }
     }
+
+    /// Content this device cannot decrypt (`detailLocked`, history v3) shows
+    /// as one quiet row per uninterrupted run instead of one per event.
+    /// Lifecycle events still drive status through their plaintext envelope.
+    private mutating func projectLocked(_ event: ConversationEvent, type: String, turnId: String) {
+        let contentPrefixes = ["message.", "assistant.", "tool.", "thought.", "reasoning.", "subagent.", "permission.requested"]
+        guard contentPrefixes.contains(where: type.hasPrefix) else { return }
+        if messages.first?.category == Self.lockedCategory {
+            messages[0].sequence = event.sequence
+            messages[0].detail["lastSequence"] = .number(Double(event.sequence))
+            return
+        }
+        messages.insert(
+            TimelineMessage(
+                id: "locked-\(event.eventId)", turnId: turnId, role: "system", category: Self.lockedCategory, text: "",
+                status: "locked",
+                detail: [
+                    HistoryEncryption.lockedField: true, "firstSequence": .number(Double(event.sequence)),
+                    "lastSequence": .number(Double(event.sequence)),
+                ], sequence: event.sequence), at: 0)
+    }
+    /// Timeline category of a run of undecryptable history.
+    public static let lockedCategory = "locked"
 
     /// `#seg` rows of one turn's anonymous assistant stream whose joined text
     /// a completion's text already covers. Rows walk newest→oldest; a row

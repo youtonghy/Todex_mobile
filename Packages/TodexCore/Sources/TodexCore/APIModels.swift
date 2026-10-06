@@ -114,6 +114,9 @@ public struct ConversationManifest: Codable, Sendable, Identifiable, Equatable {
     public var workspace: String
     public var workspaceId: String?
     public var title: String?
+    /// History v3: `{kid, ct}` when the title is end-to-end encrypted; `title`
+    /// is then empty on the wire until the client decrypts it.
+    public var titleEnc: JSONValue?
     public var providerProfile: String?
     public var status: String
     public var archivedAt: String?
@@ -127,6 +130,7 @@ public struct ConversationManifest: Codable, Sendable, Identifiable, Equatable {
         workspace: String,
         workspaceId: String? = nil,
         title: String? = nil,
+        titleEnc: JSONValue? = nil,
         providerProfile: String? = nil,
         status: String = "idle",
         archivedAt: String? = nil,
@@ -139,6 +143,7 @@ public struct ConversationManifest: Codable, Sendable, Identifiable, Equatable {
         self.workspace = workspace
         self.workspaceId = workspaceId
         self.title = title
+        self.titleEnc = titleEnc
         self.providerProfile = providerProfile
         self.status = status
         self.archivedAt = archivedAt

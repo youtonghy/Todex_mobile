@@ -389,9 +389,11 @@ public final class APIClient: Sendable {
     public func events(
         conversationId: String, after: Int, limit: Int = 200, detail: String = "full"
     ) async throws -> JSONValue {
-        var query = ["afterSequence": String(after), "limit": String(limit)]
+        var query = ["afterSequence": String(after), "limit": String(limit), "historyEncryption": "1"]
         // `summary` folds process-only events down to detailStub markers; the
         // full payloads for a sequence range are fetched on demand.
+        // `historyEncryption=1` declares this client can decrypt `$enc`
+        // payloads (history v3 §5.4); pages then also carry `frames`.
         if detail != "full" { query["detail"] = detail }
         return try await queryRequest(path: "\(conversationPath(conversationId))/events", query: query)
     }
@@ -403,7 +405,7 @@ public final class APIClient: Sendable {
     public func events(
         conversationId: String, before: Int, limit: Int = 200, detail: String = "full"
     ) async throws -> JSONValue {
-        var query = ["beforeSequence": String(before), "limit": String(limit)]
+        var query = ["beforeSequence": String(before), "limit": String(limit), "historyEncryption": "1"]
         if detail != "full" { query["detail"] = detail }
         return try await queryRequest(path: "\(conversationPath(conversationId))/events", query: query)
     }
