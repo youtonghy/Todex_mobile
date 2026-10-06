@@ -152,6 +152,7 @@ actor FakeSocket: SessionSocket {
     var watches: [String] = []
     var unsubscribes: [String] = []
     var controls: [JSONValue] = []
+    var retries: [JSONValue] = []
     var prompts: [(String, JSONValue)] = []
     var forks: [JSONValue] = []
     /// `conversation.queue.*` commands in send order, with their payloads.
@@ -193,6 +194,10 @@ actor FakeSocket: SessionSocket {
     func setHistoryWrap(kid: String, wrapped: JSONValue) { historyWraps[kid] = wrapped }
     func command(type: String, payload: JSONValue, timeout: TimeInterval, id: String) async throws -> JSONValue {
         if type == "conversation.control" { controls.append(payload); return ["accepted": true] }
+        if type == "conversation.retry" {
+            retries.append(payload)
+            return ["conversationId": payload["conversationId"], "turnId": "retried", "retried": true]
+        }
         if type.hasPrefix("conversation.queue.") {
             queueCommands.append((type, payload))
             if type == "conversation.queue.add" {
@@ -446,15 +451,15 @@ actor FakeSocket: SessionSocket {
 @MainActor func encryptedHistoryStaysCiphertextOnDisk() async throws {
     let device = try HistoryCrypto.generateRecipientKey()
     let key = HistoryCrypto.SegmentKey.generate()
-    func sealed(_ n: Int, turn: String, text: String) throws -> ConversationEvent {
-        let payload: JSONValue = ["turnId": .string(turn), "text": .string(text)]
+    func sealed(_ n: Int, turn: String, text: String, type: String = "message.delta", role: String? = nil) throws -> ConversationEvent {
+        var payload: JSONValue = ["turnId": .string(turn), "text": .string(text)]
+        var envelope: JSONValue = ["turnId": .string(turn)]
+        if let role { payload["role"] = .string(role); envelope["role"] = .string(role) }
         let ciphertext = try HistoryCrypto.seal(
             JSONEncoder().encode(payload), key: key, conversationID: "c", stream: .eventFull, counter: UInt64(n))
-        return event(n, "message.delta", [
-            "turnId": .string(turn),
-            "$enc": ["v": 1, "kid": .string(HistoryEncryption.encodeID(key.kid)), "c": "c", "n": .number(Double(n)),
-                     "f": .string(HistoryEncryption.encodeID(ciphertext))],
-        ])
+        envelope["$enc"] = ["v": 1, "kid": .string(HistoryEncryption.encodeID(key.kid)), "c": "c", "n": .number(Double(n)),
+                            "f": .string(HistoryEncryption.encodeID(ciphertext))]
+        return event(n, type, envelope)
     }
     let secret = "replayed secret reply"
     let h = try Harness(
@@ -464,6 +469,9 @@ actor FakeSocket: SessionSocket {
         kid: HistoryEncryption.encodeID(key.kid),
         wrapped: try JSONValue(encoding: HistoryCrypto.wrap(key, for: device.publicKey.rawRepresentation)))
     await h.backend.setReversePages(false)
+    await h.backend.setProviders([
+        ProviderDescriptor(id: "codex", displayName: "Codex", available: true, capabilities: ["controlActions": ["retry"]])
+    ])
     try await h.ready()
     try check(h.session.runtimes["c"]?.messages.map(\.text) == [secret], "history page was not decrypted")
     try await h.socket.emit(event(4, "turn.started", ["turnId": "t2"]))
@@ -474,6 +482,18 @@ actor FakeSocket: SessionSocket {
     try await eventually("cache persisted") { (try? h.store.read(h.eventKey, as: CachedHistory.self))?.events.count == 5 }
     let disk = String(decoding: try Data(contentsOf: h.store.url(h.eventKey)), as: UTF8.self)
     try check(!disk.contains(secret) && !disk.contains("live secret") && disk.contains("$enc"), "plaintext reached the event cache")
+    // e2e retry (§7): the backend cannot read the prompt back, so the client
+    // sends the newest decrypted user prompt.
+    try await h.socket.emit(event(6, "turn.completed", ["turnId": "t2"]))
+    for (n, turn, prompt) in [(7, "t3", "first secret prompt"), (10, "t4", "latest secret prompt")] {
+        try await h.socket.emit(event(n, "turn.started", ["turnId": .string(turn)]))
+        try await h.socket.emit(try sealed(n + 1, turn: turn, text: prompt, type: "message.created", role: "user"))
+        try await h.socket.emit(event(n + 2, "turn.completed", ["turnId": .string(turn)]))
+    }
+    try await eventually("prompts applied") { h.session.runtimes["c"]?.appliedSequence == 12 }
+    _ = try await h.session.control("retry", conversation: h.manifest)
+    let retry = await h.socket.retries.first ?? .null
+    try check(retry == ["conversationId": "c", "prompt": "latest secret prompt"], "e2e retry payload: \(retry)")
     h.session.disconnect()
 }
 @MainActor func corruptCacheIsOptional() async throws {
@@ -976,7 +996,7 @@ actor FakeSocket: SessionSocket {
             ("disk failure + no recursive notification", diskFailurePreservesDraft),
             ("restart/background pause + early completion", restartBackgroundAndFastCompletion),
             ("tenant scope + bounded cache prefix", scopedReadsAndCachePrefix),
-            ("encrypted history: decrypt in memory, ciphertext on disk", encryptedHistoryStaysCiphertextOnDisk),
+            ("encrypted history: decrypt in memory, ciphertext on disk, retry prompt", encryptedHistoryStaysCiphertextOnDisk),
             ("corrupt optional cache recovery", corruptCacheIsOptional),
             ("wire subscriber overflow gap", streamOverflowSignalsGap),
             ("backend switch during HTTP replay", staleReplayResponse),
