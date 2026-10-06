@@ -87,8 +87,10 @@ final class HistoryEncryptionViewController: SettingsListController {
             return
         }
         let mine = session.historyDeviceRecipientID
-        let registered = mine != nil && state.myRid == mine
-        sections = [
+        let revoked = session.historyAccessRevoked
+        let registered = mine != nil && state.myRid == mine && !revoked
+        sections = revoked ? [revokedNotice()] : []
+        sections += [
             SettingsSection(
                 title: String(localized: "会话历史加密"),
                 footer: String(localized: "开启后，新的会话内容在后端磁盘上只以密文保存，只有已授权的设备能解密。后端运行 Agent 时仍能看到明文；已有历史会在后台重新加密，期间 Time Machine 或 APFS 快照可能仍保留旧明文。"),
@@ -102,10 +104,13 @@ final class HistoryEncryptionViewController: SettingsListController {
                     ) { [weak self] enabled in enabled ? self?.beginEnable() : self?.confirmDisable() },
                     SettingsRow(
                         title: String(localized: "本机历史密钥"),
-                        detail: registered
-                            ? String(localized: "已登记 · \(Self.short(mine ?? ""))")
-                            : String(localized: "未登记。完成设备配对后会自动登记。"),
-                        symbol: "iphone.gen3", id: "history.device", color: registered ? .label : .systemOrange),
+                        detail: revoked
+                            ? String(localized: "已吊销")
+                            : registered
+                                ? String(localized: "已登记 · \(Self.short(mine ?? ""))")
+                                : String(localized: "未登记。完成设备配对后会自动登记。"),
+                        symbol: "iphone.gen3", id: "history.device",
+                        color: revoked ? .systemRed : registered ? .label : .systemOrange),
                     SettingsRow(
                         title: String(localized: "申请读取旧历史"),
                         detail: String(localized: "请已授权的设备批准，本机才能读取登记之前的历史"),
@@ -119,20 +124,53 @@ final class HistoryEncryptionViewController: SettingsListController {
                         }
                     },
                 ]),
-            grantSection(state),
-            recipientSection(state, mine: mine),
-            recoverySection(state),
+            grantSection(state, revoked: revoked),
+            recipientSection(state, mine: mine, revoked: revoked),
         ]
+        if !state.revokedDevices.isEmpty { sections.append(revokedDeviceSection(state, revoked: revoked)) }
+        sections.append(recoverySection(state, revoked: revoked))
         redraw()
     }
 
-    private func grantSection(_ state: HistoryEncryptionState) -> SettingsSection {
+    /// Shown while this device is blocked: every history action is disabled
+    /// until another authorized device restores it.
+    private func revokedNotice() -> SettingsSection {
+        SettingsSection(
+            title: String(localized: "访问已吊销"),
+            footer: String(localized: "在另一台已授权设备的“会话历史加密”中恢复本机后，本机会自动登记新的历史密钥；之后需重新申请读取旧历史。"),
+            rows: [
+                SettingsRow(
+                    title: TodexError.server(code: HistoryEncryption.accessRevoked, message: "").localizedDescription,
+                    symbol: "lock.slash", id: "history.revoked", color: .systemRed)
+            ])
+    }
+
+    private func revokedDeviceSection(_ state: HistoryEncryptionState, revoked: Bool) -> SettingsSection {
+        let me = session.historyDeviceID
+        let rows = state.revokedDevices.map { device in
+            SettingsRow(
+                title: device.deviceId + (device.deviceId == me ? String(localized: "（本机）") : ""),
+                detail: [
+                    device.revokedAt.map { String(localized: "吊销于 \($0)") },
+                    device.deviceId == me ? nil : String(localized: "恢复访问"),
+                ].compactMap { $0 }.joined(separator: " · "),
+                symbol: "lock.slash", id: "history.revokedDevice.\(device.deviceId)",
+                color: .secondaryLabel, enabled: !busy && !revoked && device.deviceId != me
+            ) { [weak self] in self?.confirmRestore(device) }
+        }
+        return SettingsSection(
+            title: String(localized: "已吊销的设备"),
+            footer: String(localized: "被吊销的设备无法再访问加密历史，直到在此恢复访问。恢复后它会登记新的历史密钥，旧历史需重新授权。"),
+            rows: rows)
+    }
+
+    private func grantSection(_ state: HistoryEncryptionState, revoked: Bool) -> SettingsSection {
         let pending = state.grants.filter(\.isPending)
         var rows = pending.map { grant in
             SettingsRow(
                 title: grant.deviceId ?? Self.short(grant.rid),
                 detail: String(localized: "申请于 \(grant.requestedAt ?? String(localized: "未知"))"),
-                symbol: "person.badge.key", id: "history.grant.\(grant.grantId)", enabled: !busy
+                symbol: "person.badge.key", id: "history.grant.\(grant.grantId)", enabled: !busy && !revoked
             ) { [weak self] in self?.chooseGrant(grant) }
         }
         if let progress { rows.append(SettingsRow(title: progress, id: "history.progress", activity: true)) }
@@ -145,7 +183,7 @@ final class HistoryEncryptionViewController: SettingsListController {
             rows: rows)
     }
 
-    private func recipientSection(_ state: HistoryEncryptionState, mine: String?) -> SettingsSection {
+    private func recipientSection(_ state: HistoryEncryptionState, mine: String?, revoked: Bool) -> SettingsSection {
         let rows = state.recipients.map { recipient in
             let name =
                 recipient.isRecovery
@@ -158,30 +196,30 @@ final class HistoryEncryptionViewController: SettingsListController {
                     recipient.isRevoked ? String(localized: "已吊销") : nil,
                 ].compactMap { $0 }.joined(separator: " · "),
                 symbol: recipient.isRecovery ? "key" : "desktopcomputer", id: "history.recipient.\(recipient.rid)",
-                color: recipient.isRevoked ? .secondaryLabel : .label, enabled: !busy && !recipient.isRevoked
+                color: recipient.isRevoked ? .secondaryLabel : .label, enabled: !busy && !revoked && !recipient.isRevoked
             ) { [weak self] in self?.confirmRevoke(recipient, isSelf: recipient.rid == mine) }
         }
         return SettingsSection(
             title: String(localized: "可解密的设备与密钥"),
-            footer: String(localized: "吊销后，之后生成的历史密钥不再为它加密；它已取得的旧密钥无法收回。"),
+            footer: String(localized: "吊销后，之后生成的历史密钥不再为它加密，设备会被永久禁止访问加密历史，直到另一台已授权设备恢复它；它已取得的旧密钥无法收回。"),
             rows: rows.isEmpty
                 ? [SettingsRow(title: String(localized: "暂无"), id: "history.recipients.empty", color: .secondaryLabel)] : rows)
     }
 
-    private func recoverySection(_ state: HistoryEncryptionState) -> SettingsSection {
+    private func recoverySection(_ state: HistoryEncryptionState, revoked: Bool) -> SettingsSection {
         var rows = [
             SettingsRow(
                 title: String(localized: "导入恢复密钥"),
                 detail: String(localized: "输入 24 个单词或扫描恢复二维码，让本机读取全部历史"),
                 symbol: "square.and.arrow.down", id: "history.recovery.import", color: Theme.accent,
-                enabled: !busy && state.activeRecovery != nil
+                enabled: !busy && !revoked && state.activeRecovery != nil
             ) { [weak self] in self?.chooseImport() }
         ]
         if state.isEnabled {
             rows.append(
                 SettingsRow(
                     title: state.activeRecovery == nil ? String(localized: "创建恢复密钥") : String(localized: "更换恢复密钥"),
-                    symbol: "arrow.triangle.2.circlepath", id: "history.recovery.replace", enabled: !busy
+                    symbol: "arrow.triangle.2.circlepath", id: "history.recovery.replace", enabled: !busy && !revoked
                 ) { [weak self] in self?.beginReplaceRecovery(hasCurrent: state.activeRecovery != nil) })
         }
         return SettingsSection(
@@ -267,12 +305,23 @@ final class HistoryEncryptionViewController: SettingsListController {
     private func confirmRevoke(_ recipient: HistoryRecipient, isSelf: Bool) {
         confirm(
             title: String(localized: "吊销此接收方？"),
-            message: isSelf
-                ? String(localized: "这是本机。吊销后本机无法读取之后的新历史，需要重新登记并申请授权。")
-                : String(localized: "吊销后它无法读取之后的新历史。"),
+            message: recipient.isRecovery
+                ? String(localized: "吊销后它无法读取之后的新历史。")
+                : isSelf
+                    ? String(localized: "这是本机。吊销是永久的：本机将无法读取任何加密历史，也不能重新登记，直到另一台已授权设备恢复它。")
+                    : String(localized: "吊销是永久的：该设备将无法读取任何加密历史，也不能重新登记，直到已授权设备在“已吊销的设备”中恢复它。恢复后它需重新申请读取旧历史。"),
             destructive: true
         ) { [weak self] in
             self?.perform { try await self?.session.revokeHistoryRecipient(recipient.rid) }
+        }
+    }
+
+    private func confirmRestore(_ device: HistoryRevokedDevice) {
+        confirm(
+            title: String(localized: "恢复此设备的访问？"),
+            message: String(localized: "恢复后该设备会登记新的历史密钥，可以读取之后的新历史；旧历史仍需它重新申请并由已授权设备批准。请确认这是你自己的设备。")
+        ) { [weak self] in
+            self?.perform { try await self?.session.restoreHistoryDevice(device.deviceId) }
         }
     }
 

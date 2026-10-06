@@ -10025,6 +10025,34 @@
         }
       }
     },
+    "吊销于 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoked %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ に取り消し"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 취소됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "吊销于 %@"
+          }
+        }
+      }
+    },
     "吊销后它无法读取之后的新历史。": {
       "localizations": {
         "en": {
@@ -10053,30 +10081,58 @@
         }
       }
     },
-    "吊销后，之后生成的历史密钥不再为它加密；它已取得的旧密钥无法收回。": {
+    "吊销后，之后生成的历史密钥不再为它加密，设备会被永久禁止访问加密历史，直到另一台已授权设备恢复它；它已取得的旧密钥无法收回。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "After revoking, new history keys are no longer encrypted for it; keys it already has cannot be taken back."
+            "value": "Once revoked, new history keys are no longer encrypted for it, and a device is permanently blocked from encrypted history until another authorized device restores it. Keys it already obtained cannot be taken back."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "取り消すと、以後の履歴鍵はその宛先に暗号化されません。すでに取得した鍵は回収できません。"
+            "value": "取り消すと、今後生成される履歴キーはそれ向けに暗号化されず、デバイスはほかの許可済みデバイスが復元するまで暗号化された履歴へのアクセスを永久に禁止されます。すでに取得した古いキーは取り戻せません。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "철회하면 이후 생성되는 기록 키는 더 이상 해당 대상에 암호화되지 않습니다. 이미 받은 키는 회수할 수 없습니다."
+            "value": "취소하면 이후 생성되는 기록 키가 더 이상 이를 위해 암호화되지 않으며, 기기는 다른 승인된 기기가 복원할 때까지 암호화된 기록 접근이 영구적으로 차단됩니다. 이미 받은 이전 키는 회수할 수 없습니다."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "吊销后，之后生成的历史密钥不再为它加密；它已取得的旧密钥无法收回。"
+            "value": "吊销后，之后生成的历史密钥不再为它加密，设备会被永久禁止访问加密历史，直到另一台已授权设备恢复它；它已取得的旧密钥无法收回。"
+          }
+        }
+      }
+    },
+    "吊销是永久的：该设备将无法读取任何加密历史，也不能重新登记，直到已授权设备在“已吊销的设备”中恢复它。恢复后它需重新申请读取旧历史。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revocation is permanent: the device can no longer read any encrypted history or register again until an authorized device restores it under “Revoked devices”. After that it must request access to older history again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り消しは永続的です。許可済みデバイスが「取り消されたデバイス」で復元するまで、そのデバイスは暗号化された履歴を読めず、再登録もできません。復元後は古い履歴の閲覧をあらためて申請する必要があります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "취소는 영구적입니다. 승인된 기기가 ‘취소된 기기’에서 복원할 때까지 해당 기기는 암호화된 기록을 읽거나 다시 등록할 수 없습니다. 복원 후에는 이전 기록 열람을 다시 요청해야 합니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "吊销是永久的：该设备将无法读取任何加密历史，也不能重新登记，直到已授权设备在“已吊销的设备”中恢复它。恢复后它需重新申请读取旧历史。"
           }
         }
       }
@@ -12009,6 +12065,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "在临时分叉中开始侧线对话"
+          }
+        }
+      }
+    },
+    "在另一台已授权设备的“会话历史加密”中恢复本机后，本机会自动登记新的历史密钥；之后需重新申请读取旧历史。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "After another authorized device restores this device under “Conversation History Encryption”, this device registers a new history key automatically. Then request access to older history again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほかの許可済みデバイスの「会話履歴の暗号化」でこのデバイスを復元すると、新しい履歴キーが自動で登録されます。その後、古い履歴の閲覧をあらためて申請してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 승인된 기기의 ‘대화 기록 암호화’에서 이 기기를 복원하면 새 기록 키가 자동으로 등록됩니다. 이후 이전 기록 열람을 다시 요청하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在另一台已授权设备的“会话历史加密”中恢复本机后，本机会自动登记新的历史密钥；之后需重新申请读取旧历史。"
           }
         }
       }
@@ -16157,6 +16241,34 @@
         }
       }
     },
+    "已吊销的设备": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoked devices"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り消されたデバイス"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "취소된 기기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已吊销的设备"
+          }
+        }
+      }
+    },
     "已同步": {
       "localizations": {
         "en": {
@@ -19433,6 +19545,34 @@
         }
       }
     },
+    "恢复后该设备会登记新的历史密钥，可以读取之后的新历史；旧历史仍需它重新申请并由已授权设备批准。请确认这是你自己的设备。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Once restored, the device registers a new history key and can read new history from then on. Older history still needs a new request approved by an authorized device. Make sure this is your own device."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元するとそのデバイスは新しい履歴キーを登録し、以降の新しい履歴を読めるようになります。古い履歴には、あらためて申請して許可済みデバイスの承認を受ける必要があります。ご自身のデバイスであることを確認してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복원하면 해당 기기는 새 기록 키를 등록하고 이후의 새 기록을 읽을 수 있습니다. 이전 기록은 다시 요청하여 승인된 기기의 승인을 받아야 합니다. 본인의 기기인지 확인하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复后该设备会登记新的历史密钥，可以读取之后的新历史；旧历史仍需它重新申请并由已授权设备批准。请确认这是你自己的设备。"
+          }
+        }
+      }
+    },
     "恢复密钥": {
       "localizations": {
         "en": {
@@ -19573,6 +19713,34 @@
         }
       }
     },
+    "恢复此设备的访问？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore this device's access?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスのアクセスを復元しますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기기의 접근을 복원할까요?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复此设备的访问？"
+          }
+        }
+      }
+    },
     "恢复目标": {
       "localizations": {
         "en": {
@@ -19597,6 +19765,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "恢复目标"
+          }
+        }
+      }
+    },
+    "恢复访问": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore access"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクセスを復元"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "접근 복원"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复访问"
           }
         }
       }
@@ -35001,6 +35197,34 @@
         }
       }
     },
+    "被吊销的设备无法再访问加密历史，直到在此恢复访问。恢复后它会登记新的历史密钥，旧历史需重新授权。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A revoked device cannot access encrypted history until its access is restored here. Once restored, it registers a new history key and needs a new grant for older history."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り消されたデバイスは、ここでアクセスを復元するまで暗号化された履歴にアクセスできません。復元後は新しい履歴キーを登録し、古い履歴にはあらためて許可が必要です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "취소된 기기는 여기에서 접근을 복원할 때까지 암호화된 기록에 접근할 수 없습니다. 복원되면 새 기록 키를 등록하며, 이전 기록에는 다시 승인이 필요합니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "被吊销的设备无法再访问加密历史，直到在此恢复访问。恢复后它会登记新的历史密钥，旧历史需重新授权。"
+          }
+        }
+      }
+    },
     "被控制电脑的实时画面": {
       "localizations": {
         "en": {
@@ -35669,6 +35893,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "设置沟通风格"
+          }
+        }
+      }
+    },
+    "访问已吊销": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Access revoked"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクセスは取り消されています"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "접근 권한 취소됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "访问已吊销"
           }
         }
       }
@@ -38837,30 +39089,30 @@
         }
       }
     },
-    "这是本机。吊销后本机无法读取之后的新历史，需要重新登记并申请授权。": {
+    "这是本机。吊销是永久的：本机将无法读取任何加密历史，也不能重新登记，直到另一台已授权设备恢复它。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This is this device. After revoking, it cannot read new history until it registers again and requests access."
+            "value": "This is this device. Revocation is permanent: this device can no longer read any encrypted history or register again until another authorized device restores it."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "これはこのデバイスです。取り消すと以後の新しい履歴を読めなくなり、再登録とアクセス申請が必要です。"
+            "value": "これはこのデバイスです。取り消しは永続的です。ほかの許可済みデバイスが復元するまで、このデバイスは暗号化された履歴を読めず、再登録もできません。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "이 기기입니다. 철회하면 이후 새 기록을 읽을 수 없으며 다시 등록하고 접근을 요청해야 합니다."
+            "value": "이 기기입니다. 취소는 영구적입니다. 다른 승인된 기기가 복원할 때까지 이 기기는 암호화된 기록을 읽거나 다시 등록할 수 없습니다."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这是本机。吊销后本机无法读取之后的新历史，需要重新登记并申请授权。"
+            "value": "这是本机。吊销是永久的：本机将无法读取任何加密历史，也不能重新登记，直到另一台已授权设备恢复它。"
           }
         }
       }

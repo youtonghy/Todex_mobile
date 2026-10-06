@@ -200,6 +200,16 @@ extension SessionSocket {
     /// `titleEnc.ct` → decrypted title, memory only: titles stay ciphertext on disk.
     private var decryptedTitles: [String: String] = [:]
     private var historyProbe: Task<Void, Never>?
+    /// This device was blocked (`HISTORY_ACCESS_REVOKED`, or `myAccess` is
+    /// `revoked`): no registration or re-key, no history commands but `get`,
+    /// until another device restores it.
+    private var historyAccessBlocked = false
+    var historyAccessRevoked: Bool { historyAccessBlocked || historyEncryption?.isAccessRevoked == true }
+    /// `history.encryption.updated` pushes are coalesced: one state read (and
+    /// at most one re-decrypt) per burst, e.g. a grant's per-batch progress.
+    private var historyUpdateTask: Task<Void, Never>?
+    private var pendingHistoryUnlock: HistoryEncryptionUpdate.UnlockScope?
+    nonisolated static let historyUpdateDebounce: Duration = .milliseconds(300)
     var connection: BackendConnection? { connections.first { $0.id == selectedID } }
     var activeConversation: ConversationManifest? { conversations.first { $0.id == activeConversationID } }
 
@@ -509,6 +519,9 @@ extension SessionSocket {
         healthTask = nil
         historyProbe?.cancel()
         historyProbe = nil
+        historyUpdateTask?.cancel()
+        historyUpdateTask = nil
+        pendingHistoryUnlock = nil
         healthLatencyMs = nil
         healthFailed = false
         versionMismatch = nil
@@ -1724,7 +1737,11 @@ extension SessionSocket {
         let deviceRid = try HistoryCrypto.recipientID(
             publicKey: HistoryCrypto.recipientKey(seed: seed).publicKey.rawRepresentation)
         let keys = try HistoryDecryptor(deviceSeed: seed) { [weak self] conversationId, kids, rid in
-            guard let api = await self?.historyAPI() else { throw TodexError.disconnected }
+            guard let self else { throw TodexError.disconnected }
+            // A blocked device is refused every lookup; skip the round trip.
+            // The server error locks the content instead of failing the page.
+            if await historyAccessRevoked { throw Self.historyAccessRevokedError }
+            guard let api = await historyAPI() else { throw TodexError.disconnected }
             // The device's own wraps use the default (caller) recipient.
             return try await api.wraps(conversationId: conversationId, kids: kids, rid: rid == deviceRid ? nil : rid)
         }
@@ -1742,9 +1759,70 @@ extension SessionSocket {
 
     private func historyAPI() -> HistoryAPI? {
         guard let socket, isConnected else { return nil }
-        return HistoryAPI { type, payload in
-            try await socket.command(type: type, payload: payload, timeout: 30, id: UUID().uuidString)
+        let current = revision
+        return HistoryAPI { [weak self] type, payload in
+            do {
+                return try await socket.command(type: type, payload: payload, timeout: 30, id: UUID().uuidString)
+            } catch TodexError.server(HistoryEncryption.accessRevoked, let message) {
+                await self?.historyAccessWasRevoked(revision: current)
+                throw TodexError.server(code: HistoryEncryption.accessRevoked, message: message)
+            }
         }
+    }
+
+    nonisolated static let historyAccessRevokedError = TodexError.server(
+        code: HistoryEncryption.accessRevoked, message: "")
+
+    /// History commands other than `get` are refused while this device is blocked.
+    private func ensureHistoryAccess() throws {
+        if historyAccessRevoked { throw Self.historyAccessRevokedError }
+    }
+
+    /// The backend refused a history command because this device was revoked:
+    /// stop registering and re-read the state (revoked devices, `myAccess`).
+    private func historyAccessWasRevoked(revision current: UUID) {
+        guard current == revision, !historyAccessBlocked else { return }
+        historyAccessBlocked = true
+        DebugLog.record("history.access.revoked", level: .warn)
+        scheduleHistoryUpdate()
+        changed()
+    }
+
+    /// `history.encryption.updated`: re-read the state after a short quiet
+    /// period; when keys were wrapped for this device, decrypt the affected
+    /// loaded conversations again so their locked rows open in place.
+    private func historyEncryptionUpdated(_ frame: JSONValue) {
+        guard let update = HistoryEncryptionUpdate(frame: frame) else { return }
+        DebugLog.record(
+            "history.encryption.updated",
+            ["reason": "\(update.reason)", "epoch": update.epoch.map(String.init) ?? ""], level: .info)
+        if let mine = historyDeviceRecipientID, let scope = update.unlockScope(forRecipient: mine) {
+            pendingHistoryUnlock = pendingHistoryUnlock.map { $0.merged(scope) } ?? scope
+        }
+        scheduleHistoryUpdate()
+    }
+
+    private func scheduleHistoryUpdate() {
+        guard historyUpdateTask == nil else { return }
+        let current = revision
+        historyUpdateTask = Task { [weak self] in
+            do { try await Task.sleep(for: Self.historyUpdateDebounce) } catch { return }
+            guard let self, current == revision else { return }
+            historyUpdateTask = nil
+            let unlock = pendingHistoryUnlock
+            pendingHistoryUnlock = nil
+            do { try await refreshHistoryEncryption() } catch {
+                guard current == revision, !(error is CancellationError) else { return }
+                DebugLog.record("history.update.failed", ["error": String(describing: error)], level: .warn)
+            }
+            guard current == revision, let unlock else { return }
+            await reloadDecryptedHistory(unlock, onlyLocked: true)
+        }
+    }
+
+    /// This device's enrolled id (`dev_…`) on the current backend.
+    var historyDeviceID: String? {
+        connection.flatMap { DeviceIdentity(secretKeyBase64URL: $0.deviceSecret)?.deviceID }
     }
 
     /// This device's recipient id on the current backend, once its key exists.
@@ -1780,25 +1858,61 @@ extension SessionSocket {
             throw error
         }
         try checkRevision(current)
-        // Registration binds the key to the connection's enrolled device id.
-        if !connection.deviceSecret.isEmpty {
+        let wasBlocked = historyAccessRevoked
+        var refused = false
+        // A revoked device never registers or re-keys: only another device's
+        // `history.device.restore` lifts the block.
+        if !state.isAccessRevoked && !connection.deviceSecret.isEmpty {
+            // Registration binds the key to the connection's enrolled device id.
             let keys = try historyKeys()
             if state.myRid != HistoryEncryption.encodeID(keys.deviceRecipientID) {
-                _ = try await api.register(publicKey: keys.devicePublicKey)
-                try checkRevision(current)
-                state = try await api.state()
+                do {
+                    try await registerHistoryKey(keys, api: api, connection: connection, revision: current)
+                    state = try await api.state()
+                } catch TodexError.server(HistoryEncryption.accessRevoked, _) {
+                    // Revoked between the two reads: stay blocked until a
+                    // later read (a push or reconnect) says otherwise.
+                    try checkRevision(current)
+                    refused = true
+                    state = try await api.state()
+                }
                 try checkRevision(current)
             }
         }
         historyEncryption = state
+        historyAccessBlocked = state.isAccessRevoked || refused
+        if wasBlocked && !state.isAccessRevoked {
+            // Restored (and registered again): retry what was refused meanwhile.
+            await historyDecryptor?.forgetUnavailable()
+        }
         changed()
         return state
+    }
+
+    /// Registers this device's history key. A revoked key can never be
+    /// registered again (`CONFLICT`), e.g. after a restore: continue with a
+    /// fresh key, which needs a new grant or the recovery key for older history.
+    private func registerHistoryKey(
+        _ keys: HistoryDecryptor, api: HistoryAPI, connection: BackendConnection, revision current: UUID
+    ) async throws {
+        do {
+            _ = try await api.register(publicKey: keys.devicePublicKey)
+        } catch TodexError.server("CONFLICT", _), TodexError.server("409", _) {
+            try checkRevision(current)
+            DebugLog.record("history.key.rekey", level: .info)
+            try historySeeds.save(HistoryCrypto.generateRecipientKey().seedRepresentation, connection.id)
+            historyDecryptor = nil
+            let fresh = try historyKeys()
+            _ = try await api.register(publicKey: fresh.devicePublicKey)
+        }
+        try checkRevision(current)
     }
 
     /// Turns e2e on (after uploading the optional recovery public key, so the
     /// first keys are wrapped for it too) or off.
     func setHistoryEncryption(enabled: Bool, recoverySeed: Data? = nil) async throws {
         guard let api = historyAPI() else { throw TodexError.disconnected }
+        try ensureHistoryAccess()
         let current = revision
         let state: HistoryEncryptionState
         if enabled {
@@ -1819,14 +1933,28 @@ extension SessionSocket {
     /// Replaces the recovery recipient with a new key's public half.
     func replaceRecoveryKey(seed: Data) async throws {
         guard let api = historyAPI() else { throw TodexError.disconnected }
+        try ensureHistoryAccess()
         _ = try await api.setRecovery(publicKey: HistoryCrypto.recipientKey(seed: seed).publicKey.rawRepresentation)
         try await refreshHistoryEncryption()
     }
 
     func revokeHistoryRecipient(_ rid: String) async throws {
         guard let api = historyAPI() else { throw TodexError.disconnected }
+        try ensureHistoryAccess()
         let current = revision
         let state = try await api.revoke(rid: rid)
+        try checkRevision(current)
+        historyEncryption = state
+        changed()
+    }
+
+    /// Lifts the permanent block of a revoked device. It then registers a
+    /// fresh key and needs a new grant for history from before.
+    func restoreHistoryDevice(_ deviceId: String) async throws {
+        guard let api = historyAPI() else { throw TodexError.disconnected }
+        try ensureHistoryAccess()
+        let current = revision
+        let state = try await api.restoreDevice(deviceId)
         try checkRevision(current)
         historyEncryption = state
         changed()
@@ -1836,13 +1964,16 @@ extension SessionSocket {
     /// device registered.
     func requestHistoryGrant() async throws {
         guard let api = historyAPI() else { throw TodexError.disconnected }
+        try ensureHistoryAccess()
         try await refreshHistoryEncryption()
+        try ensureHistoryAccess()
         _ = try await api.requestGrant()
         try await refreshHistoryEncryption()
     }
 
     func dismissHistoryGrant(_ grantId: String) async throws {
         guard let api = historyAPI() else { throw TodexError.disconnected }
+        try ensureHistoryAccess()
         try await api.dismissGrant(grantId)
         defaults.removeObject(forKey: key("history-grant-\(grantId)"))
         try await refreshHistoryEncryption()
@@ -1854,6 +1985,7 @@ extension SessionSocket {
         _ grant: HistoryGrantRequest, progress: @escaping @MainActor (HistoryGrant.Progress) -> Void
     ) async throws -> HistoryGrant.Progress {
         guard let api = historyAPI(), let connection else { throw TodexError.disconnected }
+        try ensureHistoryAccess()
         let state = try await refreshHistoryEncryption()
         guard let target = grant.recipient ?? state.recipients.first(where: { $0.rid == grant.rid && !$0.isRevoked })
         else {
@@ -1887,6 +2019,7 @@ extension SessionSocket {
         _ seed: Data, progress: @escaping @MainActor (HistoryGrant.Progress) -> Void
     ) async throws -> HistoryGrant.Progress {
         guard let api = historyAPI() else { throw TodexError.disconnected }
+        try ensureHistoryAccess()
         let state = try await refreshHistoryEncryption()
         let recovery = try HistoryCrypto.recipientKey(seed: seed)
         let recoveryRid = try HistoryCrypto.recipientID(publicKey: recovery.publicKey.rawRepresentation)
@@ -1915,17 +2048,38 @@ extension SessionSocket {
     /// Re-reads locked history after new keys arrived: forget unavailable
     /// keys and rebuild encrypted conversations from the ciphertext cache
     /// and the backend. The open conversation recovers at once.
-    func reloadDecryptedHistory() async {
+    ///
+    /// `scope` limits it to conversations that received keys; `onlyLocked`
+    /// skips conversations without a locked row (a grant pushes progress per
+    /// batch, and rebuilding an already readable timeline would only flicker).
+    func reloadDecryptedHistory(
+        _ scope: HistoryEncryptionUpdate.UnlockScope = .all, onlyLocked: Bool = false
+    ) async {
+        let current = revision
         await historyDecryptor?.forgetUnavailable()
+        guard current == revision else { return }
         decryptTitles()
-        for id in encryptedConversations where recoveryTasks[id] == nil && runtimes[id] != nil {
+        // A replay already in flight may have decrypted before the new keys
+        // existed: let it finish, then judge its rows.
+        for id in encryptedConversations where scope.contains(id) {
+            guard let flight = recoveryTasks[id] else { continue }
+            _ = try? await flight.task.value
+        }
+        guard current == revision else { return }
+        var rebuilt: Set<String> = []
+        for id in encryptedConversations where scope.contains(id) && recoveryTasks[id] == nil {
+            guard let runtime = runtimes[id] else { continue }
+            if onlyLocked, !runtime.messages.contains(where: { $0.category == ConversationRuntime.lockedCategory }) {
+                continue
+            }
             runtimes[id] = id == activeConversationID ? ConversationRuntime(conversationId: id) : nil
             historyFloors.removeValue(forKey: id)
             earlierLoading.removeValue(forKey: id)
             cacheLoaded.remove(id)
+            rebuilt.insert(id)
         }
         changed(immediate: true)
-        guard let id = activeConversationID, runtimes[id] != nil, isConnected else { return }
+        guard let id = activeConversationID, rebuilt.contains(id), runtimes[id] != nil, isConnected else { return }
         do { try await recover(id) } catch { /* recover reports once for all waiters. */ }
     }
     /// Desktop-parity fork from the list: unlike `control`, it needs no replayed
@@ -2388,6 +2542,8 @@ extension SessionSocket {
             }
         } else if type.hasPrefix("codex.") {
             routeCodex(frame, type: type)
+        } else if type == HistoryEncryptionUpdate.type {
+            historyEncryptionUpdated(frame)
         } else if type == "server.error", frame["id"].isNull {
             let payload = frame["payload"]
             // The backend replays after a lag notice; nothing is lost.
@@ -2830,6 +2986,7 @@ extension SessionSocket {
         cacheLoaded = []
         historyEncryption = nil
         historyDecryptor = nil
+        historyAccessBlocked = false
         encryptedConversations = []
         decryptedTitles = [:]
         dirtyCaches = []
