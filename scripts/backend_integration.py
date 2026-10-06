@@ -507,7 +507,10 @@ def verify(root, manifest):
             ws.command("conversation.queue.resume", {"conversationId": qid})
             resumed = delivered("fixture-after-cancel")
             ws.event(qid, "turn.completed", resumed["sequence"])
-            require(queue() == {"items": [], "paused": False, "pauseReason": None, "pauseMessage": None}, "Resume must drain the queue")
+            drained = queue()
+            # `resumeAt` (rate-limit auto-resume) is newer than some backends.
+            require(drained.get("resumeAt") is None and {key: drained.get(key) for key in ("items", "paused", "pauseReason", "pauseMessage")}
+                    == {"items": [], "paused": False, "pauseReason": None, "pauseMessage": None}, "Resume must drain the queue: " + json.dumps(drained))
             return qid
         check("backend-follow-up-queue", follow_up_queue)
 
