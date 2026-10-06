@@ -53,6 +53,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | GET | `/v2/git/status` | `gitStatus(workspacePath:)` | 已封装；认证 | `endpointWire(gitStatus)` |
 | POST | `/v2/git/operation` | `gitOperation(_:)` | 已封装；认证；JSONValue 原样发送 | `endpointWire(gitOperation)` |
 | GET | `/v2/git/pull-request` | `gitPullRequest(workspacePath:)` | 已封装；认证 | `endpointWire(gitPullRequest)` |
+| GET | `/v2/git/log` | `gitLog(workspacePath:skip:limit:)` | 已封装；认证；旧后端 404 时 Git 菜单显示“需更新后端” | `endpointWire(gitLog)` |
 | GET | `/v2/git/diff` | `gitDiff(workspacePath:path:)` | 已封装；认证 | `endpointWire(gitDiff)` |
 | POST | `/v2/browser/fetch` | `browserFetch(url:)` | 已封装；认证 | `endpointWire(browserFetch)` |
 | GET | `/v2/providers` | `providers()` | 已封装；认证；解包 providers | `endpointWire(providers)` |

@@ -622,6 +622,10 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
             query: ["workspacePath": workspacePath]
         ) { try await $0.gitPullRequest(workspacePath: workspacePath) },
         .init(
+            name: "gitLog", method: "GET", path: "/v2/git/log",
+            query: ["workspacePath": workspacePath, "skip": "5", "limit": "5"]
+        ) { try await $0.gitLog(workspacePath: workspacePath, skip: 5, limit: 5) },
+        .init(
             name: "gitDiff", method: "GET", path: "/v2/git/diff",
             query: ["workspacePath": workspacePath, "path": "src/文件 &+?#%.swift"]
         ) { try await $0.gitDiff(workspacePath: workspacePath, path: "src/文件 &+?#%.swift") },

@@ -233,6 +233,13 @@ public final class APIClient: Sendable {
         try await queryRequest(path: "/v2/git/pull-request", query: ["workspacePath": workspacePath])
     }
 
+    /// Newest-first commit page; backends that predate the route answer 404.
+    public func gitLog(workspacePath: String, skip: Int, limit: Int) async throws -> JSONValue {
+        try await queryRequest(
+            path: "/v2/git/log",
+            query: ["workspacePath": workspacePath, "skip": String(skip), "limit": String(limit)])
+    }
+
     public func gitDiff(workspacePath: String, path: String) async throws -> JSONValue {
         try await queryRequest(
             path: "/v2/git/diff", query: ["workspacePath": workspacePath, "path": path])
