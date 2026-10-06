@@ -13,6 +13,9 @@ public enum HistoryEncryption {
     public static let lockedField = "detailLocked"
     public static let clientUpgradeRequired = "CLIENT_UPGRADE_REQUIRED"
     public static let storageLow = "STORAGE_LOW"
+    /// This device was revoked: every history command but
+    /// `history.encryption.get` fails until another device restores it.
+    public static let accessRevoked = "HISTORY_ACCESS_REVOKED"
     /// `history.keys.list`, `history.keys.wraps` and `history.grant.fulfill` batch limit.
     public static let batchLimit = 500
 
@@ -248,7 +251,20 @@ public struct HistoryGrantRequest: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// `history.encryption.get|enable|disable` and `history.recipient.revoke`.
+/// A device whose history access was revoked; it stays blocked until an
+/// authorized device restores it (`history.device.restore`).
+public struct HistoryRevokedDevice: Codable, Sendable, Equatable, Identifiable {
+    public var deviceId: String
+    public var revokedAt: String?
+    public var id: String { deviceId }
+    public init(deviceId: String, revokedAt: String? = nil) {
+        self.deviceId = deviceId
+        self.revokedAt = revokedAt
+    }
+}
+
+/// `history.encryption.get|enable|disable`, `history.recipient.revoke` and
+/// `history.device.restore`.
 public struct HistoryEncryptionState: Codable, Sendable, Equatable {
     /// `off` or `e2e`.
     public var mode: String
@@ -257,21 +273,30 @@ public struct HistoryEncryptionState: Codable, Sendable, Equatable {
     /// This device's recipient id when it has registered.
     public var myRid: String?
     public var grants: [HistoryGrantRequest]
+    /// `active`, `unregistered` or `revoked`; nil from backends that predate
+    /// permanent revocation.
+    public var myAccess: String?
+    public var revokedDevices: [HistoryRevokedDevice]
     public var isEnabled: Bool { mode == "e2e" }
     public var activeRecovery: HistoryRecipient? { recipients.first { $0.isRecovery && !$0.isRevoked } }
+    /// This device is blocked: it must not register and cannot use history
+    /// commands until another device restores it.
+    public var isAccessRevoked: Bool { myAccess == "revoked" }
 
     public init(
         mode: String = "off", epoch: Int = 0, recipients: [HistoryRecipient] = [], myRid: String? = nil,
-        grants: [HistoryGrantRequest] = []
+        grants: [HistoryGrantRequest] = [], myAccess: String? = nil, revokedDevices: [HistoryRevokedDevice] = []
     ) {
         self.mode = mode
         self.epoch = epoch
         self.recipients = recipients
         self.myRid = myRid
         self.grants = grants
+        self.myAccess = myAccess
+        self.revokedDevices = revokedDevices
     }
 
-    private enum CodingKeys: String, CodingKey { case mode, epoch, recipients, myRid, grants }
+    private enum CodingKeys: String, CodingKey { case mode, epoch, recipients, myRid, grants, myAccess, revokedDevices }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         mode = try c.decode(String.self, forKey: .mode)
@@ -279,6 +304,95 @@ public struct HistoryEncryptionState: Codable, Sendable, Equatable {
         recipients = try c.decodeIfPresent([HistoryRecipient].self, forKey: .recipients) ?? []
         myRid = try c.decodeIfPresent(String.self, forKey: .myRid)
         grants = try c.decodeIfPresent([HistoryGrantRequest].self, forKey: .grants) ?? []
+        myAccess = try c.decodeIfPresent(String.self, forKey: .myAccess)
+        revokedDevices = try c.decodeIfPresent([HistoryRevokedDevice].self, forKey: .revokedDevices) ?? []
+    }
+}
+
+/// The global `history.encryption.updated` push: the backend's history key
+/// state changed. It carries no key material; clients re-read the state and,
+/// when keys were wrapped for them, retry content they could not decrypt.
+public struct HistoryEncryptionUpdate: Sendable, Equatable {
+    public static let type = "history.encryption.updated"
+
+    /// Pushed reasons; an unknown future reason still means "re-read the state".
+    public enum Reason: Sendable, Equatable {
+        case mode, recipientRegistered, recipientRevoked, deviceRestored, deviceRevoked, recoverySet
+        case grantRequested, grantDismissed, grantProgress, grantFulfilled
+        case other(String)
+
+        public init(_ raw: String) {
+            self =
+                switch raw {
+                case "mode": .mode
+                case "recipient.registered": .recipientRegistered
+                case "recipient.revoked": .recipientRevoked
+                case "device.restored": .deviceRestored
+                case "device.revoked": .deviceRevoked
+                case "recovery.set": .recoverySet
+                case "grant.requested": .grantRequested
+                case "grant.dismissed": .grantDismissed
+                case "grant.progress": .grantProgress
+                case "grant.fulfilled": .grantFulfilled
+                default: .other(raw)
+                }
+        }
+    }
+
+    /// Which loaded conversations to decrypt again.
+    public enum UnlockScope: Sendable, Equatable {
+        /// Only these conversations received new wraps.
+        case conversations(Set<String>)
+        /// Every loaded encrypted conversation (the push did not say which).
+        case all
+
+        public func merged(_ other: UnlockScope) -> UnlockScope {
+            switch (self, other) {
+            case (.conversations(let a), .conversations(let b)): .conversations(a.union(b))
+            default: .all
+            }
+        }
+
+        public func contains(_ conversationId: String) -> Bool {
+            switch self {
+            case .all: true
+            case .conversations(let ids): ids.contains(conversationId)
+            }
+        }
+    }
+
+    public var eventId: String?
+    public var epoch: Int?
+    public var mode: String?
+    public var reason: Reason
+    public var rid: String?
+    public var deviceId: String?
+    public var grantId: String?
+    /// Conversations that received new wraps (`grant.progress`); nil when not listed.
+    public var conversationIds: [String]?
+
+    /// Nil for any other frame.
+    public init?(frame: JSONValue) {
+        guard frame["type"] == .string(Self.type), case .object = frame["payload"] else { return nil }
+        let payload = frame["payload"]
+        eventId = frame["eventId"].optionalString
+        epoch = HistoryEncryption.unsigned(payload["epoch"]).map { Int(clamping: $0) }
+        mode = payload["mode"].optionalString
+        reason = Reason(payload["reason"].stringValue)
+        rid = payload["rid"].optionalString
+        deviceId = payload["deviceId"].optionalString
+        grantId = payload["grantId"].optionalString
+        if case .array(let ids) = payload["conversationIds"] {
+            conversationIds = ids.compactMap { $0.optionalString }.filter { !$0.isEmpty }
+        }
+    }
+
+    /// Keys were wrapped for `rid`: which of its conversations to decrypt
+    /// again, or nil when this push does not concern that recipient.
+    public func unlockScope(forRecipient rid: String) -> UnlockScope? {
+        guard [.grantProgress, .grantFulfilled].contains(reason), let target = self.rid, target == rid else { return nil }
+        guard let conversationIds, !conversationIds.isEmpty else { return .all }
+        return .conversations(Set(conversationIds))
     }
 }
 
@@ -339,6 +453,12 @@ public struct HistoryAPI: Sendable {
     public func disable() async throws -> HistoryEncryptionState { try await state(.historyEncryptionDisable) }
     public func revoke(rid: String) async throws -> HistoryEncryptionState {
         try await state(.historyRecipientRevoke, ["rid": .string(rid)])
+    }
+
+    /// Lifts a revoked device's block; it then registers a fresh key and
+    /// needs a new grant (or the recovery key) for older history.
+    public func restoreDevice(_ deviceId: String) async throws -> HistoryEncryptionState {
+        try await state(.historyDeviceRestore, ["deviceId": .string(deviceId)])
     }
 
     /// Registers this device's public key; idempotent, a new key replaces the old.

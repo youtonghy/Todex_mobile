@@ -89,6 +89,7 @@ public enum ProtocolCatalog {
         case historyKeysList = "history.keys.list"
         case historyKeysWraps = "history.keys.wraps"
         case historyGrantFulfill = "history.grant.fulfill"
+        case historyDeviceRestore = "history.device.restore"
     }
 
     public struct CommandDescriptor: Sendable, Identifiable, Equatable {
@@ -190,7 +191,7 @@ public enum ProtocolCatalog {
                 "Starts or stops agentBrowser.frame for one owned conversation's agent browser tab (latest frame wins, at most 8 per connection); idempotent."
         case .historyEncryptionGet, .historyEncryptionEnable, .historyEncryptionDisable, .historyRecipientRegister,
             .historyRecipientRevoke, .historyRecoverySet, .historyGrantRequest, .historyGrantList, .historyGrantDismiss,
-            .historyKeysList, .historyKeysWraps, .historyGrantFulfill:
+            .historyKeysList, .historyKeysWraps, .historyGrantFulfill, .historyDeviceRestore:
             support = .conditional
             detail =
                 "History v3 key management (docs/history-encryption.md section 7); requires a backend with history encryption and a device-authenticated connection. The backend never sees a DEK."

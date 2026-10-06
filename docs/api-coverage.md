@@ -6,7 +6,7 @@
 - WS 分派及 wire：[websocket.rs](../../TodeX_backend/src/server/websocket.rs)、[protocol.rs](../../TodeX_backend/src/server/protocol.rs)。
 - 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。共享客户端 [v2.ts](../../TodeX_protocol/src/v2.ts) 仅作交叉参考。
 
-**67/67 个普通 HTTP method + path 已封装，71/71 个 WS 可识别命令已编目（含 2026-10-06 补充的 12 个 `history.*` 命令）。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 67 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
+**67/67 个普通 HTTP method + path 已封装，72/72 个 WS 可识别命令已编目（含 2026-10-06 补充的 13 个 `history.*` 命令）。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 67 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
 ## 验证范围
 
@@ -183,10 +183,12 @@ swift test --package-path /path/to/TodexCore-copy \
 | `codex.cloudTask.apply` | Unsupported | 缺少云 HTTP adapter 调用，处理器拒绝。 |
 | `agentBrowser.watch` | Supported | 2026-10-06 补充。开始推送该会话 Agent 浏览器标签页的 `agentBrowser.frame`（base64 JPEG；连接慢时只保留最新帧；`closed: true` 表示无标签页）；每连接最多 8 个。`RealtimeClient` 把帧放入独立的 `browserFrames`（只保留最新 8 帧），不进入 `events` 与事件日志；`AppSession` 重连后重新发送仍在观看的会话。 |
 | `agentBrowser.unwatch` | Supported | 停止该会话的帧推送；幂等。 |
-| `history.encryption.get` / `.enable` / `.disable` | Conditional | 2026-10-06 补充，会话历史端到端加密（[规格](../../TodeX_backend/docs/history-encryption.md) §7）。返回 `{mode, epoch, recipients[], myRid?, grants[]}`；`HistoryAPI` 封装，后端尚未实现时客户端静默视为不支持。 |
+| `history.encryption.get` / `.enable` / `.disable` | Conditional | 2026-10-06 补充，会话历史端到端加密（[规格](../../TodeX_backend/docs/history-encryption.md) §7）。返回 `{mode, epoch, recipients[], myRid?, grants[], myAccess?, revokedDevices[]}`；`myAccess=revoked` 时本机停止自动登记并禁用历史操作；`HistoryAPI` 封装，后端尚未实现时客户端静默视为不支持。 |
 | `history.recipient.register` / `.revoke`、`history.recovery.set` | Conditional | 登记本机 X-Wing 公钥（连接后自动）、吊销接收方、上传恢复密钥公钥。 |
 | `history.grant.request` / `.list` / `.dismiss` / `.fulfill` | Conditional | 旧历史授权：本机在本地解包后为目标 `rid` 重新封装，每批 ≤500，`HistoryGrant` 按页记录进度可续跑；导入恢复密钥时以空 `grantId` 自授权。 |
 | `history.keys.list` / `.wraps` | Conditional | 枚举 `kid` 与取回封装；`HistoryDecryptor` 按需取回并以有界 LRU 缓存 DEK。 |
+| `history.device.restore` | Conditional | 解除被吊销设备的永久封锁（吊销设备接收方即封锁该 `deviceId`，其历史命令除 `history.encryption.get` 外均返回 `HISTORY_ACCESS_REVOKED`/403）；返回同 get。恢复后该设备以新密钥登记，旧历史需重新授权。 |
+| 推送 `history.encryption.updated` | Supported | 全局帧（非 `conversation.event`），不含密钥材料。客户端防抖后重读状态；`grant.progress`/`grant.fulfilled` 且 `rid` 为本机时清空解密器不可用缓存，重新解密已载入的锁定对话（`conversationIds` 或全部）。 |
 
 协议清单还明确区分会话事件的 sequence 与旧 gateway 的 cursor。未知未来 command 的 descriptor 返回 nil；开放 event type/payload 仍可解码。加密协商、socket 连接和重连生命周期不由这两个 envelope 执行。
 

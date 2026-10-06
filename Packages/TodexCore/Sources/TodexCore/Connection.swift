@@ -116,6 +116,8 @@ public enum TodexError: Error, LocalizedError, Sendable {
         case .invalid(let s), .configuration(let s): s
         case .server(HistoryEncryption.clientUpgradeRequired, _):
             String(localized: "此后端已开启会话历史端到端加密，当前客户端无法读取，请更新 TodeX 应用。", bundle: .module)
+        case .server(HistoryEncryption.accessRevoked, _):
+            String(localized: "此设备的历史访问已被吊销，需由其他已授权设备恢复", bundle: .module)
         case .server(HistoryEncryption.storageLow, _), .server("507", _):
             String(localized: "后端所在电脑的磁盘可用空间不足 1 GiB，暂时无法发送新消息。请清理磁盘后重试。", bundle: .module)
         case .server(_, let message): message

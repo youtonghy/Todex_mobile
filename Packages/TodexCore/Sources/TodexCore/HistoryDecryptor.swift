@@ -37,7 +37,12 @@ public actor HistoryDecryptor {
     private var keys: [Data: (key: HistoryCrypto.SegmentKey, used: UInt64)] = [:]
     private var useCounter: UInt64 = 0
     private var unavailable: [Data: ContinuousClock.Instant] = [:]
-    private var inflight: [Data: Task<Void, any Error>] = [:]
+    /// In-flight wrap lookups by kid, tagged with the `generation` they started in.
+    private var inflight: [Data: (generation: UInt64, task: Task<Void, any Error>)] = [:]
+    /// Bumped by `forgetUnavailable()`: a lookup that started earlier may have
+    /// been answered before the new wraps existed, so its misses are not
+    /// recorded and later callers do not join it.
+    private var generation: UInt64 = 0
     private static let unavailableLimit = 4_096
     /// Recently opened sealed frames, newest last. Socket replay attaches the
     /// same frame to every message that references it and each message is
@@ -66,11 +71,17 @@ public actor HistoryDecryptor {
     /// keys this device has none for. The seed lives only in memory.
     public func setRecoverySeed(_ seed: Data?) throws {
         recovery = try seed.map { try Recipient(seed: $0) }
-        unavailable.removeAll()
+        forgetUnavailable()
     }
 
     /// Retry every key that was unavailable, e.g. after a grant was fulfilled.
-    public func forgetUnavailable() { unavailable.removeAll() }
+    /// Lookups already in flight may predate the new wraps: their misses are
+    /// discarded and the next decrypt asks again.
+    public func forgetUnavailable() {
+        unavailable.removeAll()
+        generation &+= 1
+        inflight.removeAll()
+    }
 
     public var cachedKeyCount: Int { keys.count }
 
@@ -227,19 +238,22 @@ public actor HistoryDecryptor {
         var missing: [Data] = []
         for kid in kids where keys[kid] == nil {
             if let since = unavailable[kid], now - since < retryInterval { continue }
-            if let task = inflight[kid] { waiting.append(task) } else { missing.append(kid) }
+            if let entry = inflight[kid] { waiting.append(entry.task) } else { missing.append(kid) }
         }
+        let started = generation
         for start in stride(from: 0, to: missing.count, by: HistoryEncryption.batchLimit) {
             let batch = Array(missing[start..<min(start + HistoryEncryption.batchLimit, missing.count)])
-            let task = Task { try await self.fetch(batch, conversationId: conversationId) }
-            for kid in batch { inflight[kid] = task }
+            let task = Task { try await self.fetch(batch, conversationId: conversationId, generation: started) }
+            for kid in batch { inflight[kid] = (started, task) }
             waiting.append(task)
         }
         for task in waiting { try await task.value }
     }
 
-    private func fetch(_ kids: [Data], conversationId: String) async throws {
-        defer { for kid in kids { inflight.removeValue(forKey: kid) } }
+    private func fetch(_ kids: [Data], conversationId: String, generation started: UInt64) async throws {
+        defer {
+            for kid in kids where inflight[kid]?.generation == started { inflight.removeValue(forKey: kid) }
+        }
         var remaining = Set(kids)
         for recipient in [device, recovery].compactMap({ $0 }) where !remaining.isEmpty {
             let wraps: [Data: HistoryCrypto.WrappedKey]
@@ -256,6 +270,7 @@ public actor HistoryDecryptor {
                 remaining.remove(kid)
             }
         }
-        markUnavailable(remaining)
+        // Misses from before `forgetUnavailable()` may be stale; do not keep them.
+        if started == generation { markUnavailable(remaining) }
     }
 }

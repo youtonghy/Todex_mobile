@@ -347,7 +347,7 @@ struct APIClientTests {
             agentBrowser.watch agentBrowser.unwatch
             history.encryption.get history.encryption.enable history.encryption.disable history.recipient.register
             history.recipient.revoke history.recovery.set history.grant.request history.grant.list history.grant.dismiss
-            history.keys.list history.keys.wraps history.grant.fulfill
+            history.keys.list history.keys.wraps history.grant.fulfill history.device.restore
             """.split(whereSeparator: \.isWhitespace).map(String.init))
         #expect(Set(ProtocolCatalog.commands.map(\.type)) == expected)
         #expect(ProtocolCatalog.commands.count == expected.count)

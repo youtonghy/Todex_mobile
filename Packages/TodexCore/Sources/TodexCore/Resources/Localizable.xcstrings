@@ -3305,6 +3305,34 @@
         }
       }
     },
+    "此设备的历史访问已被吊销，需由其他已授权设备恢复": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device's history access was revoked. Another authorized device must restore it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスの履歴アクセスは取り消されました。ほかの許可済みデバイスで復元する必要があります"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기기의 기록 접근 권한이 취소되었습니다. 다른 승인된 기기에서 복원해야 합니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此设备的历史访问已被吊销，需由其他已授权设备恢复"
+          }
+        }
+      }
+    },
     "此连接已使用该请求 ID，请勿重复提交": {
       "localizations": {
         "en": {
