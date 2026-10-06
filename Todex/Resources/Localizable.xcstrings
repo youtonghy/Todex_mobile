@@ -39145,6 +39145,34 @@
         }
       }
     },
+    "额度已用尽，重置后自动继续": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usage limit reached; continues automatically after the reset"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "利用上限に達しました。リセット後に自動で続行します"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용 한도에 도달했습니다. 초기화 후 자동으로 계속합니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "额度已用尽，重置后自动继续"
+          }
+        }
+      }
+    },
     "首次使用时创建": {
       "localizations": {
         "en": {

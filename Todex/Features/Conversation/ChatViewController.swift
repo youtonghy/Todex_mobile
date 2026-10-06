@@ -2544,6 +2544,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         case "turn_interrupted": String(localized: "上一轮被中断，已暂停")
         case "start_failed": String(localized: "无法开始，已暂停")
         case "daemon_restarted": String(localized: "后端已重启，已暂停")
+        case "rate_limited": String(localized: "额度已用尽，重置后自动继续")
         default: String(localized: "已暂停")
         }
     }
