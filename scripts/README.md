@@ -25,6 +25,7 @@ The server stays running after verification. `stop` targets only the daemon reco
 | --- | --- |
 | `fixture.json` | HTTP/WS URL, PID, executable hash, temporary HOME/config/workspace paths, and IDs created during verification |
 | `device.txt` | Base64url Ed25519 seed of the fixture device pre-enrolled in `data/devices.json`; owner-readable |
+| `device-b.txt` | Seed of a second pre-enrolled device (`dev_tgAwbPp2cj_ew5Xl`) for multi-device history tests (grant push, revoke, restore); owner-readable |
 | `simulator-connection.json` | `serverURL`, `deviceSecret`, `encryption: none`, and `publicKey` for integration harnesses; not a promised app import format |
 | `integration-report.json` | Pass/fail per check and observed HTTP status codes |
 | `conversation-events.json` | Persisted Codex events returned by actual paginated REST replay |
@@ -100,6 +101,6 @@ Per-simulator prerequisites:
 - The completion-notification test needs notification authorization already granted for `com.todex.mobile` (`simctl privacy` cannot grant it). Enable the app's 完成通知 toggle once and accept the prompt, or rerun the test after a first attempt creates the authorization entry.
 - `#` skill suggestions read `workspaces/project/.codex/skills/fixture-skill` and the Git menu's worktree entry reads the `wt-fixture` linked worktree; `backend_fixture.py start` creates both. Fixtures started before that change need them added manually.
 
-`run_session_tests.sh` requires macOS 26+ and Swift 6.2+. It builds TodexCore and the real AppSession/LocalStore sources in a fresh temporary Swift package, runs 13 bounded regression scenarios with HTTP/Socket/Keychain substitutes, and removes its generated build and test data on exit. It needs network access to fetch dependencies; it does not depend on an earlier `/tmp` build or call a provider.
+`run_session_tests.sh` requires macOS 26+ and Swift 6.2+. It builds TodexCore and the real AppSession/LocalStore sources in a fresh temporary Swift package, runs 32 bounded regression scenarios with HTTP/Socket/Keychain substitutes, and removes its generated build and test data on exit. It needs network access to fetch dependencies; it does not depend on an earlier `/tmp` build or call a provider.
 
 The one authorized real Codex request is documented separately in [real-provider-validation.md](../docs/real-provider-validation.md). It must not be rerun by this suite.

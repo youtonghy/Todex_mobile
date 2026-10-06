@@ -192,7 +192,45 @@ actor FakeSocket: SessionSocket {
     /// `history.keys.wraps` answers: kid text → WrappedKey JSON.
     var historyWraps: [String: JSONValue] = [:]
     func setHistoryWrap(kid: String, wrapped: JSONValue) { historyWraps[kid] = wrapped }
+    /// Answers `history.*` key management (not wraps) once enabled; before
+    /// that the empty reply reads as a backend without history encryption.
+    var historyBackend = false
+    var historyAccess = "active"
+    var historyRid: String?
+    var revokedHistoryKeys: Set<String> = []
+    var revokedDevices: [JSONValue] = []
+    /// Every `history.*` command type except wraps, in send order.
+    var historyLog: [String] = []
+    var registeredKeys: [String] = []
+    func configureHistory(access: String, revokedKeys: Set<String> = [], revokedDevices: [JSONValue] = []) {
+        historyBackend = true; historyAccess = access; revokedHistoryKeys = revokedKeys; self.revokedDevices = revokedDevices
+    }
+    var historyState: JSONValue {
+        var state: JSONValue = ["mode": "e2e", "epoch": 1, "recipients": [], "grants": [], "myAccess": .string(historyAccess), "revokedDevices": .array(revokedDevices)]
+        if let historyRid { state["myRid"] = .string(historyRid) }
+        return state
+    }
+    func historyCommand(_ type: String, _ payload: JSONValue) throws -> JSONValue {
+        historyLog.append(type)
+        if historyAccess == "revoked" && type != "history.encryption.get" {
+            throw TodexError.server(code: "HISTORY_ACCESS_REVOKED", message: "revoked")
+        }
+        if type == "history.recipient.register" {
+            let key = payload["publicKey"].stringValue
+            registeredKeys.append(key)
+            if revokedHistoryKeys.contains(key) { throw TodexError.server(code: "CONFLICT", message: "revoked key") }
+            historyRid = HistoryEncryption.encodeID(try HistoryCrypto.recipientID(publicKey: base64URLDecoded(key)))
+            historyAccess = "active"
+            return ["rid": .string(historyRid!)]
+        }
+        if type == "history.grant.request" { return ["grantId": "grt_1"] }
+        return historyState
+    }
     func command(type: String, payload: JSONValue, timeout: TimeInterval, id: String) async throws -> JSONValue {
+        if historyBackend, type.hasPrefix("history."), type != "history.keys.wraps" { return try historyCommand(type, payload) }
+        if historyBackend, type == "history.keys.wraps", historyAccess == "revoked" {
+            throw TodexError.server(code: "HISTORY_ACCESS_REVOKED", message: "revoked")
+        }
         if type == "conversation.control" { controls.append(payload); return ["accepted": true] }
         if type == "conversation.retry" {
             retries.append(payload)
@@ -250,6 +288,16 @@ actor FakeSocket: SessionSocket {
         return [:]
     }
 }
+nonisolated func base64URLDecoded(_ text: String) throws -> Data {
+    var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+    base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+    guard let data = Data(base64Encoded: base64) else { throw Failure(description: "bad base64url") }
+    return data
+}
+@MainActor final class SeedBox {
+    var value: Data?
+    init(_ value: Data?) { self.value = value }
+}
 @MainActor struct Harness {
     let backend: Backend
     let socket: FakeSocket
@@ -257,10 +305,13 @@ actor FakeSocket: SessionSocket {
     let connection: BackendConnection
     let session: AppSession
     let manifest = ConversationManifest(id: "c", provider: "codex", workspace: "/workspace", workspaceId: "w")
-    init(_ journal: [ConversationEvent] = [], snapshot: SessionSnapshot? = nil, historySeed: Data? = nil) throws {
+    /// The device history seed as the Keychain would hold it; a re-key replaces it.
+    let seeds: SeedBox
+    init(_ journal: [ConversationEvent] = [], snapshot: SessionSnapshot? = nil, historySeed: Data? = nil, deviceSecret: String = "") throws {
         backend = Backend(journal); socket = FakeSocket(backend: backend)
         let host = UUID().uuidString.lowercased() + ".invalid"
-        connection = BackendConnection(id: "test-" + UUID().uuidString, name: "Fixture", serverURL: "https://" + host, deviceSecret: "")
+        connection = BackendConnection(id: "test-" + UUID().uuidString, name: "Fixture", serverURL: "https://" + host, deviceSecret: deviceSecret)
+        let seeds = SeedBox(historySeed); self.seeds = seeds
         store = try TestEnvironment.store()
         if let snapshot { try store.save(snapshot, key: LocalStore.namespace(connection) + "-state") }
         FixtureProtocol.register(backend, host: host)
@@ -270,7 +321,7 @@ actor FakeSocket: SessionSocket {
             let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [FixtureProtocol.self]
             return APIClient(connection: value, session: URLSession(configuration: config))
         }, socketFactory: { _ in socket }, credentialWriter: { _, _ in },
-        historySeeds: HistorySeedStore(load: { _ in historySeed }, save: { _, _ in }))
+        historySeeds: HistorySeedStore(load: { _ in seeds.value }, save: { value, _ in seeds.value = value }))
     }
     func ready() async throws {
         await session.connect()
@@ -1000,6 +1051,112 @@ actor FakeSocket: SessionSocket {
     try await eventually("last view unwatches") { await h.socket.browserWatches.last == "agentBrowser.unwatch:c" }
     h.session.disconnect()
 }
+
+/// Content sealed under `key` for conversation "c" at sequence `n`.
+@MainActor func sealedEvent(_ n: Int, key: HistoryCrypto.SegmentKey, turn: String, text: String) throws -> ConversationEvent {
+    let payload: JSONValue = ["turnId": .string(turn), "text": .string(text)]
+    let ciphertext = try HistoryCrypto.seal(
+        JSONEncoder().encode(payload), key: key, conversationID: "c", stream: .eventFull, counter: UInt64(n))
+    return event(n, "message.delta", ["turnId": .string(turn), "$enc": ["v": 1, "kid": .string(HistoryEncryption.encodeID(key.kid)), "c": "c",
+        "n": .number(Double(n)), "f": .string(HistoryEncryption.encodeID(ciphertext))]])
+}
+nonisolated func historyPush(_ reason: String, rid: String? = nil, deviceId: String? = nil, conversations: [String]? = nil) -> JSONValue {
+    var payload: JSONValue = ["epoch": 2, "mode": "e2e", "reason": .string(reason)]
+    if let rid { payload["rid"] = .string(rid) }
+    if let deviceId { payload["deviceId"] = .string(deviceId) }
+    if let conversations { payload["conversationIds"] = .array(conversations.map { .string($0) }) }
+    return ["eventId": .string(UUID().uuidString), "type": "history.encryption.updated", "payload": payload]
+}
+/// Device B's open conversation shows locked rows; another device fulfills
+/// its grant and the push alone (no reload, no reopen) unlocks them.
+@MainActor func grantPushUnlocksLoadedConversation() async throws {
+    let device = try HistoryCrypto.generateRecipientKey()
+    let key = HistoryCrypto.SegmentKey.generate()
+    let secret = "granted secret reply"
+    let h = try Harness(
+        [event(1, "turn.started", ["turnId": "t"]), try sealedEvent(2, key: key, turn: "t", text: secret), event(3, "turn.completed", ["turnId": "t"])],
+        historySeed: device.seedRepresentation)
+    await h.socket.configureHistory(access: "active")
+    await h.backend.setReversePages(false)
+    h.session.activeConversationID = "c"
+    try await h.ready()
+    let isLocked = { h.session.runtimes["c"]?.messages.contains { $0.category == ConversationRuntime.lockedCategory } == true }
+    try check(isLocked(), "no wrap yet: the reply should be locked")
+    let mine = try required(h.session.historyDeviceRecipientID)
+    // The grant lands on the backend.
+    await h.socket.setHistoryWrap(
+        kid: HistoryEncryption.encodeID(key.kid),
+        wrapped: try JSONValue(encoding: HistoryCrypto.wrap(key, for: device.publicKey.rawRepresentation)))
+    // Pushes for another device leave this one alone (the miss stays cached).
+    let calls = await h.backend.eventCalls
+    await h.socket.emitFrame(historyPush("grant.progress", rid: "someone-else", conversations: ["c"]))
+    await h.socket.emitFrame(historyPush("grant.requested", rid: "someone-else"))
+    try await eventually("state re-read after pushes") { await h.socket.historyLog.filter { $0 == "history.encryption.get" }.count >= 2 }
+    try await Task.sleep(for: .milliseconds(100))
+    try check(isLocked() && h.session.runtimes["c"]?.readyForActions == true, "a push for another device reloaded this one")
+    try check(await h.backend.eventCalls == calls, "a push for another device refetched history")
+    // A burst of progress pushes for this device: one rebuild, rows unlock in place.
+    for _ in 0..<3 { await h.socket.emitFrame(historyPush("grant.progress", rid: mine, conversations: ["c", "other"])) }
+    await h.socket.emitFrame(historyPush("grant.fulfilled", rid: mine))
+    try await eventually("locked rows unlock without reload") {
+        !isLocked() && h.session.runtimes["c"]?.readyForActions == true
+            && h.session.runtimes["c"]?.messages.map(\.text) == [secret]
+    }
+    try check(h.session.activeConversationID == "c", "the open conversation changed")
+    h.session.disconnect()
+}
+/// A revoked device never registers or re-keys; another device's restore
+/// lifts the block, after which it registers a fresh key (its old one is
+/// permanently revoked and refused with CONFLICT).
+@MainActor func revokedDeviceStaysUnregisteredUntilRestored() async throws {
+    let device = try HistoryCrypto.generateRecipientKey()
+    let oldKey = HistoryEncryption.encodeID(device.publicKey.rawRepresentation)
+    let secret = "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU"
+    let me = try required(DeviceIdentity(secretKeyBase64URL: secret)?.deviceID)
+    let h = try Harness([event(1)], historySeed: device.seedRepresentation, deviceSecret: secret)
+    await h.socket.configureHistory(
+        access: "revoked", revokedKeys: [oldKey], revokedDevices: [["deviceId": .string(me), "revokedAt": "2026-10-06T00:00:00Z"]])
+    try await h.ready()
+    try await eventually("revoked state read") { h.session.historyEncryption?.isAccessRevoked == true }
+    try check(h.session.historyAccessRevoked, "revoked state not exposed")
+    try check(h.session.historyEncryption?.revokedDevices.first?.deviceId == me, "revoked devices missing")
+    // Pushes and Settings refreshes re-read the state but never register.
+    await h.socket.emitFrame(historyPush("recipient.registered", rid: "other"))
+    _ = try await h.session.refreshHistoryEncryption()
+    try await eventually("push re-read the state") { await h.socket.historyLog.filter { $0 == "history.encryption.get" }.count >= 3 }
+    try check(await h.socket.registeredKeys.isEmpty, "a revoked device registered")
+    do {
+        try await h.session.requestHistoryGrant()
+        try check(false, "a revoked device requested a grant")
+    } catch TodexError.server(let code, _) {
+        try check(code == HistoryEncryption.accessRevoked, "unexpected error \(code)")
+        try check(!TodexError.server(code: code, message: "").localizedDescription.isEmpty, "no notice")
+    }
+    try check(!(await h.socket.historyLog.contains("history.grant.request")), "grant request reached the backend")
+    // Another device restores it: the push re-reads, the old key is refused
+    // (CONFLICT) and a fresh one is registered and stored.
+    await h.socket.configureHistory(access: "unregistered", revokedKeys: [oldKey], revokedDevices: [])
+    await h.socket.emitFrame(historyPush("device.restored", deviceId: me))
+    try await eventually("restored device registers a fresh key") {
+        h.session.historyEncryption?.myAccess == "active" && !h.session.historyAccessRevoked
+    }
+    let keys = await h.socket.registeredKeys
+    try check(keys.count == 2 && keys[0] == oldKey && keys[1] != oldKey, "re-key sequence: \(keys.count)")
+    try check(h.seeds.value != nil && h.seeds.value != device.seedRepresentation, "fresh seed not stored")
+    try check(h.session.historyDeviceRecipientID == h.session.historyEncryption?.myRid, "decryptor not switched to the fresh key")
+    // A device revoked while connected learns it from the refused command.
+    await h.socket.configureHistory(access: "revoked")
+    await h.socket.emitFrame(historyPush("device.revoked", deviceId: me))
+    try await eventually("revocation observed") { h.session.historyAccessRevoked }
+    let registrations = await h.socket.registeredKeys.count
+    try await Task.sleep(for: .milliseconds(400))
+    try check(await h.socket.registeredKeys.count == registrations, "re-registered after revocation")
+    h.session.disconnect()
+}
+@MainActor func required<T>(_ value: T?) throws -> T {
+    guard let value else { throw Failure(description: "missing value") }
+    return value
+}
 @main struct SessionRaceRunner {
     @MainActor static func main() async {
         let tests: [(String, @MainActor () async throws -> Void)] = [
@@ -1013,6 +1170,8 @@ actor FakeSocket: SessionSocket {
             ("restart/background pause + early completion", restartBackgroundAndFastCompletion),
             ("tenant scope + bounded cache prefix", scopedReadsAndCachePrefix),
             ("encrypted history: decrypt in memory, ciphertext on disk, retry prompt", encryptedHistoryStaysCiphertextOnDisk),
+            ("history push: grant for this device unlocks the open conversation", grantPushUnlocksLoadedConversation),
+            ("history revoked: no registration until restored, then a fresh key", revokedDeviceStaysUnregisteredUntilRestored),
             ("corrupt optional cache recovery", corruptCacheIsOptional),
             ("wire subscriber overflow gap", streamOverflowSignalsGap),
             ("backend switch during HTTP replay", staleReplayResponse),
