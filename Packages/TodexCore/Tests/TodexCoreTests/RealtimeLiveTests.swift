@@ -140,10 +140,11 @@ struct RealtimeLiveTests {
     }
 }
 
-private struct LiveFixture: Sendable {
+struct LiveFixture: Sendable {
     let connection: BackendConnection
     let workspace: String
     let conversationID: String
+    let dataDirectory: URL
     init() throws {
         let path = try #require(ProcessInfo.processInfo.environment["TODEX_LIVE_FIXTURE"])
         let url = URL(fileURLWithPath: path)
@@ -161,10 +162,11 @@ private struct LiveFixture: Sendable {
         connection = BackendConnection(name: "Isolated live test", serverURL: serverURL, deviceSecret: deviceSecret)
         workspace = try #require(manifest["workspace"].optionalString)
         conversationID = try #require(manifest["conversationId"].optionalString)
+        dataDirectory = URL(fileURLWithPath: try #require(manifest["dataDir"].optionalString))
     }
 }
 
-private func withLiveClient<T: Sendable>(
+func withLiveClient<T: Sendable>(
     _ connection: BackendConnection,
     operation: @Sendable (RealtimeClient, LiveFrames) async throws -> T
 ) async throws -> T {
@@ -186,7 +188,7 @@ private func withLiveClient<T: Sendable>(
     }
 }
 
-private func checkReplay(client: RealtimeClient, frames: LiveFrames, conversationID: String, after: Int) async throws
+func checkReplay(client: RealtimeClient, frames: LiveFrames, conversationID: String, after: Int) async throws
     -> [JSONValue]
 {
     let requestID = UUID().uuidString
@@ -207,7 +209,7 @@ private func checkReplay(client: RealtimeClient, frames: LiveFrames, conversatio
     return events
 }
 
-private final class LiveFrames: Sendable {
+final class LiveFrames: Sendable {
     private let frames = Mutex<[JSONValue]>([])
     var snapshot: [JSONValue] { frames.withLock { $0 } }
     func append(_ frame: JSONValue) { frames.withLock { $0.append(frame) } }
