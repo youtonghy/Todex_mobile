@@ -250,6 +250,140 @@ extension RealtimeLiveTests {
     }
 }
 
+extension RealtimeLiveTests {
+    /// Two devices (fixture `device.txt` = A, `device-b.txt` = B):
+    /// B registers after A wrote history, so B's copy is locked; A fulfills
+    /// B's grant and the `history.encryption.updated` push alone makes B's
+    /// already loaded events decrypt (AppSession's path: unlock scope →
+    /// `forgetUnavailable()` → decrypt the same raw events again, no reload).
+    /// Then A revokes B (every history command but `get` is refused with
+    /// `HISTORY_ACCESS_REVOKED`) and restores it, after which B registers a
+    /// fresh key. Requires the backend's push/revocation support.
+    @Test func actualGrantPushUnlocksAndDeviceRevocationIsPermanentUntilRestored() async throws {
+        let fixture = try LiveFixture()
+        let deviceB = try LiveFixture.secondDevice(fixture)
+        let deviceBID = try #require(DeviceIdentity(secretKeyBase64URL: deviceB.deviceSecret)?.deviceID)
+        let clientA = RealtimeClient(connection: fixture.connection)
+        try await clientA.connect()
+        let historyA = HistoryAPI(client: clientA)
+        let wasEnabled = try await historyA.state().isEnabled
+        let seedA = try HistoryCrypto.generateRecipientKey().seedRepresentation
+        let keysA = try HistoryDecryptor(deviceSeed: seedA) { conversationId, kids, _ in
+            try await historyA.wraps(conversationId: conversationId, kids: kids)
+        }
+        let token = "push-live-" + UUID().uuidString.lowercased()
+        let prompt = "Granted prompt " + token
+        do {
+            _ = try await historyA.register(publicKey: keysA.devicePublicKey)
+            if !wasEnabled { #expect(try await historyA.enable().isEnabled) }
+            let conversationID = try await withLiveClient(fixture.connection) { client, frames in
+                try await runTurn(client: client, frames: frames, fixture: fixture, prompt: prompt, title: "Push " + token)
+                    .conversationID
+            }
+
+            try await withLiveClient(deviceB) { clientB, framesB in
+                let historyB = HistoryAPI(client: clientB)
+                // A previous failed run may have left B blocked.
+                if try await historyB.state().isAccessRevoked { _ = try await historyA.restoreDevice(deviceBID) }
+                let seedB = try HistoryCrypto.generateRecipientKey().seedRepresentation
+                let keysB = try HistoryDecryptor(deviceSeed: seedB) { conversationId, kids, _ in
+                    try await historyB.wraps(conversationId: conversationId, kids: kids)
+                }
+                let ridB = try await historyB.register(publicKey: keysB.devicePublicKey)
+                #expect(ridB == HistoryEncryption.encodeID(keysB.deviceRecipientID))
+                #expect(try await historyB.state().myAccess == "active")
+
+                // B loads the conversation: written before B registered, so locked.
+                let api = APIClient(connection: deviceB)
+                let page = try await api.events(conversationId: conversationID, after: 0, limit: 200, detail: "full")
+                let raw = try page["events"].arrayValue.map { try $0.decoded(ConversationEvent.self) }
+                let before = try await keysB.decrypt(raw, frames: page["frames"])
+                #expect(before.contains { HistoryEncryption.isLocked($0.payload) }, "B could read history before a grant")
+
+                // B asks; A re-wraps for B (AppSession.authorizeHistoryGrant).
+                let grantId = try await historyB.requestGrant()
+                let grant = try #require(try await historyA.grants().first { $0.grantId == grantId })
+                let target = try #require(grant.recipient)
+                let progress = try await HistoryGrant.fulfill(
+                    api: historyA, grantId: grantId, target: target,
+                    source: HistoryCrypto.recipientKey(seed: seedA), sourceRid: nil)
+                #expect(progress.finished && progress.processed > 0)
+
+                // B learns it from the push, not by polling.
+                let pushed = try await framesB.wait { frame in
+                    guard let update = HistoryEncryptionUpdate(frame: frame) else { return false }
+                    return update.unlockScope(forRecipient: ridB)?.contains(conversationID) == true
+                }
+                let update = try #require(HistoryEncryptionUpdate(frame: pushed))
+                #expect([.grantProgress, .grantFulfilled].contains(update.reason))
+                #expect(pushed["payload"].objectValue.keys.allSatisfy { !["wrapped", "key", "dek", "seed"].contains($0) })
+                let fulfilled = try await framesB.wait {
+                    HistoryEncryptionUpdate(frame: $0).map { $0.reason == .grantFulfilled && $0.rid == ridB } == true
+                }
+                #expect(HistoryEncryptionUpdate(frame: fulfilled)?.grantId == grantId)
+                await keysB.forgetUnavailable()
+                let after = try await keysB.decrypt(raw, frames: page["frames"])
+                try checkPlaintext(after, contains: [prompt, "Fixture Codex: " + prompt], detail: "after grant push")
+
+                // Revoking B's recipient blocks the device permanently.
+                let revokedState = try await historyA.revoke(rid: ridB)
+                #expect(revokedState.revokedDevices.contains { $0.deviceId == deviceBID })
+                _ = try await framesB.wait {
+                    HistoryEncryptionUpdate(frame: $0).map { [.recipientRevoked, .deviceRevoked].contains($0.reason) } == true
+                }
+                let blocked = try await historyB.state()
+                #expect(blocked.myAccess == "revoked" && blocked.isAccessRevoked)
+                let fresh = try HistoryCrypto.recipientKey(seed: HistoryCrypto.generateRecipientKey().seedRepresentation)
+                await expectServerError([HistoryEncryption.accessRevoked, "403"]) {
+                    _ = try await historyB.register(publicKey: fresh.publicKey.rawRepresentation)
+                }
+                await expectServerError([HistoryEncryption.accessRevoked, "403"]) { _ = try await historyB.requestGrant() }
+                await expectServerError([HistoryEncryption.accessRevoked, "403"]) {
+                    _ = try await historyB.keys(conversationId: conversationID)
+                }
+
+                // A restores B: B registers again, with a fresh key only.
+                let restored = try await historyA.restoreDevice(deviceBID)
+                #expect(!restored.revokedDevices.contains { $0.deviceId == deviceBID })
+                _ = try await framesB.wait {
+                    HistoryEncryptionUpdate(frame: $0).map { $0.reason == .deviceRestored && $0.deviceId == deviceBID } == true
+                }
+                #expect(try await historyB.state().myAccess != "revoked")
+                await expectServerError(["CONFLICT", "409"]) {
+                    _ = try await historyB.register(publicKey: keysB.devicePublicKey)
+                }
+                let newRid = try await historyB.register(publicKey: fresh.publicKey.rawRepresentation)
+                let active = try await historyB.state()
+                #expect(active.myAccess == "active" && active.myRid == newRid && newRid != ridB)
+            }
+        } catch {
+            _ = try? await historyA.restoreDevice(deviceBID)
+            if !wasEnabled { _ = try? await historyA.disable() }
+            await clientA.disconnect()
+            throw error
+        }
+        if !wasEnabled { #expect(try await historyA.disable().isEnabled == false) }
+        await clientA.disconnect()
+    }
+}
+
+extension LiveFixture {
+    /// The second enrolled fixture device (`device-b.txt`, written by
+    /// `backend_fixture.py start` since the multi-device history tests).
+    static func secondDevice(_ fixture: LiveFixture) throws -> BackendConnection {
+        let path = try #require(ProcessInfo.processInfo.environment["TODEX_LIVE_FIXTURE"])
+        let file = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("device-b.txt")
+        let secret = try #require(
+            try? String(contentsOf: file, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+            "device-b.txt is missing: start a new fixture with scripts/backend_fixture.py")
+        var connection = fixture.connection
+        connection.id = UUID().uuidString
+        connection.name = "Isolated live test B"
+        connection.deviceSecret = secret
+        return connection
+    }
+}
+
 /// Creates a titled Codex conversation, runs one prompt on the fake CLI and
 /// returns the create result and the turn's live `conversation.event` frames.
 private func runTurn(client: RealtimeClient, frames: LiveFrames, fixture: LiveFixture, prompt: String, title: String)

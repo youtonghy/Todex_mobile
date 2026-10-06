@@ -52,6 +52,11 @@ def start(binary):
     device_path = root / "device.txt"
     device_path.write_text(device_seed + "\n")
     device_path.chmod(0o600)
+    # A second fixed device ("device B") for multi-device history tests:
+    # grants, permanent revocation and restore need two enrolled devices.
+    device_b_path = root / "device-b.txt"
+    device_b_path.write_text("KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio\n")
+    device_b_path.chmod(0o600)
     devices = {
         "version": 1,
         "devices": {
@@ -60,7 +65,13 @@ def start(binary):
                 "name": "TodeX mobile fixture",
                 "publicKey": "1UIH2hlJd9z0atv-wrwudbUtWopCGE_t_cAAJPDj6No",
                 "pairedAt": 1700000000000,
-            }
+            },
+            "dev_tgAwbPp2cj_ew5Xl": {
+                "deviceId": "dev_tgAwbPp2cj_ew5Xl",
+                "name": "TodeX mobile fixture B",
+                "publicKey": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+                "pairedAt": 1700000000000,
+            },
         },
     }
     devices_path = root / "data/devices.json"
