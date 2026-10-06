@@ -566,6 +566,35 @@ struct ConversationRuntimeTests {
         #expect(!runtime.queuePaused)
     }
 
+    @Test func backendFollowUpQueueIsSeparateFromTheNativeQueue() throws {
+        var runtime = ConversationRuntime(conversationId: "c")
+        runtime.ingest(try event(1, "turn.started", #"{"turnId":"t"}"#))
+        runtime.ingest(
+            try event(
+                2, "followups.updated",
+                #"{"items":[{"id":"a","text":"Next","contentCount":1,"skills":["review"]},{"id":"a","text":"dup"},{"text":"no id"}],"paused":false}"#
+            ))
+        #expect(runtime.followUps.map { $0["id"] } == ["a"])
+        #expect(runtime.followUps.first?["status"] == "queued")
+        #expect(runtime.followUps.first?["contentCount"] == 1)
+        #expect(runtime.queueItems.isEmpty)
+        // The daemon reports its own pause; a failed turn does not guess it.
+        runtime.ingest(try event(3, "turn.failed", #"{"turnId":"t"}"#))
+        #expect(!runtime.followUpsPaused)
+        runtime.ingest(
+            try event(
+                4, "followups.updated",
+                #"{"items":[{"id":"a","text":"Next"}],"paused":true,"pauseReason":"start_failed","pauseMessage":"file changed"}"#
+            ))
+        #expect(runtime.followUpsPaused)
+        #expect(runtime.followUpsPauseReason == "start_failed")
+        #expect(runtime.followUpsPauseMessage == "file changed")
+        runtime.adoptFollowUpQueue(["items": [], "paused": true, "pauseReason": "stale"])
+        #expect(runtime.followUps.isEmpty)
+        #expect(!runtime.followUpsPaused)
+        #expect(runtime.followUpsPauseReason.isEmpty)
+    }
+
     @Test func unknownUsageDoesNotEraseCompactionAndMemoryConfigurationIsNotContent() throws {
         var runtime = ConversationRuntime(conversationId: "c")
         runtime.ingest(try event(1, "compaction.failed", #"{"message":"failed"}"#))

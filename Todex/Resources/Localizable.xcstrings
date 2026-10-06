@@ -4033,6 +4033,90 @@
         }
       }
     },
+    "上一轮失败，已暂停": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused after the last turn failed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前のターンが失敗したため一時停止中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전 차례가 실패해 일시 중지됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上一轮失败，已暂停"
+          }
+        }
+      }
+    },
+    "上一轮已停止，已暂停": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused after the last turn was stopped"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前のターンが停止されたため一時停止中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전 차례가 중지되어 일시 중지됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上一轮已停止，已暂停"
+          }
+        }
+      }
+    },
+    "上一轮被中断，已暂停": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused after the last turn was interrupted"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前のターンが中断されたため一時停止中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전 차례가 중단되어 일시 중지됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上一轮被中断，已暂停"
+          }
+        }
+      }
+    },
     "上下文压缩失败": {
       "localizations": {
         "en": {
@@ -10473,6 +10557,34 @@
         }
       }
     },
+    "后端已重启，已暂停": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused after the backend restarted"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドの再起動により一時停止中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드가 다시 시작되어 일시 중지됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端已重启，已暂停"
+          }
+        }
+      }
+    },
     "后端所在的电脑": {
       "localizations": {
         "en": {
@@ -16269,6 +16381,34 @@
         }
       }
     },
+    "已暂停": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一時停止中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일시 중지됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已暂停"
+          }
+        }
+      }
+    },
     "已有消息等待核对": {
       "localizations": {
         "en": {
@@ -19937,6 +20077,62 @@
         }
       }
     },
+    "排队消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued messages"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待機中のメッセージ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대기 중인 메시지"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "排队消息"
+          }
+        }
+      }
+    },
+    "排队消息 %lld 条%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued messages: %lld%@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待機中のメッセージ %lld 件%@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대기 중인 메시지 %lld개%@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "排队消息 %lld 条%@"
+          }
+        }
+      }
+    },
     "推理强度": {
       "localizations": {
         "en": {
@@ -21921,6 +22117,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "无法导入"
+          }
+        }
+      }
+    },
+    "无法开始，已暂停": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused: the next message could not start"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "次のメッセージを開始できず一時停止中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다음 메시지를 시작하지 못해 일시 중지됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法开始，已暂停"
           }
         }
       }
@@ -29565,6 +29789,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "用量记录"
+          }
+        }
+      }
+    },
+    "由后端保存，本轮完成后自动发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Held by the backend and sent when this turn finishes"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドが保持し、このターン完了後に自動送信します"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드가 보관하며 이번 차례가 끝나면 자동 전송합니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "由后端保存，本轮完成后自动发送"
           }
         }
       }

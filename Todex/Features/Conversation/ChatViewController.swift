@@ -716,6 +716,13 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                     icon: "tray.full"
                 ) { [weak self] in self?.nativeQueue() })
         }
+        if let runtime, !runtime.followUps.isEmpty {
+            let paused = runtime.followUpsPaused ? " · \(Self.followUpPauseText(runtime.followUpsPauseReason))" : ""
+            alerts.addArrangedSubview(
+                Theme.button(
+                    String(localized: "排队消息 \(runtime.followUps.count) 条\(paused)"), icon: "tray.and.arrow.down"
+                ) { [weak self] in self?.showFollowUps() })
+        }
         if let items = session.queues[conversation.id], !items.isEmpty {
             let paused = session.pausedQueues.contains(conversation.id)
             alerts.addArrangedSubview(
@@ -2528,6 +2535,51 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                     })
                 WBUI.presentSheet(sheet, on: self)
             } catch { showError(error) }
+        }
+    }
+    private static func followUpPauseText(_ reason: String) -> String {
+        switch reason {
+        case "turn_failed": String(localized: "上一轮失败，已暂停")
+        case "turn_cancelled": String(localized: "上一轮已停止，已暂停")
+        case "turn_interrupted": String(localized: "上一轮被中断，已暂停")
+        case "start_failed": String(localized: "无法开始，已暂停")
+        case "daemon_restarted": String(localized: "后端已重启，已暂停")
+        default: String(localized: "已暂停")
+        }
+    }
+    /// The daemon-held follow-up queue: resume after a pause, remove, or clear.
+    private func showFollowUps() {
+        guard let runtime = session.runtimes[conversation.id] else { return }
+        var message = runtime.followUpsPaused
+            ? Self.followUpPauseText(runtime.followUpsPauseReason)
+            : String(localized: "由后端保存，本轮完成后自动发送")
+        if !runtime.followUpsPauseMessage.isEmpty { message += "\n\(runtime.followUpsPauseMessage)" }
+        let sheet = UIAlertController(title: String(localized: "排队消息"), message: message, preferredStyle: .actionSheet)
+        let running = ["running", "waitingPermission", "waiting_permission"].contains(runtime.status)
+        if runtime.followUpsPaused, !running {
+            sheet.addAction(
+                UIAlertAction(title: String(localized: "恢复发送"), style: .default) { [weak self] _ in
+                    self?.editFollowUps("resume")
+                })
+        }
+        for item in runtime.followUps {
+            sheet.addAction(
+                UIAlertAction(title: String(localized: "移除：\(item["text"].stringValue.prefix(40))"), style: .destructive) {
+                    [weak self] _ in self?.editFollowUps("remove", itemId: item["id"].stringValue)
+                })
+        }
+        sheet.addAction(
+            UIAlertAction(title: String(localized: "清空"), style: .destructive) { [weak self] _ in
+                self?.editFollowUps("clear")
+            })
+        WBUI.presentSheet(sheet, on: self)
+    }
+    private func editFollowUps(_ operation: String, itemId: String? = nil) {
+        Task { [weak self] in
+            guard let self else { return }
+            do { try await session.editFollowUps(operation, itemId: itemId, conversation: conversation) } catch {
+                showError(error)
+            }
         }
     }
     private func queueControl(_ value: JSONValue) {

@@ -18,6 +18,11 @@ public enum ProtocolCatalog {
         case conversationCreate = "conversation.create"
         case conversationPrompt = "conversation.prompt"
         case conversationFollowUp = "conversation.followUp"
+        case conversationQueueAdd = "conversation.queue.add"
+        case conversationQueueRemove = "conversation.queue.remove"
+        case conversationQueueClear = "conversation.queue.clear"
+        case conversationQueueResume = "conversation.queue.resume"
+        case conversationQueueList = "conversation.queue.list"
         case conversationRetry = "conversation.retry"
         case conversationResume = "conversation.resume"
         case conversationFork = "conversation.fork"
@@ -125,6 +130,11 @@ public enum ProtocolCatalog {
             support = .conditional
             detail =
                 "Requires the selected provider's native fork/compact capability. Check the live providers catalog."
+        case .conversationQueueAdd, .conversationQueueRemove, .conversationQueueClear, .conversationQueueResume,
+            .conversationQueueList:
+            support = .conditional
+            detail =
+                "Daemon-held follow-up queue; requires the provider's backendQueue capability (every provider on current backends)."
         case .conversationControl:
             support = .conditional
             detail =

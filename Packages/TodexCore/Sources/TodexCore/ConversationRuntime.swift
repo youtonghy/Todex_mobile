@@ -86,6 +86,13 @@ public struct ConversationRuntime: Sendable {
     public private(set) var usageRecords: [JSONValue] = []
     public private(set) var queueItems: [JSONValue] = []
     public private(set) var queuePaused = false
+    /// The daemon-held follow-up queue (`followups.updated` or
+    /// `conversation.queue.list`), separate from a provider's native queue.
+    /// Items carry `id`, `text`, `status`, `queuedAt`, `contentCount`, `skills`.
+    public private(set) var followUps: [JSONValue] = []
+    public private(set) var followUpsPaused = false
+    public private(set) var followUpsPauseReason = ""
+    public private(set) var followUpsPauseMessage = ""
     public private(set) var effectiveConfig: JSONValue = .null
     public private(set) var requestedConfig: JSONValue = .null
     public private(set) var configurationStatus = "unknown"
@@ -742,7 +749,29 @@ public struct ConversationRuntime: Sendable {
         }
     }
 
+    /// Adopts a backend follow-up queue snapshot. A lazily opened window may
+    /// not hold the latest `followups.updated`, so callers also apply the
+    /// `conversation.queue.list` result; later events replace it again.
+    public mutating func adoptFollowUpQueue(_ snapshot: JSONValue) {
+        var seen: Set<String> = []
+        followUps = snapshot["items"].arrayValue.compactMap { value in
+            let id = value["id"].stringValue
+            guard !id.isEmpty, seen.insert(id).inserted else { return nil }
+            var item = value
+            item["text"] = .string(value["text"].stringValue)
+            item["status"] = .string(Self.string(value["status"], "queued"))
+            return item
+        }
+        followUpsPaused = snapshot["paused"].boolValue && !followUps.isEmpty
+        followUpsPauseReason = followUpsPaused ? snapshot["pauseReason"].stringValue : ""
+        followUpsPauseMessage = followUpsPaused ? snapshot["pauseMessage"].stringValue : ""
+    }
+
     private mutating func projectQueue(_ payload: JSONValue, type: String) {
+        if type == "followups.updated" {
+            adoptFollowUpQueue(payload)
+            return
+        }
         if type == "queue.updated", case .array(let items) = payload["items"] {
             var seen: Set<String> = []
             queueItems = items.compactMap { value in

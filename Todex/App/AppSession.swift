@@ -430,6 +430,9 @@ extension SessionSocket {
             checkBackendVersion(api)
             try await refresh()
             try checkRevision(current)
+            for conversation in conversations where hasBackendQueue(conversation) && !(queues[conversation.id] ?? []).isEmpty {
+                handOverQueue(conversation.id, conversation: conversation)
+            }
             if !legacyCursors.isEmpty {
                 _ = try await socket.command(
                     type: "session.resume",
@@ -889,6 +892,7 @@ extension SessionSocket {
                 if activeConversationID == id { readSequences[id] = runtimes[id]?.appliedSequence ?? 0 }
                 saveSoon()
                 changed(immediate: true)
+                await refreshFollowUps(updated)
                 return
             }
             guard (runtimes[id]?.appliedSequence ?? 0) > before else { throw TodexError.invalid(String(localized: "订阅分页没有前进，恢复未完成")) }
@@ -1178,6 +1182,16 @@ extension SessionSocket {
         guard let runtime = runtimes[id], runtime.readyForActions else { throw TodexError.invalid(String(localized: "请等待历史记录同步完成")) }
         if ["running", "waitingPermission", "waiting_permission"].contains(runtime.status) {
             guard enqueueWhenBusy else { throw TodexError.server(code: "CONFLICT", message: String(localized: "当前任务尚未结束")) }
+            // The daemon holds follow-ups (attachments and skills included)
+            // and starts them itself once the turn completes.
+            if hasBackendQueue(conversation) {
+                _ = try await queueFollowUp(draft, itemId: UUID().uuidString, conversation: conversation)
+                try checkRevision(current)
+                if drafts[id] == draft { drafts[id] = ComposerDraft() }
+                persist()
+                changed(immediate: true)
+                return
+            }
             // Desktop parity: a plain-text follow-up goes to the agent's own
             // queue when the provider has one; attachments and skills can only
             // travel through a prompt, so they wait in the local queue.
@@ -1208,24 +1222,7 @@ extension SessionSocket {
                 throw CancellationError()
             }
         }
-        let pref = preferences(for: conversation)
-        let modes =
-            provider(for: conversation)?.capabilities["permissionConfig"]["modes"].arrayValue.compactMap(\.optionalString)
-            ?? []
-        guard modes.isEmpty || modes.contains(pref.permissionMode) else {
-            throw TodexError.invalid(String(localized: "当前 Agent 不支持所选权限模式，请重新选择权限"))
-        }
-        var payload: JSONValue = [
-            "conversationId": .string(id), "text": .string(draft.text),
-            "content": .array(
-                draft.attachments
-                    .filter { draft.text.contains($0.token) }
-                    .map(\.wireValue)),
-            "skills": .array(draft.skills.map { ["resourceId": .string($0.id), "name": .string($0.name)] }),
-            "permissionMode": .string(pref.permissionMode), "workMode": .string(pref.workMode),
-        ]
-        if !pref.model.isEmpty { payload["model"] = .string(pref.model) }
-        if !pref.reasoningEffort.isEmpty { payload["reasoningEffort"] = .string(pref.reasoningEffort) }
+        let payload = try promptPayload(draft, conversation: conversation)
         let requestID = UUID().uuidString
         if !draft.attachments.isEmpty {
             sentAttachments.append(
@@ -1265,8 +1262,27 @@ extension SessionSocket {
             try checkRevision(current)
             if pendingSends[id]?.requestId == requestID { pendingSends.removeValue(forKey: id) }
             persist()
-        } catch {
+        } catch let sendError {
             guard current == revision else { throw CancellationError() }
+            var error = sendError
+            // The backend was busy after all (a turn started below the loaded
+            // window, or on another device): queue the prompt there under the
+            // same id instead of reporting the conflict.
+            if submitted, case TodexError.server(code: "CONFLICT", _) = sendError, hasBackendQueue(conversation),
+                pendingSends[id]?.requestId == requestID
+            {
+                do {
+                    try await queueFollowUp(draft, itemId: requestID, conversation: conversation)
+                    guard current == revision else { throw CancellationError() }
+                    if pendingSends[id]?.requestId == requestID { pendingSends.removeValue(forKey: id) }
+                    persist()
+                    changed(immediate: true)
+                    return
+                } catch let queueError {
+                    guard current == revision else { throw CancellationError() }
+                    error = queueError
+                }
+            }
             if pendingSends[id]?.requestId == requestID {
                 if !submitted || Self.knownRejection(error) {
                     pendingSends.removeValue(forKey: id)
@@ -1292,6 +1308,105 @@ extension SessionSocket {
         switch error {
         case TodexError.server, TodexError.invalid, TodexError.disconnected: true
         default: false
+        }
+    }
+    /// `conversation.prompt` fields shared by direct sends and backend queue items.
+    private func promptPayload(_ draft: ComposerDraft, conversation: ConversationManifest) throws -> JSONValue {
+        let pref = preferences(for: conversation)
+        let modes =
+            provider(for: conversation)?.capabilities["permissionConfig"]["modes"].arrayValue.compactMap(\.optionalString)
+            ?? []
+        guard modes.isEmpty || modes.contains(pref.permissionMode) else {
+            throw TodexError.invalid(String(localized: "当前 Agent 不支持所选权限模式，请重新选择权限"))
+        }
+        var payload: JSONValue = [
+            "conversationId": .string(conversation.id), "text": .string(draft.text),
+            "content": .array(
+                draft.attachments
+                    .filter { draft.text.contains($0.token) }
+                    .map(\.wireValue)),
+            "skills": .array(draft.skills.map { ["resourceId": .string($0.id), "name": .string($0.name)] }),
+            "permissionMode": .string(pref.permissionMode), "workMode": .string(pref.workMode),
+        ]
+        if !pref.model.isEmpty { payload["model"] = .string(pref.model) }
+        if !pref.reasoningEffort.isEmpty { payload["reasoningEffort"] = .string(pref.reasoningEffort) }
+        return payload
+    }
+    /// The connected backend holds this conversation's follow-ups
+    /// (`conversation.queue.*`) instead of the local candidate queue.
+    func hasBackendQueue(_ conversation: ConversationManifest) -> Bool {
+        provider(for: conversation)?.capabilities["backendQueue"].boolValue == true
+    }
+    /// Adds a follow-up to the backend queue. The item id is also the prompt's
+    /// clientRequestId, so re-adding after a lost ACK or a relaunch never runs
+    /// it twice. An idle conversation starts it at once (`status: started`).
+    @discardableResult
+    private func queueFollowUp(_ draft: ComposerDraft, itemId: String, conversation: ConversationManifest)
+        async throws -> JSONValue
+    {
+        var payload = try promptPayload(draft, conversation: conversation)
+        payload["itemId"] = .string(itemId)
+        if !draft.attachments.isEmpty,
+            !sentAttachments.contains(where: { $0.conversationId == conversation.id && $0.requestId == itemId })
+        {
+            sentAttachments.append(
+                SentAttachmentRecord(
+                    conversationId: conversation.id, requestId: itemId, text: draft.text,
+                    attachments: Self.prepareSentAttachments(draft.attachments)))
+            pruneSentAttachments()
+        }
+        return try await command("conversation.queue.add", payload, timeout: 45)
+    }
+    /// Reads the backend queue into the runtime; the loaded window may not hold
+    /// its latest `followups.updated`.
+    func refreshFollowUps(_ conversation: ConversationManifest) async {
+        guard hasBackendQueue(conversation), isConnected else { return }
+        do {
+            let result = try await command("conversation.queue.list", ["conversationId": .string(conversation.id)], timeout: 15)
+            runtimes[conversation.id]?.adoptFollowUpQueue(result["queue"])
+            changed()
+        } catch {
+            DebugLog.record("followups.list.failed", ["error": String(describing: error)], level: .error)
+            operationError = error.localizedDescription
+            changed()
+        }
+    }
+    /// Removes one item from, clears, or resumes the backend queue.
+    func editFollowUps(_ operation: String, itemId: String? = nil, conversation: ConversationManifest) async throws {
+        var payload: JSONValue = ["conversationId": .string(conversation.id)]
+        if let itemId { payload["itemId"] = .string(itemId) }
+        let result = try await command("conversation.queue.\(operation)", payload, timeout: 15)
+        runtimes[conversation.id]?.adoptFollowUpQueue(result["queue"])
+        changed()
+    }
+    /// Moves local candidates (restored after a relaunch, or queued while the
+    /// backend's capabilities were unknown) into the backend queue, in order.
+    /// The backend then decides when each one runs, busy or not.
+    private func handOverQueue(_ id: String, conversation: ConversationManifest) {
+        guard isConnected, !pausedQueues.contains(id), queueDispatches[id] == nil, !(queues[id] ?? []).isEmpty
+        else { return }
+        let current = revision
+        let token = UUID()
+        queueDispatches[id] = token
+        Task { [weak self] in
+            guard let self, current == revision, queueDispatches[id] == token else { return }
+            defer { if current == revision, queueDispatches[id] == token { queueDispatches.removeValue(forKey: id) } }
+            while let first = queues[id]?.first {
+                do {
+                    try await queueFollowUp(first.draft, itemId: first.id, conversation: conversation)
+                } catch {
+                    guard current == revision else { return }
+                    pausedQueues.insert(id)
+                    if !(error is CancellationError) { operationError = error.localizedDescription }
+                    persist()
+                    changed()
+                    return
+                }
+                guard current == revision else { return }
+                queues[id]?.removeAll { $0.id == first.id }
+                persist()
+                changed()
+            }
         }
     }
     /// Receipts for one conversation, oldest first, for the timeline to join
@@ -1386,6 +1501,10 @@ extension SessionSocket {
         changed()
     }
     private func dispatchQueue(_ id: String) {
+        if let conversation = conversations.first(where: { $0.id == id }), hasBackendQueue(conversation) {
+            handOverQueue(id, conversation: conversation)
+            return
+        }
         guard foreground, isConnected, !pausedQueues.contains(id), sending[id] == nil, queueDispatches[id] == nil,
             pendingSends[id] == nil,
             let runtime = runtimes[id], ["idle", "completed"].contains(runtime.status), runtime.readyForActions,
