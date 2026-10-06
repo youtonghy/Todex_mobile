@@ -318,13 +318,27 @@ nonisolated final class TodexUITests: XCTestCase {
         git.name = "Git workspace status"
         git.lifetime = .keepAlways
         add(git)
-        // The header Git icon drives operations; the tab itself only lists changes.
+        // The header Git icon opens the desktop-style menu sheet: a status page
+        // first, then the searchable actions page; the tab itself only lists changes.
         let gitMenu = app.buttons["Git 操作"]
         XCTAssertTrue(gitMenu.waitForExistence(timeout: 5))
         gitMenu.tap()
-        let refresh = app.descendants(matching: .any)["刷新状态"]
+        // Section headers are exposed as other elements, not static texts.
+        let statusPage = app.tables["git.menu.status"]
+        XCTAssertTrue(statusPage.otherElements["修改状态"].waitForExistence(timeout: 10), "Git 菜单没有打开状态页")
+        XCTAssertTrue(statusPage.otherElements["提交状态"].exists)
+        let refresh = app.buttons["刷新状态"]
         XCTAssertTrue(refresh.waitForExistence(timeout: 5))
         refresh.tap()
+        app.segmentedControls["git.menu.pages"].buttons["操作"].tap()
+        XCTAssertTrue(app.staticTexts["推送当前分支"].waitForExistence(timeout: 10), "操作页没有列出 Git 操作")
+        let search = app.searchFields.firstMatch
+        search.tap()
+        search.typeText("Handoff")
+        XCTAssertTrue(app.staticTexts["Handoff"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["推送当前分支"].exists, "搜索没有过滤 Git 操作")
+        app.buttons["关闭 Git 操作"].tap()
+        XCTAssertTrue(gitMenu.waitForExistence(timeout: 5))
         app.terminate()
     }
 
@@ -785,13 +799,15 @@ nonisolated final class TodexUITests: XCTestCase {
         app.sheets["新建标签"].buttons["Git"].tap()
         XCTAssertTrue(app.staticTexts["来源：后端 Git 状态"].waitForExistence(timeout: 20))
         app.buttons["Git 操作"].tap()
-        let worktreeMenu = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label BEGINSWITH %@", "工作树（")).firstMatch
-        XCTAssertTrue(worktreeMenu.waitForExistence(timeout: 5))
-        worktreeMenu.tap()
-        // Worktree items render as "name, branch" (title + subtitle).
-        let entry = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label BEGINSWITH %@", "wt-fixture")).firstMatch
+        let pages = app.segmentedControls["git.menu.pages"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["操作"].tap()
+        let search = app.searchFields.firstMatch
+        search.tap()
+        search.typeText("wt-fixture")
+        // The wt-fixture branch row shares the title; match the worktree row by its path identifier.
+        let entry = app.tables["git.menu.actions"].cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", "git.worktree.", "/wt-fixture")).firstMatch
         XCTAssertTrue(entry.waitForExistence(timeout: 5), "Git 菜单没有列出 wt-fixture 工作树")
         entry.tap()
         let openWorktree = app.descendants(matching: .any)["打开工作树并切换对话"].firstMatch
