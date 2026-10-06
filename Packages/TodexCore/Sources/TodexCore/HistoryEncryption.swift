@@ -15,6 +15,9 @@ public enum HistoryEncryption {
     /// `history.keys.list`, `history.keys.wraps` and `history.grant.fulfill` batch limit.
     public static let batchLimit = 500
 
+    /// The wire text of a binary id (rid, kid): base64url without padding.
+    public static func encodeID(_ data: Data) -> String { CryptoEncoding.encode(data) }
+
     /// Whether the payload still carries ciphertext (`$enc`).
     public static func isEncrypted(_ payload: JSONValue) -> Bool { payload.objectValue[Envelope.field] != nil }
 

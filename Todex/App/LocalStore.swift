@@ -60,17 +60,57 @@ enum CredentialStore {
                 return
             }
         #endif
+        try write(secret.isEmpty ? nil : Data(secret.utf8), service: "com.todex.mobile.backend", account: id)
+    }
+
+    /// The 32-byte X-Wing seed this device decrypts conversation history with
+    /// on one backend profile (history v3). Nil until first needed.
+    static func historySeed(for id: String) throws -> Data? {
+        #if targetEnvironment(simulator)
+            if keychainUnavailable {
+                return fallbackSecrets()[historyFallbackKey(id)].flatMap { Data(base64Encoded: $0) }
+            }
+        #endif
         let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.todex.mobile.backend",
-            kSecAttrAccount as String: id,
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: historyService,
+            kSecAttrAccount as String: id, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        if secret.isEmpty {
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data, data.count == 32 else {
+            throw TodexError.invalid(String(localized: "无法读取历史记录密钥"))
+        }
+        return data
+    }
+
+    /// Stores (or with nil, deletes) the history seed.
+    static func saveHistorySeed(_ seed: Data?, for id: String) throws {
+        #if targetEnvironment(simulator)
+            if keychainUnavailable {
+                try setFallback(seed?.base64EncodedString() ?? "", for: historyFallbackKey(id))
+                return
+            }
+        #endif
+        try write(seed, service: historyService, account: id)
+    }
+
+    private static let historyService = "com.todex.mobile.history"
+    private static func historyFallbackKey(_ id: String) -> String { "history:\(id)" }
+
+    /// WhenUnlockedThisDeviceOnly: never synced, never in backups.
+    private static func write(_ data: Data?, service: String, account: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        guard let data else {
             let result = SecItemDelete(query as CFDictionary)
             guard result == errSecSuccess || result == errSecItemNotFound else { throw TodexError.invalid(String(localized: "无法删除设备密钥")) }
             return
         }
         let values: [String: Any] = [
-            kSecValueData as String: Data(secret.utf8),
+            kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
         let updated = SecItemUpdate(query as CFDictionary, values as CFDictionary)
@@ -81,6 +121,17 @@ enum CredentialStore {
         } else if updated != errSecSuccess {
             throw TodexError.invalid(String(localized: "无法更新设备密钥"))
         }
+    }
+}
+
+/// Where AppSession keeps each backend profile's history seed; tests inject
+/// an in-memory store.
+struct HistorySeedStore {
+    var load: (String) throws -> Data?
+    var save: (Data?, String) throws -> Void
+    static var keychain: HistorySeedStore {
+        HistorySeedStore(
+            load: { try CredentialStore.historySeed(for: $0) }, save: { try CredentialStore.saveHistorySeed($0, for: $1) })
     }
 }
 
@@ -318,13 +369,14 @@ actor SessionPersistence {
     init(store: LocalStore) { self.store = store }
 
     func load(_ key: String) throws -> SessionSnapshot? { try store.read(key, as: SessionSnapshot.self) }
-    func events(_ key: String) throws -> [ConversationEvent] { try store.read(key, as: [ConversationEvent].self) ?? [] }
+    /// Cached journal prefix, exactly as received (ciphertext under history encryption).
+    func history(_ key: String) throws -> CachedHistory { try store.read(key, as: CachedHistory.self) ?? CachedHistory() }
 
     func save(_ snapshot: SessionSnapshot, key: String, version: UInt64) throws {
         try write(snapshot, key: key, version: version)
     }
-    func saveEvents(_ events: [ConversationEvent], key: String, version: UInt64) throws {
-        try write(events, key: key, version: version)
+    func saveHistory(_ history: CachedHistory, key: String, version: UInt64) throws {
+        try write(history, key: key, version: version)
     }
     private func write<T: Encodable>(_ value: T, key: String, version: UInt64) throws {
         if version <= (committed[key] ?? 0) { return }

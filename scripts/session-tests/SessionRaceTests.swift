@@ -188,6 +188,9 @@ actor FakeSocket: SessionSocket {
     func emit(_ event: ConversationEvent) throws { continuation.yield(["type": "conversation.event", "payload": try JSONValue(encoding: event)]) }
     func emitFrame(_ frame: JSONValue) { continuation.yield(frame) }
     func setQueueSnapshot(_ value: JSONValue) { queueSnapshot = value }
+    /// `history.keys.wraps` answers: kid text → WrappedKey JSON.
+    var historyWraps: [String: JSONValue] = [:]
+    func setHistoryWrap(kid: String, wrapped: JSONValue) { historyWraps[kid] = wrapped }
     func command(type: String, payload: JSONValue, timeout: TimeInterval, id: String) async throws -> JSONValue {
         if type == "conversation.control" { controls.append(payload); return ["accepted": true] }
         if type.hasPrefix("conversation.queue.") {
@@ -221,6 +224,10 @@ actor FakeSocket: SessionSocket {
             let last = conversation == "c" ? await backend.journal.last?.sequence ?? 0 : 0
             return ["conversationId": conversation, "subscribed": true, "nextSequence": .number(Double(last)), "hasMore": false]
         }
+        if type == "history.keys.wraps" {
+            let kids = payload["kids"].arrayValue.map(\.stringValue)
+            return ["wraps": .object(historyWraps.filter { kids.contains($0.key) })]
+        }
         if type == "conversation.fork" {
             forks.append(payload)
             return ["conversationId": "c-fork", "forkedFrom": payload["conversationId"]]
@@ -245,7 +252,7 @@ actor FakeSocket: SessionSocket {
     let connection: BackendConnection
     let session: AppSession
     let manifest = ConversationManifest(id: "c", provider: "codex", workspace: "/workspace", workspaceId: "w")
-    init(_ journal: [ConversationEvent] = [], snapshot: SessionSnapshot? = nil) throws {
+    init(_ journal: [ConversationEvent] = [], snapshot: SessionSnapshot? = nil, historySeed: Data? = nil) throws {
         backend = Backend(journal); socket = FakeSocket(backend: backend)
         let host = UUID().uuidString.lowercased() + ".invalid"
         connection = BackendConnection(id: "test-" + UUID().uuidString, name: "Fixture", serverURL: "https://" + host, deviceSecret: "")
@@ -257,7 +264,8 @@ actor FakeSocket: SessionSocket {
         session = AppSession(store: store, connections: [connection], defaults: defaults, apiFactory: { value in
             let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [FixtureProtocol.self]
             return APIClient(connection: value, session: URLSession(configuration: config))
-        }, socketFactory: { _ in socket }, credentialWriter: { _, _ in })
+        }, socketFactory: { _ in socket }, credentialWriter: { _, _ in },
+        historySeeds: HistorySeedStore(load: { _ in historySeed }, save: { _, _ in }))
     }
     func ready() async throws {
         await session.connect()
@@ -422,8 +430,8 @@ actor FakeSocket: SessionSocket {
     await h.backend.setReversePages(false)
     try await h.ready()
     h.session.readSequences["c"] = 10_005; h.session.persist()
-    try await eventually("cache persisted") { try h.store.read(h.eventKey, as: [ConversationEvent].self)?.count == 10_000 }
-    let cached = try h.store.read(h.eventKey, as: [ConversationEvent].self)!
+    try await eventually("cache persisted") { try h.store.read(h.eventKey, as: CachedHistory.self)?.events.count == 10_000 }
+    let cached = try h.store.read(h.eventKey, as: CachedHistory.self)!.events
     try check(cached.enumerated().allSatisfy { $0.element.sequence == $0.offset + 1 }, "cache is a tail or contains gaps")
     try check(try Data(contentsOf: h.store.url(h.eventKey)).count < 8 * 1_024 * 1_024, "cache byte bound")
     await h.backend.changeTenant(); try await h.session.refresh()
@@ -433,6 +441,39 @@ actor FakeSocket: SessionSocket {
     other = h.connection; other.deviceSecret = "changed"
     try check(LocalStore.namespace(h.connection) != LocalStore.namespace(other), "credential missing from namespace")
     try check(LocalStore.identity(["ab", "c"]) != LocalStore.identity(["a", "bc"]), "namespace collision")
+    h.session.disconnect()
+}
+@MainActor func encryptedHistoryStaysCiphertextOnDisk() async throws {
+    let device = try HistoryCrypto.generateRecipientKey()
+    let key = HistoryCrypto.SegmentKey.generate()
+    func sealed(_ n: Int, turn: String, text: String) throws -> ConversationEvent {
+        let payload: JSONValue = ["turnId": .string(turn), "text": .string(text)]
+        let ciphertext = try HistoryCrypto.seal(
+            JSONEncoder().encode(payload), key: key, conversationID: "c", stream: .eventFull, counter: UInt64(n))
+        return event(n, "message.delta", [
+            "turnId": .string(turn),
+            "$enc": ["v": 1, "kid": .string(HistoryEncryption.encodeID(key.kid)), "c": "c", "n": .number(Double(n)),
+                     "f": .string(HistoryEncryption.encodeID(ciphertext))],
+        ])
+    }
+    let secret = "replayed secret reply"
+    let h = try Harness(
+        [event(1, "turn.started", ["turnId": "t"]), try sealed(2, turn: "t", text: secret), event(3, "turn.completed", ["turnId": "t"])],
+        historySeed: device.seedRepresentation)
+    await h.socket.setHistoryWrap(
+        kid: HistoryEncryption.encodeID(key.kid),
+        wrapped: try JSONValue(encoding: HistoryCrypto.wrap(key, for: device.publicKey.rawRepresentation)))
+    await h.backend.setReversePages(false)
+    try await h.ready()
+    try check(h.session.runtimes["c"]?.messages.map(\.text) == [secret], "history page was not decrypted")
+    try await h.socket.emit(event(4, "turn.started", ["turnId": "t2"]))
+    try await h.socket.emit(try sealed(5, turn: "t2", text: "live secret"))
+    try await eventually("live event decrypted") { h.session.runtimes["c"]?.appliedSequence == 5 }
+    try check(h.session.runtimes["c"]?.messages.first?.text == "live secret", "live event was not decrypted")
+    h.session.persist()
+    try await eventually("cache persisted") { (try? h.store.read(h.eventKey, as: CachedHistory.self))?.events.count == 5 }
+    let disk = String(decoding: try Data(contentsOf: h.store.url(h.eventKey)), as: UTF8.self)
+    try check(!disk.contains(secret) && !disk.contains("live secret") && disk.contains("$enc"), "plaintext reached the event cache")
     h.session.disconnect()
 }
 @MainActor func corruptCacheIsOptional() async throws {
@@ -935,6 +976,7 @@ actor FakeSocket: SessionSocket {
             ("disk failure + no recursive notification", diskFailurePreservesDraft),
             ("restart/background pause + early completion", restartBackgroundAndFastCompletion),
             ("tenant scope + bounded cache prefix", scopedReadsAndCachePrefix),
+            ("encrypted history: decrypt in memory, ciphertext on disk", encryptedHistoryStaysCiphertextOnDisk),
             ("corrupt optional cache recovery", corruptCacheIsOptional),
             ("wire subscriber overflow gap", streamOverflowSignalsGap),
             ("backend switch during HTTP replay", staleReplayResponse),

@@ -162,14 +162,9 @@ extension SessionSocket {
     }
     private var unsavedSnapshots: [String: Checkpoint] = [:]
     private var storageFailures: [String: (version: UInt64, message: String)] = [:]
-    private struct CachedJournal {
-        var events: [ConversationEvent] = []
-        var pending: [Int: ConversationEvent] = [:]
-        var bytes = 0
-        var saturated = false
-    }
-    private var rawEvents: [String: CachedJournal] = [:]
-    private var cachedBytes = 0
+    /// Contiguous journal prefixes as received: ciphertext under history
+    /// encryption, decrypted again in memory whenever they are loaded.
+    private var eventCache = ConversationEventCache()
     private var cacheLoaded: Set<String> = []
     private var dirtyCaches: Set<String> = []
     /// Lazily-opened histories: `historyFloors[id]` is the highest sequence not
@@ -184,11 +179,27 @@ extension SessionSocket {
     private struct CacheWrite {
         let namespace: String
         let version: UInt64
-        let events: [ConversationEvent]
+        let history: CachedHistory
     }
     private var cacheWrites: [String: CacheWrite] = [:]
-    private static let cacheByteLimit = 32 * 1_024 * 1_024
-    private static let journalByteLimit = 8 * 1_024 * 1_024
+    /// One journal event as the backend sent it (`raw`, the only form that
+    /// reaches the disk cache) and as projected (`plain`, decrypted).
+    private struct ReceivedEvent {
+        let raw: ConversationEvent
+        let plain: ConversationEvent
+    }
+    // MARK: History encryption (history v3)
+    /// This backend's history-encryption settings; nil while unknown or when
+    /// the backend predates history encryption.
+    private(set) var historyEncryption: HistoryEncryptionState?
+    private var historyDecryptor: HistoryDecryptor?
+    private let historySeeds: HistorySeedStore
+    /// Conversations whose journal carried ciphertext; retry must then send
+    /// the prompt text itself (§7).
+    private var encryptedConversations: Set<String> = []
+    /// `titleEnc.ct` → decrypted title, memory only: titles stay ciphertext on disk.
+    private var decryptedTitles: [String: String] = [:]
+    private var historyProbe: Task<Void, Never>?
     var connection: BackendConnection? { connections.first { $0.id == selectedID } }
     var activeConversation: ConversationManifest? { conversations.first { $0.id == activeConversationID } }
 
@@ -197,9 +208,11 @@ extension SessionSocket {
         defaults: UserDefaults = .standard,
         apiFactory: @escaping (BackendConnection) -> APIClient = { APIClient(connection: $0) },
         socketFactory: @escaping (BackendConnection) -> any SessionSocket = { RealtimeClient(connection: $0) },
-        credentialWriter: @escaping (String, String) throws -> Void = { try CredentialStore.save($0, for: $1) }
+        credentialWriter: @escaping (String, String) throws -> Void = { try CredentialStore.save($0, for: $1) },
+        historySeeds: HistorySeedStore = .keychain
     ) {
         self.store = store
+        self.historySeeds = historySeeds
         persistence = SessionPersistence(store: store)
         self.defaults = defaults
         makeAPI = apiFactory
@@ -323,7 +336,10 @@ extension SessionSocket {
             // launch-time convenience and never enters the on-disk catalog.
             try store.save(values.filter { $0.id != fixtureConnectionID }, key: "connections")
             for value in values { try saveCredential(value.deviceSecret, value.id) }
-            for old in removed { try saveCredential("", old.id) }
+            for old in removed {
+                try saveCredential("", old.id)
+                try historySeeds.save(nil, old.id)
+            }
         } catch {
             reportStorageError(error, namespace: stateNamespace, version: saveVersion)
             throw error
@@ -407,7 +423,11 @@ extension SessionSocket {
         frameTask = Task { [weak self] in
             for await frame in socket.events {
                 guard let self, self.revision == current, !Task.isCancelled else { return }
-                receive(frame)
+                // Encrypted live events decrypt here, in arrival order; the
+                // loop waits so later frames cannot overtake them.
+                let decrypted = await decryptLive(frame)
+                guard self.revision == current, !Task.isCancelled else { return }
+                receive(frame, decrypted: decrypted)
             }
         }
         browserFrameTask = Task { [weak self] in
@@ -430,6 +450,7 @@ extension SessionSocket {
             checkBackendVersion(api)
             try await refresh()
             try checkRevision(current)
+            probeHistoryEncryption()
             if !legacyCursors.isEmpty {
                 _ = try await socket.command(
                     type: "session.resume",
@@ -486,6 +507,8 @@ extension SessionSocket {
         browserFrameTask = nil
         healthTask?.cancel()
         healthTask = nil
+        historyProbe?.cancel()
+        historyProbe = nil
         healthLatencyMs = nil
         healthFailed = false
         versionMismatch = nil
@@ -648,8 +671,9 @@ extension SessionSocket {
             self.conversations.map { ($0.id, conversationScope($0)) }, uniquingKeysWith: { _, latest in latest })
         self.workspaces = catalog.workspaces
         rejectedWorkspaces = catalog.rejected
-        self.conversations = conversations
+        self.conversations = conversations.map(presentable)
         self.providers = providers
+        decryptTitles()
         // A deleted conversation leaves its adapter running on the backend;
         // stop it rather than leaking the process.
         for removed in Set(oldScopes.keys).subtracting(conversations.map(\.id)) {
@@ -764,8 +788,15 @@ extension SessionSocket {
         guard let api, isConnected else { throw TodexError.disconnected }
         let current = revision
         let id = target.id
-        let messages = try await ConversationExport.transcript(conversationId: id) { after, limit in
-            try await api.events(conversationId: id, after: after, limit: limit, detail: "summary")
+        let messages = try await ConversationExport.transcript(conversationId: id) { [weak self] after, limit in
+            let page = try await api.events(conversationId: id, after: after, limit: limit, detail: "summary")
+            guard let self else { throw CancellationError() }
+            // The transcript projects plaintext; ciphertext is decrypted per page.
+            var plain = page
+            plain["events"] = .array(
+                try await self.receivedPage(page, conversationId: id).map { try JSONValue(encoding: $0.plain) })
+            plain["frames"] = nil
+            return plain
         }
         try checkRevision(current)
         return ConversationExport.markdown(messages, title: target.title ?? "", maxBytes: maxBytes)
@@ -825,18 +856,26 @@ extension SessionSocket {
         }
         if lazyOpened { cacheLoaded.insert(id) }
         if !cacheLoaded.contains(id) {
-            let cached: [ConversationEvent]
-            do { cached = try await persistence.events(eventKey(manifest)) } catch {
+            let cached: CachedHistory
+            do { cached = try await persistence.history(eventKey(manifest)) } catch {
                 try checkRevision(current)
                 reportStorageError(error, namespace: stateNamespace, version: saveVersion)
-                cached = []
+                cached = CachedHistory()
             }
             try checkRevision(current)
-            cacheLoaded.insert(id)
             // Cache files contain a prefix only. Never seed a cursor from a tail.
-            for (offset, event) in cached.prefix(10_000).enumerated() {
+            var prefix: [ConversationEvent] = []
+            for (offset, event) in cached.events.prefix(ConversationEventCache.maximumSequence).enumerated() {
                 guard event.sequence == offset + 1, event.conversationId == id else { break }
-                ingest(event)
+                prefix.append(event)
+            }
+            // The cache holds what the backend sent; ciphertext decrypts in memory only.
+            let frames = JSONValue.object(cached.frames)
+            let cachedEvents = try await received(prefix, frames: frames)
+            try checkRevision(current)
+            if !cacheLoaded.contains(id) {
+                cacheLoaded.insert(id)
+                for event in cachedEvents { ingest(event, frames: frames) }
             }
         }
         var highWater = manifest.lastSequence
@@ -870,7 +909,7 @@ extension SessionSocket {
             guard result["subscribed"].boolValue else { throw TodexError.invalid(String(localized: "后端未确认订阅")) }
             highWater = max(
                 highWater, Self.sequence(result["nextSequence"]) ?? 0, Self.sequence(result["lastSequence"]) ?? 0)
-            for raw in result["events"].arrayValue { try ingestReplay(raw, conversationId: id) }
+            try await ingestReplay(result, conversationId: id, revision: current)
             // The socket ACK can resume this task before the frame-consumer Task
             // has applied its earlier replay frames. Fill through the ACK cursor.
             try await replayPages(id, target: highWater, api: api, revision: current)
@@ -887,6 +926,9 @@ extension SessionSocket {
                     conversations.append(updated)
                 }
                 if activeConversationID == id { readSequences[id] = runtimes[id]?.appliedSequence ?? 0 }
+                if let index = conversations.firstIndex(where: { $0.id == id }) {
+                    conversations[index] = presentable(conversations[index])
+                }
                 saveSoon()
                 changed(immediate: true)
                 await refreshFollowUps(updated)
@@ -909,11 +951,10 @@ extension SessionSocket {
             let page = try await api.events(
                 conversationId: id, after: cursor, limit: min(200, max(1, upper - cursor)))
             try checkRevision(current)
-            guard case .array(let raw) = page["events"] else { throw TodexError.invalid(String(localized: "历史分页响应无效")) }
+            let received = try await receivedPage(page, conversationId: id)
+            try checkRevision(current)
             var reached = false
-            for value in raw {
-                let event = try value.decoded(ConversationEvent.self)
-                guard event.conversationId == id else { throw TodexError.invalid(String(localized: "历史事件属于其他对话")) }
+            for event in received.map(\.plain) {
                 guard event.sequence > cursor, event.sequence <= upper else { continue }
                 events.append(event)
                 cursor = event.sequence
@@ -951,14 +992,8 @@ extension SessionSocket {
         let page = try await api.events(
             conversationId: id, before: floor, limit: Self.historyPageSize, detail: "summary")
         try checkRevision(current)
-        guard case .array(let raw) = page["events"] else { throw TodexError.invalid(String(localized: "历史分页响应无效")) }
-        var events: [ConversationEvent] = []
-        for value in raw {
-            let event = try value.decoded(ConversationEvent.self)
-            guard event.conversationId == id else { throw TodexError.invalid(String(localized: "历史事件属于其他对话")) }
-            events.append(event)
-        }
-        events.sort { $0.sequence < $1.sequence }
+        let events = try await receivedPage(page, conversationId: id).map(\.plain)
+        try checkRevision(current)
         // A missing page anchor means the backend ignored `beforeSequence`;
         // keep the floor so the forward path still owns those sequences.
         guard let first = events.first, let last = events.last, last.sequence <= floor else { return }
@@ -992,39 +1027,29 @@ extension SessionSocket {
         // Manifests from the wire are snake_case; locally refreshed entries can
         // carry the runtime's camelCase spelling.
         let turnActive = ["running", "waiting_permission", "waitingPermission"].contains(manifest.status)
-        var pages: [[ConversationEvent]] = []
+        var pages: [(events: [ReceivedEvent], frames: JSONValue)] = []
         var cursor = manifest.lastSequence
         var hasMore = true
         while cursor > 0, pages.count < (turnActive ? Self.activeTurnScanPages : 1) {
             let page = try await api.events(
                 conversationId: id, before: cursor, limit: Self.historyPageSize, detail: "summary")
             try checkRevision(current)
-            guard case .array(let raw) = page["events"] else {
-                throw TodexError.invalid(String(localized: "历史分页响应无效"))
-            }
-            var events: [ConversationEvent] = []
-            for value in raw {
-                let event = try value.decoded(ConversationEvent.self)
-                guard event.conversationId == id else {
-                    throw TodexError.invalid(String(localized: "历史事件属于其他对话"))
-                }
-                events.append(event)
-            }
-            events.sort { $0.sequence < $1.sequence }
-            guard let first = events.first, let last = events.last, last.sequence == cursor else {
+            let events = try await receivedPage(page, conversationId: id)
+            try checkRevision(current)
+            guard let first = events.first?.raw, let last = events.last?.raw, last.sequence == cursor else {
                 return false
             }
-            pages.append(events)
+            pages.append((events, page["frames"]))
             hasMore = page["hasMore"].boolValue && first.sequence > 1
             cursor = first.sequence - 1
             if !hasMore { break }
             if turnActive,
-                events.contains(where: { ConversationRuntime.canonicalType($0) == "turn.started" })
+                events.contains(where: { ConversationRuntime.canonicalType($0.plain) == "turn.started" })
             {
                 break
             }
         }
-        guard let earliest = pages.last?.first?.sequence else { return false }
+        guard let earliest = pages.last?.events.first?.raw.sequence else { return false }
         let floor = hasMore ? max(0, earliest - 1) : 0
         var runtime = runtimes[id] ?? ConversationRuntime(conversationId: id)
         // If a live frame already applied the journal head, forward replay
@@ -1032,7 +1057,7 @@ extension SessionSocket {
         historyFloors[id] = runtime.seedHistoryFloor(floor) ? floor : 0
         runtimes[id] = runtime
         for page in pages.reversed() {
-            for event in page { ingest(event) }
+            for event in page.events { ingest(event, frames: page.frames) }
         }
         return true
     }
@@ -1124,8 +1149,7 @@ extension SessionSocket {
             let before = runtimes[id]?.appliedSequence ?? 0
             let page = try await api.events(conversationId: id, after: before, limit: 200, detail: "summary")
             try checkRevision(current)
-            guard case .array(let events) = page["events"] else { throw TodexError.invalid(String(localized: "历史分页响应无效")) }
-            for raw in events { try ingestReplay(raw, conversationId: id) }
+            try await ingestReplay(page, conversationId: id, revision: current)
             let runtime = runtimes[id] ?? ConversationRuntime(conversationId: id)
             highWater = max(
                 highWater, runtime.highWaterSequence, Self.sequence(page["nextSequence"]) ?? 0,
@@ -1135,10 +1159,60 @@ extension SessionSocket {
         }
         throw TodexError.invalid(String(localized: "历史分页过多，恢复未完成"))
     }
-    private func ingestReplay(_ raw: JSONValue, conversationId: String) throws {
-        let event = try raw.decoded(ConversationEvent.self)
-        guard event.conversationId == conversationId else { throw TodexError.invalid(String(localized: "历史事件属于其他对话")) }
-        ingest(event)
+    /// Ingests one history page or subscribe backfill (`events` + `frames`).
+    private func ingestReplay(_ page: JSONValue, conversationId: String, revision current: UUID) async throws {
+        // A subscribe ACK without backfill has no `events`.
+        guard !page["events"].isNull else { return }
+        let events = try await receivedPage(page, conversationId: conversationId, sorted: false)
+        try checkRevision(current)
+        for event in events { ingest(event, frames: page["frames"]) }
+    }
+    /// Decodes a page's `events` (all of `conversationId`), optionally in
+    /// sequence order, and decrypts them with the page's `frames`.
+    private func receivedPage(_ page: JSONValue, conversationId: String, sorted: Bool = true) async throws
+        -> [ReceivedEvent]
+    {
+        guard case .array(let values) = page["events"] else {
+            throw TodexError.invalid(String(localized: "历史分页响应无效"))
+        }
+        var events: [ConversationEvent] = []
+        for value in values {
+            let event = try value.decoded(ConversationEvent.self)
+            guard event.conversationId == conversationId else {
+                throw TodexError.invalid(String(localized: "历史事件属于其他对话"))
+            }
+            events.append(event)
+        }
+        if sorted { events.sort { $0.sequence < $1.sequence } }
+        return try await received(events, frames: page["frames"])
+    }
+    /// Pairs each event with its plaintext. Plain journals pass through
+    /// without touching the history key.
+    private func received(_ events: [ConversationEvent], frames: JSONValue) async throws -> [ReceivedEvent] {
+        guard events.contains(where: { HistoryEncryption.isEncrypted($0.payload) }) else {
+            return events.map { ReceivedEvent(raw: $0, plain: $0) }
+        }
+        for event in events where HistoryEncryption.isEncrypted(event.payload) {
+            encryptedConversations.insert(event.conversationId)
+        }
+        let keys: HistoryDecryptor
+        do { keys = try historyKeys() } catch {
+            // No usable device key (Keychain unavailable): the content stays
+            // locked, the journal still advances, and the reason is shown.
+            operationError = error.localizedDescription
+            changed()
+            return events.map { event in
+                var locked = event
+                if HistoryEncryption.isEncrypted(event.payload) {
+                    locked.payload = HistoryEncryption.lockedPayload(event.payload)
+                }
+                return ReceivedEvent(raw: event, plain: locked)
+            }
+        }
+        // Key lookups that fail in transit throw: the page is retried rather
+        // than recorded as locked.
+        let plain = try await keys.decrypt(events, frames: frames)
+        return zip(events, plain).map { ReceivedEvent(raw: $0, plain: $1) }
     }
     private static func sequence(_ value: JSONValue) -> Int? {
         guard let number = value.doubleValue, number.isFinite, number >= 0, number < Double(Int.max),
@@ -1558,9 +1632,274 @@ extension SessionSocket {
         guard runtimes[conversation.id]?.readyForActions == true else { throw TodexError.invalid(String(localized: "请等待历史记录同步完成")) }
         guard provider(for: conversation)?.capabilities["controlActions"].arrayValue.contains(.string(action)) == true
         else { throw TodexError.invalid(String(localized: "当前 Agent 不支持此操作")) }
-        return try await command(
-            "conversation.\(action)", ["conversationId": .string(conversation.id)],
-            timeout: action == "compact" ? 310 : 45)
+        var payload: JSONValue = ["conversationId": .string(conversation.id)]
+        // An e2e backend cannot read the last prompt back; retry sends the
+        // decrypted original text (history v3 §7).
+        if action == "retry", historyEncryption?.isEnabled == true || encryptedConversations.contains(conversation.id) {
+            guard
+                let prompt = runtimes[conversation.id]?.messages.first(where: {
+                    $0.role == "user" && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                })?.text
+            else { throw TodexError.invalid(String(localized: "此设备读不到上一轮的原始消息，无法重试")) }
+            payload["prompt"] = .string(prompt)
+        }
+        return try await command("conversation.\(action)", payload, timeout: action == "compact" ? 310 : 45)
+    }
+
+    // MARK: - History encryption (history v3, docs/history-encryption.md)
+
+    /// The manifest with its encrypted title shown, once decrypted.
+    private func presentable(_ manifest: ConversationManifest) -> ConversationManifest {
+        guard let ciphertext = manifest.titleEnc?["ct"].optionalString, let title = decryptedTitles[ciphertext]
+        else { return manifest }
+        var shown = manifest
+        shown.title = title
+        return shown
+    }
+
+    /// Decrypts `manifest.titleEnc` of listed conversations in the background.
+    private func decryptTitles() {
+        let pending = conversations.filter { conversation in
+            guard let ciphertext = conversation.titleEnc?["ct"].optionalString else { return false }
+            return decryptedTitles[ciphertext] == nil
+        }
+        guard !pending.isEmpty, isConnected else { return }
+        let current = revision
+        Task { [weak self] in
+            guard let self else { return }
+            let keys: HistoryDecryptor
+            do { keys = try historyKeys() } catch {
+                operationError = error.localizedDescription
+                changed()
+                return
+            }
+            for conversation in pending {
+                guard let titleEnc = conversation.titleEnc else { continue }
+                let title: String?
+                do { title = try await keys.decryptTitle(titleEnc, conversationId: conversation.id) } catch {
+                    // A lookup failed in transit; the next refresh tries again.
+                    DebugLog.record("history.title.failed", ["error": String(describing: error)], level: .warn)
+                    return
+                }
+                guard current == revision else { return }
+                guard let title else { continue }
+                decryptedTitles[titleEnc["ct"].stringValue] = title
+                if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+                    conversations[index] = presentable(conversations[index])
+                }
+                changed()
+            }
+        }
+    }
+
+    /// This backend profile's decryptor, created with the device history key
+    /// on first need. Wrapped keys are fetched over whichever socket is live.
+    private func historyKeys() throws -> HistoryDecryptor {
+        if let historyDecryptor { return historyDecryptor }
+        guard let connection else { throw TodexError.disconnected }
+        let seed = try historySeed(for: connection.id)
+        let deviceRid = try HistoryCrypto.recipientID(
+            publicKey: HistoryCrypto.recipientKey(seed: seed).publicKey.rawRepresentation)
+        let keys = try HistoryDecryptor(deviceSeed: seed) { [weak self] conversationId, kids, rid in
+            guard let api = await self?.historyAPI() else { throw TodexError.disconnected }
+            // The device's own wraps use the default (caller) recipient.
+            return try await api.wraps(conversationId: conversationId, kids: kids, rid: rid == deviceRid ? nil : rid)
+        }
+        historyDecryptor = keys
+        return keys
+    }
+
+    /// The device history seed (Keychain, this device only), generated once.
+    private func historySeed(for id: String) throws -> Data {
+        if let seed = try historySeeds.load(id) { return seed }
+        let seed = try HistoryCrypto.generateRecipientKey().seedRepresentation
+        try historySeeds.save(seed, id)
+        return seed
+    }
+
+    private func historyAPI() -> HistoryAPI? {
+        guard let socket, isConnected else { return nil }
+        return HistoryAPI { type, payload in
+            try await socket.command(type: type, payload: payload, timeout: 30, id: UUID().uuidString)
+        }
+    }
+
+    /// This device's recipient id on the current backend, once its key exists.
+    var historyDeviceRecipientID: String? {
+        historyDecryptor.map { HistoryEncryption.encodeID($0.deviceRecipientID) }
+    }
+
+    /// After connecting: learn the backend's mode and register this device.
+    /// Backends without history encryption reject the command; that is quiet.
+    private func probeHistoryEncryption() {
+        historyProbe?.cancel()
+        let current = revision
+        historyProbe = Task { [weak self] in
+            do { try await self?.refreshHistoryEncryption() } catch {
+                guard let self, current == revision, !(error is CancellationError) else { return }
+                DebugLog.record("history.probe.failed", ["error": String(describing: error)], level: .info)
+            }
+        }
+    }
+
+    /// Reads the history-encryption state and registers this device's public
+    /// key when the backend does not list it (first use, or a replaced key).
+    @discardableResult
+    func refreshHistoryEncryption() async throws -> HistoryEncryptionState {
+        guard let api = historyAPI(), let connection else { throw TodexError.disconnected }
+        let current = revision
+        var state: HistoryEncryptionState
+        do { state = try await api.state() } catch {
+            if current == revision {
+                historyEncryption = nil
+                changed()
+            }
+            throw error
+        }
+        try checkRevision(current)
+        // Registration binds the key to the connection's enrolled device id.
+        if !connection.deviceSecret.isEmpty {
+            let keys = try historyKeys()
+            if state.myRid != HistoryEncryption.encodeID(keys.deviceRecipientID) {
+                _ = try await api.register(publicKey: keys.devicePublicKey)
+                try checkRevision(current)
+                state = try await api.state()
+                try checkRevision(current)
+            }
+        }
+        historyEncryption = state
+        changed()
+        return state
+    }
+
+    /// Turns e2e on (after uploading the optional recovery public key, so the
+    /// first keys are wrapped for it too) or off.
+    func setHistoryEncryption(enabled: Bool, recoverySeed: Data? = nil) async throws {
+        guard let api = historyAPI() else { throw TodexError.disconnected }
+        let current = revision
+        let state: HistoryEncryptionState
+        if enabled {
+            try await refreshHistoryEncryption()
+            if let recoverySeed {
+                _ = try await api.setRecovery(
+                    publicKey: HistoryCrypto.recipientKey(seed: recoverySeed).publicKey.rawRepresentation)
+            }
+            state = try await api.enable()
+        } else {
+            state = try await api.disable()
+        }
+        try checkRevision(current)
+        historyEncryption = state
+        changed()
+    }
+
+    /// Replaces the recovery recipient with a new key's public half.
+    func replaceRecoveryKey(seed: Data) async throws {
+        guard let api = historyAPI() else { throw TodexError.disconnected }
+        _ = try await api.setRecovery(publicKey: HistoryCrypto.recipientKey(seed: seed).publicKey.rawRepresentation)
+        try await refreshHistoryEncryption()
+    }
+
+    func revokeHistoryRecipient(_ rid: String) async throws {
+        guard let api = historyAPI() else { throw TodexError.disconnected }
+        let current = revision
+        let state = try await api.revoke(rid: rid)
+        try checkRevision(current)
+        historyEncryption = state
+        changed()
+    }
+
+    /// Asks an authorized device for access to history from before this
+    /// device registered.
+    func requestHistoryGrant() async throws {
+        guard let api = historyAPI() else { throw TodexError.disconnected }
+        try await refreshHistoryEncryption()
+        _ = try await api.requestGrant()
+        try await refreshHistoryEncryption()
+    }
+
+    func dismissHistoryGrant(_ grantId: String) async throws {
+        guard let api = historyAPI() else { throw TodexError.disconnected }
+        try await api.dismissGrant(grantId)
+        defaults.removeObject(forKey: key("history-grant-\(grantId)"))
+        try await refreshHistoryEncryption()
+    }
+
+    /// Re-wraps every key this device can read for the requesting device.
+    /// Progress is saved after each committed page, so a later call resumes.
+    func authorizeHistoryGrant(
+        _ grant: HistoryGrantRequest, progress: @escaping @MainActor (HistoryGrant.Progress) -> Void
+    ) async throws -> HistoryGrant.Progress {
+        guard let api = historyAPI(), let connection else { throw TodexError.disconnected }
+        let state = try await refreshHistoryEncryption()
+        guard let target = state.recipients.first(where: { $0.rid == grant.rid && !$0.isRevoked }) else {
+            throw TodexError.invalid(String(localized: "请求授权的设备尚未登记历史密钥，或已被吊销"))
+        }
+        let source = try HistoryCrypto.recipientKey(seed: historySeed(for: connection.id))
+        let resumeKey = key("history-grant-\(grant.grantId)")
+        let resume = defaults.data(forKey: resumeKey).flatMap { try? JSONDecoder().decode(HistoryGrant.Progress.self, from: $0) }
+        let result = try await HistoryGrant.fulfill(
+            api: api, grantId: grant.grantId, target: target, source: source, sourceRid: nil, resume: resume
+        ) { [weak self] value in
+            await self?.recordGrantProgress(value, key: resumeKey)
+            await progress(value)
+        }
+        defaults.removeObject(forKey: resumeKey)
+        try await refreshHistoryEncryption()
+        return result
+    }
+
+    private func recordGrantProgress(_ value: HistoryGrant.Progress, key: String) {
+        defaults.set(try? JSONEncoder().encode(value), forKey: key)
+    }
+
+    /// Imports the recovery key (24 words or QR text) and grants this device
+    /// every key the recovery recipient holds (a self-grant without grantId).
+    /// The recovery seed is used in memory only and never stored.
+    func importRecoveryKey(
+        _ seed: Data, progress: @escaping @MainActor (HistoryGrant.Progress) -> Void
+    ) async throws -> HistoryGrant.Progress {
+        guard let api = historyAPI() else { throw TodexError.disconnected }
+        let state = try await refreshHistoryEncryption()
+        let recovery = try HistoryCrypto.recipientKey(seed: seed)
+        let recoveryRid = try HistoryCrypto.recipientID(publicKey: recovery.publicKey.rawRepresentation)
+        guard state.activeRecovery?.rid == HistoryEncryption.encodeID(recoveryRid) else {
+            throw TodexError.invalid(String(localized: "此恢复密钥与后端当前登记的恢复密钥不一致"))
+        }
+        guard let mine = state.recipients.first(where: { $0.rid == state.myRid && !$0.isRevoked }) else {
+            throw TodexError.invalid(String(localized: "此设备尚未登记历史密钥，请先完成设备配对"))
+        }
+        let keys = try historyKeys()
+        try await keys.setRecoverySeed(seed)
+        let result: HistoryGrant.Progress
+        do {
+            result = try await HistoryGrant.fulfill(
+                api: api, grantId: nil, target: mine, source: recovery, sourceRid: recoveryRid
+            ) { value in await progress(value) }
+        } catch {
+            try? await keys.setRecoverySeed(nil)
+            throw error
+        }
+        try? await keys.setRecoverySeed(nil)
+        await reloadDecryptedHistory()
+        return result
+    }
+
+    /// Re-reads locked history after new keys arrived: forget unavailable
+    /// keys and rebuild encrypted conversations from the ciphertext cache
+    /// and the backend. The open conversation recovers at once.
+    func reloadDecryptedHistory() async {
+        await historyDecryptor?.forgetUnavailable()
+        decryptTitles()
+        for id in encryptedConversations where recoveryTasks[id] == nil && runtimes[id] != nil {
+            runtimes[id] = id == activeConversationID ? ConversationRuntime(conversationId: id) : nil
+            historyFloors.removeValue(forKey: id)
+            earlierLoading.removeValue(forKey: id)
+            cacheLoaded.remove(id)
+        }
+        changed(immediate: true)
+        guard let id = activeConversationID, runtimes[id] != nil, isConnected else { return }
+        do { try await recover(id) } catch { /* recover reports once for all waiters. */ }
     }
     /// Desktop-parity fork from the list: unlike `control`, it needs no replayed
     /// runtime, so a never-opened conversation can be forked. The copy inherits
@@ -1954,7 +2293,24 @@ extension SessionSocket {
         }
     }
 
-    private func receive(_ frame: JSONValue) {
+    /// The plaintext of an encrypted live `conversation.event`; nil for every
+    /// other frame. A key lookup that fails in transit leaves the event out and
+    /// sends the conversation through recovery, which pages it in again.
+    private func decryptLive(_ frame: JSONValue) async -> Result<ConversationEvent, any Error>? {
+        guard frame["type"] == "conversation.event", HistoryEncryption.isEncrypted(frame["payload"]["payload"]),
+            let event = try? frame["payload"].decoded(ConversationEvent.self)
+        else { return nil }
+        do {
+            guard let plain = try await received([event], frames: frame["frames"]).first?.plain else {
+                throw TodexError.invalid(String(localized: "历史分页响应无效"))
+            }
+            return .success(plain)
+        } catch {
+            DebugLog.record("history.decrypt.failed", ["error": String(describing: error)], level: .warn)
+            return .failure(error)
+        }
+    }
+    private func receive(_ frame: JSONValue, decrypted: Result<ConversationEvent, any Error>? = nil) {
         for continuation in wireSubscribers.values {
             if case .dropped = continuation.yield(frame) {
                 // Consumers must refresh any projection that missed a wire frame.
@@ -1983,11 +2339,16 @@ extension SessionSocket {
         }
         if type == "conversation.event", let event = try? frame["payload"].decoded(ConversationEvent.self) {
             // Watched conversations have no runtime; only their list row updates.
+            // The plaintext envelope fields carry everything the row needs.
             guard runtimes[event.conversationId] != nil else {
                 applyWatchedEvent(event)
                 return
             }
-            ingest(event, live: true)
+            switch decrypted {
+            case .failure: runtimes[event.conversationId]?.beginReplay()
+            case .success(let plain): ingest(ReceivedEvent(raw: event, plain: plain), frames: frame["frames"], live: true)
+            case nil: ingest(ReceivedEvent(raw: event, plain: event), live: true)
+            }
             if runtimes[event.conversationId]?.needsRecovery == true, recoveryTasks[event.conversationId] == nil,
                 isConnected
             {
@@ -2060,7 +2421,8 @@ extension SessionSocket {
     }
     /// `live` marks events from the open socket; cache and history replays pass
     /// the default so completion alerts only fire for turns that finish now.
-    private func ingest(_ event: ConversationEvent, live: Bool = false) {
+    private func ingest(_ received: ReceivedEvent, frames: JSONValue = .null, live: Bool = false) {
+        let event = received.plain
         let id = event.conversationId
         var runtime = runtimes[id] ?? ConversationRuntime(conversationId: id)
         let before = runtime.appliedSequence
@@ -2072,7 +2434,8 @@ extension SessionSocket {
         // Records only ever change by (re)inserting at the head; a final turn
         // record's removal of that turn's partials is mirrored by the ledger.
         if let head = runtime.usageRecords.first, head != usageHead { recordUsage(id, head) }
-        cache(event)
+        // Only the received form is cached: ciphertext stays ciphertext on disk.
+        if eventCache.record(received.raw, frames: frames) { dirtyCaches.insert(id) }
         if let pending = pendingSends[id], event.sequence > pending.afterSequence,
             event.payload["clientRequestId"].stringValue == pending.requestId
         {
@@ -2124,70 +2487,8 @@ extension SessionSocket {
         CompletionNotifications.post(conversationId: id, title: title, body: body)
     }
 
-    /// Cache only a bounded contiguous prefix. Neither arrival order nor the
-    /// 10,000-event cap may turn a tail into a seemingly complete offline journal.
-    private func cache(_ event: ConversationEvent) {
-        let id = event.conversationId
-        guard event.sequence > 0, event.sequence <= 10_000,
-            rawEvents[id] != nil || rawEvents.count < 32
-        else { return }
-        var journal = rawEvents[id] ?? CachedJournal()
-        guard !journal.saturated, event.sequence > journal.events.count,
-            journal.pending[event.sequence] == nil
-        else { return }
-        guard event.sequence == journal.events.count + 1 || journal.pending.count < 256 else { return }
-        let bytes = Self.eventCost(event)
-        guard bytes <= Self.journalByteLimit - journal.bytes, bytes <= Self.cacheByteLimit - cachedBytes else {
-            journal.saturated = true
-            for pending in journal.pending.values {
-                let cost = Self.eventCost(pending)
-                journal.bytes -= cost
-                cachedBytes -= cost
-            }
-            journal.pending.removeAll()
-            rawEvents[id] = journal
-            return
-        }
-        journal.pending[event.sequence] = event
-        journal.bytes += bytes
-        cachedBytes += bytes
-        while let next = journal.pending.removeValue(forKey: journal.events.count + 1) {
-            journal.events.append(next)
-            dirtyCaches.insert(id)
-        }
-        rawEvents[id] = journal
-    }
-    private static func eventCost(_ event: ConversationEvent) -> Int {
-        func cost(_ value: JSONValue, remaining: Int) -> Int {
-            guard remaining > 0 else { return Self.journalByteLimit + 1 }
-            switch value {
-            case .string(let string): return min(Self.journalByteLimit + 1, string.utf8.count * 6 + 2)
-            case .array(let values):
-                var total = 2
-                for value in values {
-                    total += cost(value, remaining: remaining - total) + 1
-                    if total > remaining { break }
-                }
-                return total
-            case .object(let values):
-                var total = 2
-                for (key, value) in values {
-                    total += key.utf8.count * 6 + 4 + cost(value, remaining: remaining - total)
-                    if total > remaining { break }
-                }
-                return total
-            default: return 32
-            }
-        }
-        return 256
-            + [
-                event.eventId, event.conversationId, event.type, event.time, event.provider ?? "",
-                event.normalizedType ?? "", event.rawType ?? "",
-            ].reduce(0) { $0 + $1.utf8.count * 6 }
-            + cost(event.payload, remaining: Self.journalByteLimit)
-    }
     private func removeCache(_ id: String) {
-        if let old = rawEvents.removeValue(forKey: id) { cachedBytes -= old.bytes }
+        eventCache.remove(id)
         dirtyCaches.remove(id)
     }
     private func conversationScope(_ conversation: ConversationManifest) -> String {
@@ -2373,11 +2674,11 @@ extension SessionSocket {
         }
         _ = stageCheckpoint()
         for id in dirtyCaches {
-            guard let conversation = conversations.first(where: { $0.id == id }), let events = rawEvents[id]?.events
+            guard let conversation = conversations.first(where: { $0.id == id }), let history = eventCache.stored(id)
             else { continue }
             saveVersion += 1
             cacheWrites[eventKey(conversation)] = CacheWrite(
-                namespace: stateNamespace, version: saveVersion, events: events)
+                namespace: stateNamespace, version: saveVersion, history: history)
         }
         dirtyCaches.removeAll()
         startPersistenceWorker()
@@ -2389,8 +2690,14 @@ extension SessionSocket {
             conversations.compactMap { conversation in
                 readSequences[conversation.id].map { (conversationScope(conversation), $0) }
             }, uniquingKeysWith: max)
+        // Decrypted titles stay in memory; the snapshot keeps their ciphertext.
+        let storedConversations = conversations.map { conversation in
+            var stored = conversation
+            if stored.titleEnc != nil { stored.title = nil }
+            return stored
+        }
         let snapshot = SessionSnapshot(
-            workspaces: workspaces, conversations: conversations, drafts: drafts, preferences: preferences,
+            workspaces: workspaces, conversations: storedConversations, drafts: drafts, preferences: preferences,
             lastPreferencesByProvider: lastPreferencesByProvider, lastAgent: lastAgent,
             queues: queues, pendingSends: pendingSends, legacyCursors: legacyCursors,
             localThreads: localThreads, readSequences: reads,
@@ -2436,7 +2743,7 @@ extension SessionSocket {
                     do { try await commit(checkpoint, namespace: namespace) } catch { /* Retain the checkpoint. */  }
                 } else if let (key, write) = cacheWrites.first {
                     cacheWrites.removeValue(forKey: key)
-                    do { try await persistence.saveEvents(write.events, key: key, version: write.version) } catch {
+                    do { try await persistence.saveHistory(write.history, key: key, version: write.version) } catch {
                         reportStorageError(error, namespace: write.namespace, version: write.version)
                     }
                 } else {
@@ -2490,11 +2797,14 @@ extension SessionSocket {
         sidecarStarts = [:]
         localThreadStarts = [:]
         localThreads = [:]
-        rawEvents = [:]
+        eventCache.removeAll()
         historyFloors = [:]
         earlierLoading = [:]
-        cachedBytes = 0
         cacheLoaded = []
+        historyEncryption = nil
+        historyDecryptor = nil
+        encryptedConversations = []
+        decryptedTitles = [:]
         dirtyCaches = []
         activeConversationID = nil
         modelRevisions = [:]
