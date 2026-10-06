@@ -801,7 +801,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         }
         // A later context build-up can recommend compacting again after any
         // earlier result, so this is independent of the last status.
-        if compactionStatus != "running", compaction["recommended"].boolValue {
+        // Codex performs native automatic compaction as its context fills. The
+        // usage indicator remains available, but a manual recommendation adds
+        // noise and suggests an action the provider already performs.
+        let automaticCompaction = conversation.provider == "codex"
+        if !automaticCompaction, compactionStatus != "running", compaction["recommended"].boolValue {
             let label = String(localized: "上下文已接近上限，建议压缩")
             alerts.addArrangedSubview(
                 supported.contains("compact")
