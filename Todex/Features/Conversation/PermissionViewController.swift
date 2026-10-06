@@ -205,10 +205,14 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
         }
         for option in options {
             let title = option.title(for: permission.payload["kind"].stringValue, isURL: form.isURL)
-            let button = Theme.button(title) { [weak self] in self?.confirm(option) }
+            // Green allow / red reject, each with its own symbol, so the two are
+            // never told apart by color alone.
+            let isAllow = option.kind.hasPrefix("allow_")
+            let icon = isAllow ? "checkmark.circle.fill" : option.isRejection ? "xmark.circle.fill" : nil
+            let button = Theme.button(title, icon: icon) { [weak self] in self?.confirm(option) }
             button.configuration?.titleLineBreakMode = .byWordWrapping
             button.titleLabel?.adjustsFontForContentSizeCategory = true
-            button.configuration?.baseForegroundColor = option.isRejection ? .systemRed : Theme.accent
+            button.configuration?.baseForegroundColor = option.isRejection ? .systemRed : isAllow ? .systemGreen : Theme.accent
             button.accessibilityIdentifier = "permission.option.\(option.id)"
             button.accessibilityHint = String(localized: "确认后提交此操作")
             actionButtons.append((option, button))
