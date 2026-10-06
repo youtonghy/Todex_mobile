@@ -166,6 +166,31 @@ struct HistoryDecryptorTests {
         #expect(partly[1].payload == payloads[1])
     }
 
+    /// WebSocket replay attaches the same frame to every message that
+    /// references it (§5.3); it is opened once, not once per message.
+    @Test func socketReplayReusesAnOpenedFrameAcrossMessages() async throws {
+        let fixture = try HistoryBackendFixture()
+        let lookup = WrapLookup()
+        lookup.add(try fixture.wrap(for: fixture.devicePublicKey), kid: fixture.key.kid)
+        let decryptor = try HistoryDecryptor(deviceSeed: fixture.deviceSeed, fetchWraps: lookup.fetch)
+        let filler = String(repeating: "x", count: 1_000)
+        let payloads = (0..<1_000).map { HistoryBackendFixture.payload("frame \($0) \(filler)") }
+        let sealed = try fixture.frameEvents(payloads, firstSequence: 1, counter: 1 << 32 | 3)
+        let started = ContinuousClock.now
+        for (event, payload) in zip(sealed.events.prefix(500), payloads) {
+            #expect(try await decryptor.decrypt(event, frames: sealed.frames).payload == payload)
+        }
+        #expect(await decryptor.frameOpenCount == 1)
+        #expect(ContinuousClock.now - started < .seconds(5))
+        // A frame resent under the same id with other ciphertext is opened
+        // anew (and here fails authentication) rather than served from memory.
+        var forged = sealed.frames
+        forged["fr1"]["ct"] = .string(CryptoEncoding.encode(Data(repeating: 1, count: 64)))
+        #expect(HistoryEncryption.isLocked(try await decryptor.decrypt(sealed.events[0], frames: forged).payload))
+        #expect(try await decryptor.decrypt(sealed.events[1], frames: sealed.frames).payload == payloads[1])
+        #expect(await decryptor.frameOpenCount == 1)
+    }
+
     @Test func undecryptableContentBecomesEnvelopeFieldsWithDetailLocked() async throws {
         let fixture = try HistoryBackendFixture()
         let lookup = WrapLookup()  // no wraps: grant not received yet

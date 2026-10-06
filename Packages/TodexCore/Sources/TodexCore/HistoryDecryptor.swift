@@ -39,6 +39,15 @@ public actor HistoryDecryptor {
     private var unavailable: [Data: ContinuousClock.Instant] = [:]
     private var inflight: [Data: Task<Void, any Error>] = [:]
     private static let unavailableLimit = 4_096
+    /// Recently opened sealed frames, newest last. Socket replay attaches the
+    /// same frame to every message that references it and each message is
+    /// decrypted on its own, so without this a frame of about 1 MiB would be
+    /// opened, inflated and parsed once per event. An entry is reused only
+    /// for an identical frame (same id, key, position and ciphertext).
+    private var recentFrames: [(id: String, frame: HistoryEncryption.Frame, payloads: [JSONValue])] = []
+    private static let recentFrameLimit = 2
+    /// Frames actually decrypted and inflated (tests observe reuse).
+    private(set) var frameOpenCount = 0
 
     public init(
         deviceSeed: Data, recoverySeed: Data? = nil, cacheCapacity: Int = 256, retryInterval: Duration = .seconds(60),
@@ -99,14 +108,23 @@ public actor HistoryDecryptor {
         var openedFrames: [String: [JSONValue]] = [:]
         func payloads(_ id: String) -> [JSONValue]? {
             if let opened = openedFrames[id] { return opened }
-            guard let frame = frame(id), let key = cached(frame.kid),
+            guard let frame = frame(id) else { return nil }
+            if let recent = recentFrames.last(where: { $0.id == id && $0.frame == frame }) {
+                openedFrames[id] = recent.payloads
+                return recent.payloads
+            }
+            guard let key = cached(frame.kid),
                 let plaintext = try? HistoryCrypto.open(
                     frame.ciphertext, key: key, conversationID: frame.conversationId, stream: frame.stream,
                     counter: frame.counter),
                 let inflated = try? HistoryEncryption.inflate(plaintext),
                 case .array(let values)? = try? Self.json(inflated)
             else { return nil }
+            frameOpenCount += 1
             openedFrames[id] = values
+            recentFrames.removeAll { $0.id == id }
+            recentFrames.append((id, frame, values))
+            if recentFrames.count > Self.recentFrameLimit { recentFrames.removeFirst() }
             return values
         }
         return events.enumerated().map { index, event in
