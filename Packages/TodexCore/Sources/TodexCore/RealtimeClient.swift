@@ -77,7 +77,10 @@ public actor RealtimeClient {
             components.path = "/v2/ws"
             // Transport-crypto material travels as query parameters so the
             // device signature binds the handshake to this enrolled device.
-            var query = crypto?.handshakeQuery ?? ""
+            // `historyEncryption=1` declares this client decrypts history v3
+            // payloads; the device signature below covers it.
+            var query = ["historyEncryption=1", crypto?.handshakeQuery ?? ""].filter { !$0.isEmpty }
+                .joined(separator: "&")
             if let device = DeviceIdentity(secretKeyBase64URL: connection.deviceSecret) {
                 let auth = try device.authQuery(pathAndQuery: "/v2/ws\(query.isEmpty ? "" : "?\(query)")")
                 query = query.isEmpty ? auth : "\(query)&\(auth)"

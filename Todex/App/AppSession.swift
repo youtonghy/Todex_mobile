@@ -1832,7 +1832,11 @@ extension SessionSocket {
     ) async throws -> HistoryGrant.Progress {
         guard let api = historyAPI(), let connection else { throw TodexError.disconnected }
         let state = try await refreshHistoryEncryption()
-        guard let target = state.recipients.first(where: { $0.rid == grant.rid && !$0.isRevoked }) else {
+        guard let target = grant.recipient ?? state.recipients.first(where: { $0.rid == grant.rid && !$0.isRevoked })
+        else {
+            throw TodexError.invalid(String(localized: "请求授权的设备尚未登记历史密钥，或已被吊销"))
+        }
+        guard !state.recipients.contains(where: { $0.rid == grant.rid && $0.isRevoked }), grant.isPending else {
             throw TodexError.invalid(String(localized: "请求授权的设备尚未登记历史密钥，或已被吊销"))
         }
         let source = try HistoryCrypto.recipientKey(seed: historySeed(for: connection.id))

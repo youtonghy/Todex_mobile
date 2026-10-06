@@ -1,3 +1,4 @@
+import Compression
 import Foundation
 
 /// Wire models for end-to-end encrypted conversation history (history v3,
@@ -17,6 +18,45 @@ public enum HistoryEncryption {
 
     /// The wire text of a binary id (rid, kid): base64url without padding.
     public static func encodeID(_ data: Data) -> String { CryptoEncoding.encode(data) }
+
+    /// Upper bound for one inflated sealed-segment frame (frames hold about
+    /// 1 MiB of payloads); a larger output is rejected, not truncated.
+    public static let maximumFrameBytes = 64 * 1_024 * 1_024
+
+    /// Sealed-segment frame plaintext is raw DEFLATE (RFC 1951, no zlib
+    /// header) of the JSON payload array; Compression's ZLIB is raw deflate.
+    public static func inflate(_ data: Data, limit: Int = maximumFrameBytes) throws -> Data {
+        let failure = TodexError.invalid(String(localized: "历史加密帧格式不受支持", bundle: .module))
+        guard !data.isEmpty else { throw failure }
+        let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        defer { stream.deallocate() }
+        guard compression_stream_init(stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK
+        else { throw failure }
+        defer { compression_stream_destroy(stream) }
+        let chunk = 64 * 1_024
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunk)
+        defer { buffer.deallocate() }
+        var output = Data()
+        return try data.withUnsafeBytes { (input: UnsafeRawBufferPointer) in
+            stream.pointee.src_ptr = input.bindMemory(to: UInt8.self).baseAddress!
+            stream.pointee.src_size = input.count
+            while true {
+                stream.pointee.dst_ptr = buffer
+                stream.pointee.dst_size = chunk
+                let status = compression_stream_process(stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+                let produced = chunk - stream.pointee.dst_size
+                guard output.count + produced <= limit else { throw failure }
+                output.append(buffer, count: produced)
+                switch status {
+                case COMPRESSION_STATUS_END: return output
+                case COMPRESSION_STATUS_OK:
+                    // No progress with input exhausted: the stream is truncated.
+                    if produced == 0 && stream.pointee.src_size == 0 { throw failure }
+                default: throw failure
+                }
+            }
+        }
+    }
 
     /// Whether the payload still carries ciphertext (`$enc`).
     public static func isEncrypted(_ payload: JSONValue) -> Bool { payload.objectValue[Envelope.field] != nil }
@@ -172,19 +212,31 @@ public struct HistoryGrantRequest: Codable, Sendable, Equatable, Identifiable {
     public var rid: String
     public var deviceId: String?
     public var requestedAt: String?
+    /// `pending`, `fulfilled`, `dismissed` or `revoked`.
     public var status: String
+    /// The requesting recipient's public key, when the backend lists it.
+    public var publicKey: String?
     public var id: String { grantId }
     public var isPending: Bool { status == "pending" }
 
-    public init(grantId: String, rid: String, deviceId: String? = nil, requestedAt: String? = nil, status: String = "pending") {
+    public init(
+        grantId: String, rid: String, deviceId: String? = nil, requestedAt: String? = nil, status: String = "pending",
+        publicKey: String? = nil
+    ) {
         self.grantId = grantId
         self.rid = rid
         self.deviceId = deviceId
         self.requestedAt = requestedAt
         self.status = status
+        self.publicKey = publicKey
     }
 
-    private enum CodingKeys: String, CodingKey { case grantId, rid, deviceId, requestedAt, status }
+    /// The target as a recipient, for `HistoryGrant.fulfill`.
+    public var recipient: HistoryRecipient? {
+        publicKey.map { HistoryRecipient(rid: rid, kind: "device", deviceId: deviceId, publicKey: $0) }
+    }
+
+    private enum CodingKeys: String, CodingKey { case grantId, rid, deviceId, requestedAt, status, publicKey }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         grantId = try c.decode(String.self, forKey: .grantId)
@@ -192,6 +244,7 @@ public struct HistoryGrantRequest: Codable, Sendable, Equatable, Identifiable {
         deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
         requestedAt = try c.decodeIfPresent(String.self, forKey: .requestedAt)
         status = try c.decodeIfPresent(String.self, forKey: .status) ?? "pending"
+        publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey)
     }
 }
 
@@ -346,12 +399,16 @@ public struct HistoryAPI: Sendable {
     }
 
     /// Uploads at most 500 re-wrapped keys; returns how many were new.
-    public func fulfill(grantId: String?, rid: String, wraps: [HistoryGrantWrap]) async throws -> Int {
+    /// `complete` on the last batch marks the grant fulfilled.
+    public func fulfill(grantId: String?, rid: String, wraps: [HistoryGrantWrap], complete: Bool = false)
+        async throws -> Int
+    {
         guard wraps.count <= HistoryEncryption.batchLimit else {
             throw TodexError.invalid(String(localized: "单次最多上传 500 个历史密钥", bundle: .module))
         }
         var payload: JSONValue = ["rid": .string(rid), "wraps": try JSONValue(encoding: wraps)]
         if let grantId { payload["grantId"] = .string(grantId) }
+        if complete { payload["complete"] = true }
         return try await call(.historyGrantFulfill, payload)["added"].intValue
     }
 

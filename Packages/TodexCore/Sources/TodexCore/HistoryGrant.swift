@@ -70,10 +70,15 @@ public enum HistoryGrant {
                     }
                 }
             }
-            for start in stride(from: 0, to: uploads.count, by: HistoryEncryption.batchLimit) {
+            let last = (page.nextCursor ?? "").isEmpty
+            // The final batch of a grant carries `complete: true` (an empty one
+            // when the last page had nothing to upload); self-grants have no grant.
+            let starts = Array(stride(from: 0, to: uploads.count, by: HistoryEncryption.batchLimit))
+            for start in (starts.isEmpty && last && grantId != nil ? [0] : starts) {
                 try Task.checkCancellation()
                 let batch = Array(uploads[start..<min(start + HistoryEncryption.batchLimit, uploads.count)])
-                progress.added += try await api.fulfill(grantId: grantId, rid: target.rid, wraps: batch)
+                let final = last && grantId != nil && start == (starts.last ?? 0)
+                progress.added += try await api.fulfill(grantId: grantId, rid: target.rid, wraps: batch, complete: final)
                 progress.processed += batch.count
             }
             progress.skipped += skipped

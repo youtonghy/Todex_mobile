@@ -69,7 +69,7 @@ struct HistoryBackendFixture: Sendable {
         stream: HistoryCrypto.ContentStream = .frameFull, counter: UInt64 = 0, plaintext: Data? = nil
     ) throws -> (events: [ConversationEvent], frames: JSONValue) {
         let sealed = try HistoryCrypto.seal(
-            plaintext ?? JSONEncoder().encode(JSONValue.array(payloads)), key: key, conversationID: conversation,
+            plaintext ?? Self.deflate(JSONEncoder().encode(JSONValue.array(payloads))), key: key, conversationID: conversation,
             stream: stream, counter: counter)
         let frames: JSONValue = [
             frameID: [
@@ -92,6 +92,9 @@ struct HistoryBackendFixture: Sendable {
         }
         return (events, frames)
     }
+
+    /// Raw DEFLATE (RFC 1951), the sealed-frame plaintext encoding.
+    static func deflate(_ data: Data) throws -> Data { try (data as NSData).compressed(using: .zlib) as Data }
 
     func wrap(for publicKey: Data) throws -> HistoryCrypto.WrappedKey { try HistoryCrypto.wrap(key, for: publicKey) }
 }
@@ -256,14 +259,22 @@ struct HistoryDecryptorTests {
         #expect(HistoryEncryption.isLocked(try await refused.decrypt(event).payload))
     }
 
-    @Test func compressedFramesAndTitlesAreHandled() async throws {
+    @Test func frameCompressionAndTitlesAreHandled() async throws {
         let fixture = try HistoryBackendFixture()
         let lookup = WrapLookup()
         lookup.add(try fixture.wrap(for: fixture.devicePublicKey), kid: fixture.key.kid)
         let decryptor = try HistoryDecryptor(deviceSeed: fixture.deviceSeed, fetchWraps: lookup.fetch)
-        let zstd = try fixture.frameEvents(
-            [HistoryBackendFixture.payload("a")], firstSequence: 1, plaintext: Data([0x28, 0xB5, 0x2F, 0xFD, 0, 1]))
-        #expect(HistoryEncryption.isLocked(try await decryptor.decrypt(zstd.events, frames: zstd.frames)[0].payload))
+        // Frame plaintext must be raw DEFLATE; uncompressed JSON or garbage locks.
+        let uncompressed = try fixture.frameEvents(
+            [HistoryBackendFixture.payload("a")], firstSequence: 1,
+            plaintext: JSONEncoder().encode(JSONValue.array([HistoryBackendFixture.payload("a")])))
+        #expect(HistoryEncryption.isLocked(try await decryptor.decrypt(uncompressed.events, frames: uncompressed.frames)[0].payload))
+        let large = Data(repeating: 0x20, count: 200_000)
+        let packed = try HistoryBackendFixture.deflate(large)
+        #expect(try HistoryEncryption.inflate(packed) == large)
+        #expect(throws: TodexError.self) { try HistoryEncryption.inflate(packed, limit: 100_000) }
+        #expect(throws: TodexError.self) { try HistoryEncryption.inflate(packed.prefix(packed.count / 2)) }
+        #expect(throws: TodexError.self) { try HistoryEncryption.inflate(Data()) }
 
         let title = try HistoryCrypto.seal(Data("计划 🔐".utf8), key: fixture.key, conversationID: "c", stream: .eventFull, counter: 0)
         let titleEnc: JSONValue = ["kid": .string(fixture.kidText), "ct": .string(CryptoEncoding.encode(title))]

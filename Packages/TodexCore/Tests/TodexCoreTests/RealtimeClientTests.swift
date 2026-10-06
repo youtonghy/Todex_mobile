@@ -358,6 +358,10 @@ struct RealtimeClientTests {
                             .queryItems?.first(where: { $0.name == "client_key" })?.value
                     else { throw TodexError.invalid("握手缺少 client_key") }
                     #expect(request.value(forHTTPHeaderField: "x-todex-client-key") == nil)
+                    // History v3 support is declared on the upgrade URL.
+                    #expect(
+                        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                            .contains(URLQueryItem(name: "historyEncryption", value: "1")) == true)
                     let clientPublic = try CryptoEncoding.decode(clientKey, count: 32)
                     let secret = try server.sharedSecretFromKeyAgreement(with: .init(rawRepresentation: clientPublic))
                     let key = secret.hkdfDerivedSymmetricKey(

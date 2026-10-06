@@ -103,7 +103,8 @@ public actor HistoryDecryptor {
                 let plaintext = try? HistoryCrypto.open(
                     frame.ciphertext, key: key, conversationID: frame.conversationId, stream: frame.stream,
                     counter: frame.counter),
-                case .array(let values)? = try? Self.json(plaintext)
+                let inflated = try? HistoryEncryption.inflate(plaintext),
+                case .array(let values)? = try? Self.json(inflated)
             else { return nil }
             openedFrames[id] = values
             return values
@@ -172,12 +173,7 @@ public actor HistoryDecryptor {
     }
 
     private static func json(_ plaintext: Data) throws -> JSONValue {
-        // A zstd frame (magic 28 B5 2F FD) means the backend forwarded the
-        // on-disk compressed form, which §5.3 does not define for the wire.
-        guard !plaintext.starts(with: [0x28, 0xB5, 0x2F, 0xFD]) else {
-            throw TodexError.invalid(String(localized: "历史加密帧格式不受支持", bundle: .module))
-        }
-        return try JSONDecoder().decode(JSONValue.self, from: plaintext)
+        try JSONDecoder().decode(JSONValue.self, from: plaintext)
     }
 
     private func cached(_ kid: Data) -> HistoryCrypto.SegmentKey? {

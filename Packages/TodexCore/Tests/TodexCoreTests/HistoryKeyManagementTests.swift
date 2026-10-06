@@ -83,6 +83,7 @@ final class FakeHistoryBackend: Sendable {
         var keyrings: [String: [Data: [HistoryCrypto.WrappedKey]]] = [:]
         var pageSize = 3
         var fulfillBatches: [Int] = []
+        var completions: [Bool] = []
         var failFulfillAfter: Int?
         var commands: [String] = []
         var wrapsRids: [String?] = []
@@ -132,6 +133,7 @@ final class FakeHistoryBackend: Sendable {
                 #expect(wraps.count <= 500)
                 if let limit = state.failFulfillAfter, state.fulfillBatches.count >= limit { throw TodexError.disconnected }
                 state.fulfillBatches.append(wraps.count)
+                state.completions.append(payload["complete"] == true)
                 var added = 0
                 for wrap in wraps {
                     #expect(CryptoEncoding.encode(wrap.wrapped.rid) == payload["rid"].stringValue)
@@ -193,6 +195,9 @@ struct HistoryGrantTests {
         }
         let batches = backend.state.withLock { $0.fulfillBatches }
         #expect(batches.allSatisfy { $0 <= 500 })
+        // Only the last batch marks the grant fulfilled.
+        let completions = backend.state.withLock { $0.completions }
+        #expect(completions.last == true && completions.dropLast().allSatisfy { !$0 })
     }
 
     @Test func recoverySelfGrantUsesRecoveryWrapsAndNoGrantID() async throws {
@@ -210,6 +215,8 @@ struct HistoryGrantTests {
         #expect(result.processed == 1)
         let rids = backend.state.withLock { $0.wrapsRids }
         #expect(rids == [CryptoEncoding.encode(recoveryRid)])
+        let completions = backend.state.withLock { $0.completions }
+        #expect(completions == [false])
         let mine = try #require(backend.wraps(conversation: "c", kid: key.kid).first { $0.rid != recoveryRid })
         #expect(try HistoryCrypto.unwrap(mine, kid: key.kid, with: device).dek == key.dek)
     }
@@ -239,7 +246,7 @@ struct HistoryWireTests {
                 return [
                     "mode": "e2e", "epoch": 3, "myRid": "r1",
                     "recipients": [["rid": "r1", "kind": "device", "deviceId": "dev_1", "publicKey": "pk", "addedAt": "t", "revokedAt": nil]],
-                    "grants": [["grantId": "grt_1", "rid": "r2", "deviceId": "dev_2", "requestedAt": "t", "status": "pending"]],
+                    "grants": [["grantId": "grt_1", "rid": "r2", "deviceId": "dev_2", "requestedAt": "t", "status": "pending", "publicKey": "pk2"]],
                 ]
             case "history.recipient.register", "history.recovery.set": return ["rid": "r9"]
             case "history.grant.request": return ["grantId": "grt_9"]
@@ -253,6 +260,7 @@ struct HistoryWireTests {
         #expect(state.isEnabled && state.epoch == 3 && state.myRid == "r1")
         #expect(state.recipients.first?.deviceId == "dev_1" && state.recipients.first?.isRevoked == false)
         #expect(state.grants.first?.isPending == true)
+        #expect(state.grants.first?.recipient?.publicKey == "pk2")
         _ = try await api.enable()
         let publicKey = Data(repeating: 7, count: 1216)
         #expect(try await api.register(publicKey: publicKey) == "r9")
