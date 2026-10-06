@@ -274,6 +274,7 @@ enum ChatWebStrings {
             "正在工作 · ": String(localized: "正在工作 · "),
             "正在生成…": String(localized: "正在生成…"),
             "正在调用": String(localized: "正在调用"),
+            "此设备尚未获授权查看这段历史": String(localized: "此设备尚未获授权查看这段历史"),
             "添加到对话": String(localized: "添加到对话"),
             "状态": String(localized: "状态"),
             "用量": String(localized: "用量"),

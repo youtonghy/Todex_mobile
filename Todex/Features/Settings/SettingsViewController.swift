@@ -166,6 +166,20 @@ final class SettingsViewController: SettingsListController {
                     self.navigationController?.pushViewController(
                         AgentDesktopSettingsViewController(connection: connection, session: self.session), animated: true)
                 })
+            let liveSession = session.flatMap { $0.isConnected && $0.connection?.id == connection.id ? $0 : nil }
+            rows.append(
+                SettingsRow(
+                    title: String(localized: "会话历史加密"),
+                    detail: liveSession == nil
+                        ? String(localized: "连接此后端后可管理端到端加密、设备授权与恢复密钥")
+                        : liveSession?.historyEncryption?.isEnabled == true
+                            ? String(localized: "端到端加密已开启") : String(localized: "端到端加密、设备授权与恢复密钥"),
+                    symbol: "lock.shield", id: "settings.historyEncryption", enabled: liveSession != nil
+                ) { [weak self] in
+                    guard let liveSession else { return }
+                    self?.navigationController?.pushViewController(
+                        HistoryEncryptionViewController(session: liveSession), animated: true)
+                })
             rows.append(
                 SettingsRow(
                     title: String(localized: "使用统计"), detail: String(localized: "本机为此后端保存的最近 2000 条 token 用量，含已关闭的对话"), symbol: "chart.bar",

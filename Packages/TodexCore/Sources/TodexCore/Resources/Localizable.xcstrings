@@ -561,6 +561,34 @@
         }
       }
     },
+    "不支持的历史加密格式": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsupported history encryption format"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サポートされていない履歴暗号化形式です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지원하지 않는 기록 암호화 형식입니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不支持的历史加密格式"
+          }
+        }
+      }
+    },
     "不支持的配对加密协议": {
       "localizations": {
         "en": {
@@ -981,6 +1009,62 @@
         }
       }
     },
+    "单次最多上传 500 个历史密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "At most 500 history keys can be uploaded at once"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一度にアップロードできる履歴鍵は最大 500 個です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "한 번에 최대 500개의 기록 키만 업로드할 수 있습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "单次最多上传 500 个历史密钥"
+          }
+        }
+      }
+    },
+    "单次最多请求 500 个历史密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "At most 500 history keys can be requested at once"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一度に要求できる履歴鍵は最大 500 個です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "한 번에 최대 500개의 기록 키만 요청할 수 있습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "单次最多请求 500 个历史密钥"
+          }
+        }
+      }
+    },
     "历史分页响应无效": {
       "localizations": {
         "en": {
@@ -1005,6 +1089,146 @@
           "stringUnit": {
             "state": "translated",
             "value": "历史分页响应无效"
+          }
+        }
+      }
+    },
+    "历史加密信封无效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid history encryption envelope"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴暗号化エンベロープが無効です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기록 암호화 엔벨로프가 올바르지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "历史加密信封无效"
+          }
+        }
+      }
+    },
+    "历史加密帧无效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid history encryption frame"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴暗号化フレームが無効です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기록 암호화 프레임이 올바르지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "历史加密帧无效"
+          }
+        }
+      }
+    },
+    "历史加密帧格式不受支持": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsupported history frame format"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サポートされていない履歴フレーム形式です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지원하지 않는 기록 프레임 형식입니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "历史加密帧格式不受支持"
+          }
+        }
+      }
+    },
+    "历史密钥分页没有前进": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History key paging did not advance"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴鍵のページングが進みませんでした"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기록 키 페이지가 진행되지 않았습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "历史密钥分页没有前进"
+          }
+        }
+      }
+    },
+    "历史密钥分页过多": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many history key pages"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴鍵のページが多すぎます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기록 키 페이지가 너무 많습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "历史密钥分页过多"
           }
         }
       }
@@ -1345,6 +1569,34 @@
         }
       }
     },
+    "后端历史加密响应无效，请检查后端版本": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid history encryption response from the backend. Check the backend version."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドの履歴暗号化応答が無効です。バックエンドのバージョンを確認してください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드의 기록 암호화 응답이 올바르지 않습니다. 백엔드 버전을 확인하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端历史加密响应无效，请检查后端版本"
+          }
+        }
+      }
+    },
     "后端响应无效": {
       "localizations": {
         "en": {
@@ -1481,6 +1733,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "后端地址无效"
+          }
+        }
+      }
+    },
+    "后端所在电脑的磁盘可用空间不足 1 GiB，暂时无法发送新消息。请清理磁盘后重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backend computer has less than 1 GiB of free disk space, so new messages cannot be sent. Free up disk space and try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドのコンピュータの空き容量が 1 GiB 未満のため、新しいメッセージを送信できません。ディスクを整理してから再試行してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드 컴퓨터의 디스크 여유 공간이 1GiB 미만이라 새 메시지를 보낼 수 없습니다. 디스크를 정리한 후 다시 시도하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端所在电脑的磁盘可用空间不足 1 GiB，暂时无法发送新消息。请清理磁盘后重试。"
           }
         }
       }
@@ -1677,6 +1957,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "后端未完成握手验证。请确认后端版本与应用一致。"
+          }
+        }
+      }
+    },
+    "后端未返回历史密钥列表": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backend returned no history key list"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドが履歴鍵の一覧を返しませんでした"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드가 기록 키 목록을 반환하지 않았습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端未返回历史密钥列表"
           }
         }
       }
@@ -2213,6 +2521,118 @@
         }
       }
     },
+    "恢复密钥校验失败，请检查单词顺序与拼写": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery key checksum failed. Check the word order and spelling."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーのチェックサムが一致しません。単語の順序と綴りを確認してください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키 검증에 실패했습니다. 단어 순서와 철자를 확인하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复密钥校验失败，请检查单词顺序与拼写"
+          }
+        }
+      }
+    },
+    "恢复密钥格式无效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid recovery key format"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーの形式が無効です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키 형식이 올바르지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复密钥格式无效"
+          }
+        }
+      }
+    },
+    "恢复密钥需要 24 个单词，当前为 %lld 个": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recovery key needs 24 words; %lld entered"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーには 24 語が必要です（現在 %lld 語）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키에는 24개 단어가 필요합니다(현재 %lld개)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复密钥需要 24 个单词，当前为 %lld 个"
+          }
+        }
+      }
+    },
+    "恢复词表损坏，请重新安装应用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recovery word list is damaged. Reinstall the app."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元単語リストが破損しています。アプリを再インストールしてください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 단어 목록이 손상되었습니다. 앱을 다시 설치하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复词表损坏，请重新安装应用"
+          }
+        }
+      }
+    },
     "所选文件不是 TodeX 供应商导出文件": {
       "localizations": {
         "en": {
@@ -2321,6 +2741,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "接口路径转义无效"
+          }
+        }
+      }
+    },
+    "接收方公钥与标识不一致": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recipient's public key does not match its ID"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "受信者の公開鍵が ID と一致しません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "수신자 공개 키가 ID와 일치하지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接收方公钥与标识不一致"
           }
         }
       }
@@ -2829,6 +3277,34 @@
         }
       }
     },
+    "此后端已开启会话历史端到端加密，当前客户端无法读取，请更新 TodeX 应用。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This backend uses end-to-end encrypted conversation history, which this client cannot read. Update the TodeX app."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このバックエンドは会話履歴のエンドツーエンド暗号化を有効にしており、このクライアントでは読み取れません。TodeX アプリを更新してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 백엔드는 대화 기록 종단 간 암호화를 사용하므로 현재 클라이언트로 읽을 수 없습니다. TodeX 앱을 업데이트하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此后端已开启会话历史端到端加密，当前客户端无法读取，请更新 TodeX 应用。"
+          }
+        }
+      }
+    },
     "此连接已使用该请求 ID，请勿重复提交": {
       "localizations": {
         "en": {
@@ -2881,6 +3357,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "消息和附件编码后不能超过 4 MiB"
+          }
+        }
+      }
+    },
+    "第 %lld 个单词“%@”不在恢复词表中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Word %1$lld “%2$@” is not in the recovery word list"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 番目の単語「%2$@」は復元単語リストにありません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld번째 단어 “%2$@”이(가) 복구 단어 목록에 없습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "第 %lld 个单词“%@”不在恢复词表中"
           }
         }
       }

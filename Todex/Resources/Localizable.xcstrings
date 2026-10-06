@@ -4621,6 +4621,34 @@
         }
       }
     },
+    "之后的新内容会以明文保存在后端。已加密的历史仍需授权设备才能读取。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New content will be stored on the backend in plaintext. Already encrypted history still needs an authorized device to read."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以後の新しい内容はバックエンドに平文で保存されます。暗号化済みの履歴を読むには引き続き承認済みのデバイスが必要です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이후 새 내용은 백엔드에 평문으로 저장됩니다. 이미 암호화된 기록은 여전히 승인된 기기가 있어야 읽을 수 있습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "之后的新内容会以明文保存在后端。已加密的历史仍需授权设备才能读取。"
+          }
+        }
+      }
+    },
     "交给 Agent 核对：%@": {
       "localizations": {
         "en": {
@@ -4869,6 +4897,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "仍有冲突标记"
+          }
+        }
+      }
+    },
+    "仍然跳过": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip Anyway"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スキップする"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "그래도 건너뛰기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仍然跳过"
           }
         }
       }
@@ -5457,6 +5513,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "会继续重试"
+          }
+        }
+      }
+    },
+    "会话历史加密": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History Encryption"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会話履歴の暗号化"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화 기록 암호화"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会话历史加密"
           }
         }
       }
@@ -6833,6 +6917,34 @@
         }
       }
     },
+    "关闭端到端加密？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn Off End-to-End Encryption?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エンドツーエンド暗号化をオフにしますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "종단 간 암호화를 끌까요?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭端到端加密？"
+          }
+        }
+      }
+    },
     "关闭页面不会取消服务器上已经开始的升级。": {
       "localizations": {
         "en": {
@@ -8061,6 +8173,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "创建工作树…"
+          }
+        }
+      }
+    },
+    "创建恢复密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create Recovery Key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーを作成"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키 만들기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "创建恢复密钥"
           }
         }
       }
@@ -9717,6 +9857,34 @@
         }
       }
     },
+    "可解密的设备与密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Devices and Keys That Can Decrypt"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復号できるデバイスと鍵"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복호화할 수 있는 기기와 키"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可解密的设备与密钥"
+          }
+        }
+      }
+    },
     "可选，写入 [models].default，如 grok-build": {
       "localizations": {
         "en": {
@@ -9853,6 +10021,90 @@
           "stringUnit": {
             "state": "translated",
             "value": "合并结果尚未保存；保存时仍会校验远端版本。"
+          }
+        }
+      }
+    },
+    "吊销后它无法读取之后的新历史。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "After revoking, it cannot read new history."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り消すと、以後の新しい履歴を読めなくなります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "철회하면 이후 새 기록을 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "吊销后它无法读取之后的新历史。"
+          }
+        }
+      }
+    },
+    "吊销后，之后生成的历史密钥不再为它加密；它已取得的旧密钥无法收回。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "After revoking, new history keys are no longer encrypted for it; keys it already has cannot be taken back."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り消すと、以後の履歴鍵はその宛先に暗号化されません。すでに取得した鍵は回収できません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "철회하면 이후 생성되는 기록 키는 더 이상 해당 대상에 암호화되지 않습니다. 이미 받은 키는 회수할 수 없습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "吊销后，之后生成的历史密钥不再为它加密；它已取得的旧密钥无法收回。"
+          }
+        }
+      }
+    },
+    "吊销此接收方？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoke This Recipient?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この受信者を取り消しますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 수신자를 철회할까요?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "吊销此接收方？"
           }
         }
       }
@@ -12293,6 +12545,34 @@
         }
       }
     },
+    "如果所有已授权的设备都丢失或重置，加密历史将永久无法读取。之后仍可在此页面创建恢复密钥。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If every authorized device is lost or reset, encrypted history becomes permanently unreadable. You can still create a recovery key on this page later."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認済みのデバイスをすべて紛失またはリセットすると、暗号化された履歴は永久に読めなくなります。復元キーは後でこのページから作成できます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인된 기기를 모두 잃거나 초기화하면 암호화된 기록을 영구히 읽을 수 없습니다. 나중에 이 페이지에서 복구 키를 만들 수 있습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "如果所有已授权的设备都丢失或重置，加密历史将永久无法读取。之后仍可在此页面创建恢复密钥。"
+          }
+        }
+      }
+    },
     "始终允许": {
       "localizations": {
         "en": {
@@ -13609,6 +13889,34 @@
         }
       }
     },
+    "导入恢复密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import Recovery Key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーを読み込む"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키 가져오기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入恢复密钥"
+          }
+        }
+      }
+    },
     "导入配对": {
       "localizations": {
         "en": {
@@ -14249,6 +14557,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "尚未设置地址"
+          }
+        }
+      }
+    },
+    "尚未设置恢复密钥：所有授权设备丢失后，加密历史将无法恢复。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No recovery key is set: if every authorized device is lost, encrypted history cannot be recovered."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーが未設定です。承認済みのデバイスをすべて失うと、暗号化された履歴は復元できません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키가 설정되지 않았습니다. 승인된 기기를 모두 잃으면 암호화된 기록을 복구할 수 없습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚未设置恢复密钥：所有授权设备丢失后，加密历史将无法恢复。"
           }
         }
       }
@@ -15317,6 +15653,62 @@
         }
       }
     },
+    "已上传 %lld 个密钥，跳过 %lld 个": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uploaded %1$lld keys, skipped %2$lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 個の鍵をアップロード、%2$lld 個をスキップ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "키 %1$lld개 업로드, %2$lld개 건너뜀"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已上传 %lld 个密钥，跳过 %lld 个"
+          }
+        }
+      }
+    },
+    "已为该设备重新加密 %lld 个历史密钥；本机无法读取的 %lld 个已跳过。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Re-encrypted %1$lld history keys for that device; skipped %2$lld this device cannot read."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "そのデバイス向けに %1$lld 個の履歴鍵を再暗号化しました。このデバイスで読めない %2$lld 個はスキップしました。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "해당 기기용으로 기록 키 %1$lld개를 다시 암호화했습니다. 이 기기가 읽을 수 없는 %2$lld개는 건너뛰었습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已为该设备重新加密 %lld 个历史密钥；本机无法读取的 %lld 个已跳过。"
+          }
+        }
+      }
+    },
     "已从当前配置解析供应商与模型信息，可修改后保存。": {
       "localizations": {
         "en": {
@@ -15569,6 +15961,34 @@
         }
       }
     },
+    "已发送申请": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request Sent"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "申請を送信しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청을 보냈습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已发送申请"
+          }
+        }
+      }
+    },
     "已发送登出请求": {
       "localizations": {
         "en": {
@@ -15625,6 +16045,34 @@
         }
       }
     },
+    "已取得 %lld 个密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Received %lld keys"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 個の鍵を取得しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "키 %lld개를 받았습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已取得 %lld 个密钥"
+          }
+        }
+      }
+    },
     "已取消": {
       "localizations": {
         "en": {
@@ -15677,6 +16125,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "已取消本次设备验证。"
+          }
+        }
+      }
+    },
+    "已吊销": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoked"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り消し済み"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "철회됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已吊销"
           }
         }
       }
@@ -15957,6 +16433,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "已开启"
+          }
+        }
+      }
+    },
+    "已开启 · 密钥纪元 %lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On · Key epoch %lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オン · 鍵エポック %lld"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "켜짐 · 키 에포크 %lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已开启 · 密钥纪元 %lld"
           }
         }
       }
@@ -16689,6 +17193,34 @@
         }
       }
     },
+    "已登记 · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registered · %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登録済み · %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "등록됨 · %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已登记 · %@"
+          }
+        }
+      }
+    },
     "已禁用": {
       "localizations": {
         "en": {
@@ -16881,6 +17413,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "已请求重置记忆"
+          }
+        }
+      }
+    },
+    "已读取恢复密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery key read"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーを読み取りました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키를 읽었습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已读取恢复密钥"
           }
         }
       }
@@ -17385,6 +17945,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "建议：%@"
+          }
+        }
+      }
+    },
+    "开启后，新的会话内容在后端磁盘上只以密文保存，只有已授权的设备能解密。后端运行 Agent 时仍能看到明文；已有历史会在后台重新加密，期间 Time Machine 或 APFS 快照可能仍保留旧明文。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When on, new conversation content is stored on the backend's disk only as ciphertext that authorized devices can decrypt. The backend still sees plaintext while running agents. Existing history is re-encrypted in the background; Time Machine or APFS snapshots may still keep old plaintext."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オンにすると、新しい会話内容はバックエンドのディスクに暗号文としてのみ保存され、承認済みのデバイスだけが復号できます。エージェント実行中はバックエンドも平文を扱います。既存の履歴はバックグラウンドで再暗号化されますが、Time Machine や APFS スナップショットに古い平文が残る場合があります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "켜면 새 대화 내용은 백엔드 디스크에 암호문으로만 저장되며 승인된 기기만 복호화할 수 있습니다. 에이전트 실행 중에는 백엔드도 평문을 봅니다. 기존 기록은 백그라운드에서 다시 암호화되며, Time Machine이나 APFS 스냅샷에 이전 평문이 남아 있을 수 있습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开启后，新的会话内容在后端磁盘上只以密文保存，只有已授权的设备能解密。后端运行 Agent 时仍能看到明文；已有历史会在后台重新加密，期间 Time Machine 或 APFS 快照可能仍保留旧明文。"
+          }
+        }
+      }
+    },
+    "开启端到端加密？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn On End-to-End Encryption?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エンドツーエンド暗号化をオンにしますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "종단 간 암호화를 켤까요?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开启端到端加密？"
           }
         }
       }
@@ -18509,6 +19125,62 @@
         }
       }
     },
+    "待授权请求": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pending Requests"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認待ちの申請"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인 대기 요청"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待授权请求"
+          }
+        }
+      }
+    },
+    "忽略申请": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss Request"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "申請を無視"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청 무시"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "忽略申请"
+          }
+        }
+      }
+    },
     "思考深度": {
       "localizations": {
         "en": {
@@ -18761,6 +19433,90 @@
         }
       }
     },
+    "恢复密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery Key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复密钥"
+          }
+        }
+      }
+    },
+    "恢复密钥二维码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery key QR code"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーの QR コード"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키 QR 코드"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复密钥二维码"
+          }
+        }
+      }
+    },
+    "恢复密钥只在创建时显示一次，后端只保存它的公钥。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recovery key is shown only once when created; the backend stores only its public key."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーは作成時に一度だけ表示されます。バックエンドには公開鍵のみ保存されます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키는 만들 때 한 번만 표시되며 백엔드에는 공개 키만 저장됩니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复密钥只在创建时显示一次，后端只保存它的公钥。"
+          }
+        }
+      }
+    },
     "恢复对话": {
       "localizations": {
         "en": {
@@ -18841,6 +19597,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "恢复目标"
+          }
+        }
+      }
+    },
+    "我已妥善保存": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I Saved It"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "저장했습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "我已妥善保存"
           }
         }
       }
@@ -19489,6 +20273,34 @@
         }
       }
     },
+    "扫描二维码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan QR Code"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QR コードを読み取る"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QR 코드 스캔"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "扫描二维码"
+          }
+        }
+      }
+    },
     "扫描完成": {
       "localizations": {
         "en": {
@@ -19513,6 +20325,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "扫描完成"
+          }
+        }
+      }
+    },
+    "扫描恢复二维码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan Recovery QR Code"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元 QR コードを読み取る"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 QR 코드 스캔"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "扫描恢复二维码"
           }
         }
       }
@@ -19545,6 +20385,34 @@
         }
       }
     },
+    "批准": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approve"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "批准"
+          }
+        }
+      }
+    },
     "批准后此后端即信任本机设备密钥；传输加密公钥仍需从配对信息导入。": {
       "localizations": {
         "en": {
@@ -19569,6 +20437,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "批准后此后端即信任本机设备密钥；传输加密公钥仍需从配对信息导入。"
+          }
+        }
+      }
+    },
+    "批准后，本机会在本地解开它能读取的历史密钥，再为对方重新加密后上传；后端看不到这些密钥。中断后再次批准会从上次进度继续。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approving unwraps the history keys this device can read, re-encrypts them for the other device on this device, and uploads them; the backend never sees the keys. If interrupted, approving again resumes where it stopped."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認すると、このデバイスで読める履歴鍵をローカルで復号し、相手のデバイス向けに再暗号化してアップロードします。バックエンドは鍵を見られません。中断した場合は、再度承認すると続きから再開します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인하면 이 기기가 읽을 수 있는 기록 키를 로컬에서 풀고 상대 기기용으로 다시 암호화해 업로드합니다. 백엔드는 키를 볼 수 없습니다. 중단되면 다시 승인할 때 이어서 진행합니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "批准后，本机会在本地解开它能读取的历史密钥，再为对方重新加密后上传；后端看不到这些密钥。中断后再次批准会从上次进度继续。"
+          }
+        }
+      }
+    },
+    "批准后，该设备可以读取本机能读取的全部历史。请确认这是你自己的设备。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Once approved, that device can read all history this device can read. Make sure it is your own device."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認すると、そのデバイスはこのデバイスで読めるすべての履歴を読めるようになります。自分のデバイスであることを確認してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인하면 해당 기기는 이 기기가 읽을 수 있는 모든 기록을 읽을 수 있습니다. 본인 기기인지 확인하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "批准后，该设备可以读取本机能读取的全部历史。请确认这是你自己的设备。"
           }
         }
       }
@@ -20021,6 +20945,34 @@
         }
       }
     },
+    "授权完成": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Access Granted"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認が完了しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인 완료"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "授权完成"
+          }
+        }
+      }
+    },
     "授权目录": {
       "localizations": {
         "en": {
@@ -20129,6 +21081,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "排队消息 %lld 条%@"
+          }
+        }
+      }
+    },
+    "接下来会生成恢复密钥（24 个单词和二维码）。请抄写并离线保存；它是所有设备丢失后读取历史的唯一途径。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next, a recovery key (24 words and a QR code) is generated. Write it down and keep it offline; it is the only way to read history if every device is lost."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "次に復元キー（24 語と QR コード）を生成します。書き写してオフラインで保管してください。すべてのデバイスを失ったとき、履歴を読む唯一の手段です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다음으로 복구 키(24개 단어와 QR 코드)를 생성합니다. 적어서 오프라인으로 보관하세요. 모든 기기를 잃었을 때 기록을 읽을 수 있는 유일한 방법입니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接下来会生成恢复密钥（24 个单词和二维码）。请抄写并离线保存；它是所有设备丢失后读取历史的唯一途径。"
           }
         }
       }
@@ -22261,6 +23241,34 @@
         }
       }
     },
+    "无法读取历史记录密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot read the history key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴鍵を読み取れません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기록 키를 읽을 수 없습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取历史记录密钥"
+          }
+        }
+      }
+    },
     "无法读取图片": {
       "localizations": {
         "en": {
@@ -22513,6 +23521,34 @@
         }
       }
     },
+    "旧恢复密钥从此不再获得新的历史密钥。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The old recovery key will no longer receive new history keys."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "古い復元キーには今後新しい履歴鍵が渡されません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전 복구 키는 더 이상 새 기록 키를 받지 않습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧恢复密钥从此不再获得新的历史密钥。"
+          }
+        }
+      }
+    },
     "是": {
       "localizations": {
         "en": {
@@ -22705,6 +23741,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "暂停目标"
+          }
+        }
+      }
+    },
+    "暂无": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "なし"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "없음"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂无"
           }
         }
       }
@@ -22929,6 +23993,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "更换关联对话"
+          }
+        }
+      }
+    },
+    "更换恢复密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace Recovery Key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーを置き換える"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키 교체"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更换恢复密钥"
+          }
+        }
+      }
+    },
+    "更换恢复密钥？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace the Recovery Key?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーを置き換えますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키를 교체할까요?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更换恢复密钥？"
           }
         }
       }
@@ -23829,6 +24949,34 @@
         }
       }
     },
+    "未开启": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オフ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "꺼짐"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未开启"
+          }
+        }
+      }
+    },
     "未托管 · 点按收编": {
       "localizations": {
         "en": {
@@ -23993,6 +25141,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "未收到终端列表；请确认宿主返回 terminal.status 实际结果"
+          }
+        }
+      }
+    },
+    "未登记。完成设备配对后会自动登记。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not registered. It registers automatically after device pairing."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未登録です。デバイスのペアリング後に自動で登録されます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "등록되지 않았습니다. 기기 페어링 후 자동으로 등록됩니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未登记。完成设备配对后会自动登记。"
           }
         }
       }
@@ -24693,6 +25869,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "本机为此后端保存的最近 2000 条 token 用量，含已关闭的对话"
+          }
+        }
+      }
+    },
+    "本机历史密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Device's History Key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスの履歴鍵"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기기의 기록 키"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本机历史密钥"
+          }
+        }
+      }
+    },
+    "本机已取得 %lld 个历史密钥，加密历史会重新载入。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device received %lld history keys; encrypted history will reload."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスは %lld 個の履歴鍵を取得しました。暗号化された履歴を再読み込みします。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기기가 기록 키 %lld개를 받았습니다. 암호화된 기록을 다시 불러옵니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本机已取得 %lld 个历史密钥，加密历史会重新载入。"
           }
         }
       }
@@ -26321,6 +27553,34 @@
         }
       }
     },
+    "正在导入恢复密钥…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importing recovery key…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーを読み込んでいます…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키를 가져오는 중…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在导入恢复密钥…"
+          }
+        }
+      }
+    },
     "正在导出…": {
       "localizations": {
         "en": {
@@ -26513,6 +27773,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在执行 %@…"
+          }
+        }
+      }
+    },
+    "正在授权…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authorizing…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認しています…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인하는 중…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在授权…"
           }
         }
       }
@@ -27469,6 +28757,34 @@
         }
       }
     },
+    "此恢复密钥与后端当前登记的恢复密钥不一致": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This recovery key does not match the one registered on the backend"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この復元キーはバックエンドに登録されている復元キーと一致しません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 복구 키는 백엔드에 등록된 복구 키와 일치하지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此恢复密钥与后端当前登记的恢复密钥不一致"
+          }
+        }
+      }
+    },
     "此格式没有可用的文本或原生图片预览。后端未提供可编辑文本。": {
       "localizations": {
         "en": {
@@ -27525,6 +28841,62 @@
         }
       }
     },
+    "此设备尚未登记历史密钥，请先完成设备配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device has not registered a history key. Pair the device first."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスは履歴鍵を登録していません。先にデバイスのペアリングを完了してください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기기는 기록 키를 등록하지 않았습니다. 먼저 기기 페어링을 완료하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此设备尚未登记历史密钥，请先完成设备配对"
+          }
+        }
+      }
+    },
+    "此设备尚未获授权查看这段历史": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device is not yet authorized to view this part of the history"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスはこの履歴の閲覧をまだ承認されていません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기기는 아직 이 기록을 볼 권한이 없습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此设备尚未获授权查看这段历史"
+          }
+        }
+      }
+    },
     "此设备没有可用相机，请使用二维码图片导入": {
       "localizations": {
         "en": {
@@ -27549,6 +28921,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "此设备没有可用相机，请使用二维码图片导入"
+          }
+        }
+      }
+    },
+    "此设备读不到上一轮的原始消息，无法重试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device cannot read the previous prompt, so it cannot retry"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスは前回の元のメッセージを読めないため、再試行できません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기기에서 이전 메시지 원문을 읽을 수 없어 다시 시도할 수 없습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此设备读不到上一轮的原始消息，无法重试"
           }
         }
       }
@@ -28113,6 +29513,34 @@
         }
       }
     },
+    "没有待处理的申请": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No pending requests"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留中の申請はありません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대기 중인 요청이 없습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有待处理的申请"
+          }
+        }
+      }
+    },
     "没有找到可用项目": {
       "localizations": {
         "en": {
@@ -28445,6 +29873,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "添加为引用"
+          }
+        }
+      }
+    },
+    "添加于 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "追加日時 %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "추가 시각 %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加于 %@"
           }
         }
       }
@@ -29821,6 +31277,34 @@
         }
       }
     },
+    "申请于 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requested %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "申請日時 %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청 시각 %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "申请于 %@"
+          }
+        }
+      }
+    },
     "申请已过期，请重新申请。": {
       "localizations": {
         "en": {
@@ -29873,6 +31357,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "申请设备验证"
+          }
+        }
+      }
+    },
+    "申请读取旧历史": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request Access to Earlier History"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以前の履歴へのアクセスを申請"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전 기록 접근 요청"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "申请读取旧历史"
           }
         }
       }
@@ -30661,6 +32173,34 @@
         }
       }
     },
+    "确定不保存恢复密钥？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip Saving the Recovery Key?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "復元キーを保存せずに続けますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구 키를 저장하지 않을까요?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确定不保存恢复密钥？"
+          }
+        }
+      }
+    },
     "确认": {
       "localizations": {
         "en": {
@@ -31021,6 +32561,90 @@
           "stringUnit": {
             "state": "translated",
             "value": "移除：%@"
+          }
+        }
+      }
+    },
+    "端到端加密": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "End-to-End Encryption"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エンドツーエンド暗号化"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "종단 간 암호화"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端到端加密"
+          }
+        }
+      }
+    },
+    "端到端加密、设备授权与恢复密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "End-to-end encryption, device access and the recovery key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エンドツーエンド暗号化、デバイスの承認、復元キー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "종단 간 암호화, 기기 승인, 복구 키"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端到端加密、设备授权与恢复密钥"
+          }
+        }
+      }
+    },
+    "端到端加密已开启": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "End-to-end encryption is on"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エンドツーエンド暗号化はオンです"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "종단 간 암호화가 켜져 있습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端到端加密已开启"
           }
         }
       }
@@ -34385,6 +36009,34 @@
         }
       }
     },
+    "请先连接此后端": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to this backend first"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先にこのバックエンドに接続してください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "먼저 이 백엔드에 연결하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先连接此后端"
+          }
+        }
+      }
+    },
     "请先连接此工作区的后端": {
       "localizations": {
         "en": {
@@ -34493,6 +36145,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "请在 %@ 上确认"
+          }
+        }
+      }
+    },
+    "请在一台已授权的设备上打开“会话历史加密”并批准。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On an authorized device, open History Encryption and approve it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認済みのデバイスで「会話履歴の暗号化」を開いて承認してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인된 기기에서 ‘대화 기록 암호화’를 열고 승인하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请在一台已授权的设备上打开“会话历史加密”并批准。"
           }
         }
       }
@@ -34689,6 +36369,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "请将当前任务切换或交接到工作树 %@。保留未提交更改和任务上下文。先核实会话工作目录切换能力；若宿主无法切换会话，提供具体下一步，不得宣称已经切换。本移动端操作台没有改变会话工作目录。"
+          }
+        }
+      }
+    },
+    "请已授权的设备批准，本机才能读取登记之前的历史": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An authorized device must approve before this device can read history from before it registered"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登録前の履歴を読むには、承認済みのデバイスでの承認が必要です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "등록 이전 기록을 읽으려면 승인된 기기에서 허용해야 합니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请已授权的设备批准，本机才能读取登记之前的历史"
+          }
+        }
+      }
+    },
+    "请按顺序抄写这 24 个单词，或保存下方二维码，并离线妥善保管。任何拿到它的人都能读取你的全部加密历史；它只显示这一次。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write down these 24 words in order, or save the QR code below, and keep it safe offline. Anyone who has it can read all your encrypted history. It is shown only once."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この 24 語を順番どおりに書き写すか、下の QR コードを保存し、オフラインで安全に保管してください。これを持つ人は暗号化された履歴をすべて読めます。表示されるのは今回だけです。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 24개 단어를 순서대로 적거나 아래 QR 코드를 저장해 오프라인으로 안전하게 보관하세요. 이를 가진 사람은 암호화된 모든 기록을 읽을 수 있습니다. 한 번만 표시됩니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请按顺序抄写这 24 个单词，或保存下方二维码，并离线妥善保管。任何拿到它的人都能读取你的全部加密历史；它只显示这一次。"
           }
         }
       }
@@ -35053,6 +36789,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "请求授权"
+          }
+        }
+      }
+    },
+    "请求授权的设备尚未登记历史密钥，或已被吊销": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The requesting device has not registered a history key, or it was revoked"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "申請したデバイスは履歴鍵を登録していないか、取り消されています"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청한 기기가 기록 키를 등록하지 않았거나 철회되었습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请求授权的设备尚未登记历史密钥，或已被吊销"
           }
         }
       }
@@ -36037,6 +37801,34 @@
         }
       }
     },
+    "跳过": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スキップ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "건너뛰기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "跳过"
+          }
+        }
+      }
+    },
     "转为草稿": {
       "localizations": {
         "en": {
@@ -36177,6 +37969,62 @@
         }
       }
     },
+    "输入 24 个单词或扫描恢复二维码，让本机读取全部历史": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter the 24 words or scan the recovery QR code so this device can read all history"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "24 語を入力するか復元 QR コードを読み取ると、このデバイスですべての履歴を読めます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "24개 단어를 입력하거나 복구 QR 코드를 스캔해 이 기기에서 모든 기록을 읽을 수 있게 합니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "输入 24 个单词或扫描恢复二维码，让本机读取全部历史"
+          }
+        }
+      }
+    },
+    "输入 24 个单词（以空格分隔），或粘贴恢复二维码中的 todex-recovery: 文本。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter the 24 words separated by spaces, or paste the todex-recovery: text from the recovery QR code."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "24 語をスペース区切りで入力するか、復元 QR コードの todex-recovery: テキストを貼り付けてください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "24개 단어를 공백으로 구분해 입력하거나 복구 QR 코드의 todex-recovery: 텍스트를 붙여넣으세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "输入 24 个单词（以空格分隔），或粘贴恢复二维码中的 todex-recovery: 文本。"
+          }
+        }
+      }
+    },
     "输入 tokens": {
       "localizations": {
         "en": {
@@ -36201,6 +38049,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "输入 tokens"
+          }
+        }
+      }
+    },
+    "输入单词或粘贴文本": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter Words or Paste Text"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "単語を入力またはテキストを貼り付け"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "단어 입력 또는 텍스트 붙여넣기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "输入单词或粘贴文本"
           }
         }
       }
@@ -36737,6 +38613,34 @@
         }
       }
     },
+    "返回保存": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go Back and Save"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "戻って保存"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "돌아가서 저장"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "返回保存"
+          }
+        }
+      }
+    },
     "返回修改": {
       "localizations": {
         "en": {
@@ -36929,6 +38833,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "这个工作区还没有对话。"
+          }
+        }
+      }
+    },
+    "这是本机。吊销后本机无法读取之后的新历史，需要重新登记并申请授权。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This is this device. After revoking, it cannot read new history until it registers again and requests access."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これはこのデバイスです。取り消すと以後の新しい履歴を読めなくなり、再登録とアクセス申請が必要です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기기입니다. 철회하면 이후 새 기록을 읽을 수 없으며 다시 등록하고 접근을 요청해야 합니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这是本机。吊销后本机无法读取之后的新历史，需要重新登记并申请授权。"
           }
         }
       }
@@ -37461,6 +39393,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "连接延迟"
+          }
+        }
+      }
+    },
+    "连接此后端后可管理端到端加密、设备授权与恢复密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to this backend to manage end-to-end encryption, device access and the recovery key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このバックエンドに接続すると、エンドツーエンド暗号化、デバイスの承認、復元キーを管理できます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 백엔드에 연결하면 종단 간 암호화, 기기 승인, 복구 키를 관리할 수 있습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接此后端后可管理端到端加密、设备授权与恢复密钥"
           }
         }
       }
@@ -39561,6 +41521,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "（无目标文本）"
+          }
+        }
+      }
+    },
+    "（本机）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " (This Device)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "（このデバイス）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " (이 기기)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "（本机）"
           }
         }
       }

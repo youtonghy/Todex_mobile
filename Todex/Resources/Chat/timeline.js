@@ -147,6 +147,8 @@ window.renderTimeline=function(messages,provider,fontSize,historyState){
   let article=existing.get(message.id);existing.delete(message.id);
   const signature=JSON.stringify(message);if(article?.dataset.signature===signature){root.append(article);continue;}
   if(!article){article=document.createElement('article');article.dataset.id=message.id;}
+  // History v3: content this device cannot decrypt is one quiet line per run.
+  if(message.category==='locked'){article.dataset.signature=signature;article.className='message locked';article.replaceChildren();article.textContent=tr('此设备尚未获授权查看这段历史');root.append(article);continue;}
   article.dataset.signature=signature;article.className='message '+(message.role==='user'?'user':message.category==='error'?'error':isProgressLine(message)?'progress':'');article.replaceChildren();
   if(!isProgressLine(message)){const meta=document.createElement('div');meta.className='meta';const who=document.createElement('span');who.className='brand';who.textContent=message.role==='user'?tr('你'):provider;meta.append(who);
   if(runningStatus(message)){const status=document.createElement('span');status.textContent=tr('正在生成…');meta.append(status);}article.append(meta);}
