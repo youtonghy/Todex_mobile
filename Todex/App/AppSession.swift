@@ -1633,10 +1633,13 @@ extension SessionSocket {
         guard provider(for: conversation)?.capabilities["controlActions"].arrayValue.contains(.string(action)) == true
         else { throw TodexError.invalid(String(localized: "当前 Agent 不支持此操作")) }
         var payload: JSONValue = ["conversationId": .string(conversation.id)]
-        // An e2e backend cannot read the last prompt back; retry sends the
-        // decrypted original text (history v3 §7). Only the newest user
-        // message will do: when a locked run is newer, an older prompt would
-        // just be refused (CONFLICT), so say why instead.
+        // An e2e backend cannot read the last request back; retry returns the
+        // `retryRequest` the newest user message carries (history v3 §7) —
+        // its original text and content items, read in full detail because
+        // summary pages leave it out. Messages written before it existed fall
+        // back to the decrypted text. Only the newest user message will do:
+        // when a locked run is newer, an older one would just be refused
+        // (CONFLICT), so say why instead.
         if action == "retry", historyEncryption?.isEnabled == true || encryptedConversations.contains(conversation.id) {
             guard
                 let latest = runtimes[conversation.id]?.messages.first(where: {
@@ -1644,9 +1647,26 @@ extension SessionSocket {
                 }),
                 latest.role == "user", !latest.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { throw TodexError.invalid(String(localized: "此设备读不到上一轮的原始消息，无法重试")) }
-            payload["prompt"] = .string(latest.text)
+            if let request = try await retryRequest(conversationId: conversation.id, sequence: latest.sequence) {
+                payload["text"] = request.text
+                payload["content"] = request.content
+            } else {
+                payload["prompt"] = .string(latest.text)
+            }
         }
         return try await command("conversation.\(action)", payload, timeout: action == "compact" ? 310 : 45)
+    }
+
+    /// `retryRequest` of the user message at `sequence`, fetched in full
+    /// detail and decrypted; `nil` when the message predates it.
+    private func retryRequest(conversationId id: String, sequence: Int) async throws -> (text: JSONValue, content: JSONValue)? {
+        guard sequence > 0 else { return nil }
+        guard let api, isConnected else { throw TodexError.disconnected }
+        let page = try await api.events(conversationId: id, after: sequence - 1, limit: 1)
+        let message = try await receivedPage(page, conversationId: id).map(\.plain).first { $0.sequence == sequence }
+        let request = message?.payload["retryRequest"] ?? .null
+        guard request["text"].optionalString != nil, case .array = request["content"] else { return nil }
+        return (request["text"], request["content"])
     }
 
     // MARK: - History encryption (history v3, docs/history-encryption.md)

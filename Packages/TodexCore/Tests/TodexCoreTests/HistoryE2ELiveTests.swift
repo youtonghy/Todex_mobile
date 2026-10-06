@@ -145,6 +145,73 @@ extension RealtimeLiveTests {
                 #expect(!HistoryEncryption.isLocked(plain.payload))
             }
 
+            // A request with inline content shows its items appended in the
+            // journal, so its text alone cannot match: the user message
+            // carries the original request as `retryRequest` (full detail
+            // only), which the client returns as text + content.
+            let inlinePrompt = "Third prompt " + token
+            let inlineItems: JSONValue = [["type": "text", "text": .string("Inline note " + token)]]
+            try await withLiveClient(fixture.connection) { client, frames in
+                let head = try await api.conversation(id: conversationID).lastSequence
+                _ = try await client.command(
+                    type: "conversation.subscribe",
+                    payload: ["conversationId": .string(conversationID), "afterSequence": .number(Double(head))],
+                    timeout: 10)
+                let third = try await client.command(
+                    type: "conversation.prompt",
+                    payload: [
+                        "conversationId": .string(conversationID), "text": .string(inlinePrompt),
+                        "content": inlineItems,
+                    ], timeout: 10)
+                let thirdTurn = try #require(third["turnId"].optionalString)
+                _ = try await frames.wait {
+                    $0["type"] == "conversation.event" && $0["payload"]["type"] == "turn.completed"
+                        && $0["payload"]["payload"]["turnId"] == .string(thirdTurn)
+                }
+            }
+            try await withLiveClient(fixture.connection) { client, frames in
+                let summary = try await restReplay(api: api, keys: keys, conversationID: conversationID, detail: "summary")
+                let full = try await restReplay(api: api, keys: keys, conversationID: conversationID, detail: "full")
+                let isUserMessage = { (event: ConversationEvent) in
+                    event.type == "message.created" && event.payload["role"] == "user"
+                }
+                let latestSummary = try #require(summary.map(\.plain).last(where: isUserMessage))
+                #expect(latestSummary.payload["retryRequest"] == .null)
+                let latestFull = try #require(full.map(\.plain).last(where: isUserMessage))
+                let retryRequest = latestFull.payload["retryRequest"]
+                #expect(retryRequest["text"] == .string(inlinePrompt))
+                #expect(retryRequest["content"] == inlineItems)
+                let target: JSONValue = ["conversationId": .string(conversationID)]
+                var textOnly = target
+                textOnly["prompt"] = .string(inlinePrompt)
+                await expectServerError(["CONFLICT", "409"]) {
+                    _ = try await client.command(type: "conversation.retry", payload: textOnly, timeout: 10)
+                }
+                var tampered = target
+                tampered["text"] = retryRequest["text"]
+                tampered["content"] = [["type": "text", "text": "Something else"]]
+                await expectServerError(["CONFLICT", "409"]) {
+                    _ = try await client.command(type: "conversation.retry", payload: tampered, timeout: 10)
+                }
+                _ = try await client.command(
+                    type: "conversation.subscribe",
+                    payload: [
+                        "conversationId": .string(conversationID),
+                        "afterSequence": .number(Double(full.last?.raw.sequence ?? 0)),
+                    ],
+                    timeout: 10)
+                var retry = target
+                retry["text"] = retryRequest["text"]
+                retry["content"] = retryRequest["content"]
+                let retried = try await client.command(type: "conversation.retry", payload: retry, timeout: 10)
+                #expect(retried["retried"] == true)
+                let turnID = try #require(retried["turnId"].optionalString)
+                _ = try await frames.wait {
+                    $0["type"] == "conversation.event" && $0["payload"]["type"] == "turn.completed"
+                        && $0["payload"]["payload"]["turnId"] == .string(turnID)
+                }
+            }
+
             // A fork copies the ciphertext with its source's AAD id and
             // sequences; its keys are fetched under the fork's own id.
             let fork = try await wrapsClient.command(
