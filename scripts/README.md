@@ -37,7 +37,7 @@ Use the HTTP URL from `fixture.json`; requests are signed with the device seed f
 
 The verifier uses actual HTTP and RFC 6455 WebSocket connections against the Rust process. It validates the handshake, masks client frames, handles ping/pong and continuation frames, applies bounded waits, and checks outcomes rather than treating an accepted command as completed work.
 
-The 16 groups cover:
+The 17 groups cover:
 
 1. Plain-text health, backend version and transport policy.
 2. Missing and incorrect HTTP auth.
@@ -53,8 +53,9 @@ The 16 groups cover:
 12. WS prompt → confirmed running fake turn → REST cancel → native interrupt/completion and persisted cancellation.
 13. Paginated REST event replay without sequence gaps, and a new WS subscription replaying after a cursor.
 14. Fake Claude stream-json initialization, permission via WS, object-shaped text delta and completion.
-15. Real `/bin/sh` PTY start/input/output/resize/stop in the temporary workspace. Output markers are split in the submitted command so terminal echo cannot satisfy the assertion.
-16. Structured 400 malformed ID, 404 absent UUID, 403 workspace boundary, Unsupported native resume and 422 invalid patch errors.
+15. Backend follow-up queue: a prompt during a slow fake Claude turn is rejected with `CONFLICT`, `conversation.queue.add` (with content, re-added idempotently) waits and starts after completion, and a cancelled turn pauses the queue until `conversation.queue.resume`.
+16. Real `/bin/sh` PTY start/input/output/resize/stop in the temporary workspace. Output markers are split in the submitted command so terminal echo cannot satisfy the assertion.
+17. Structured 400 malformed ID, 404 absent UUID, 403 workspace boundary, Unsupported native resume and 422 invalid patch errors.
 
 The HTTP version check does not invoke `/v2/providers/versions`: that endpoint also performs remote GitHub/npm/Pi version checks. CLI upgrades, Git pushes/PRs, device-pairing crypto/approval, encrypted WS, real AI services, cloud tasks, MCP tools and simulator UI automation are not exercised here. The Rust executable's SHA-256 is recorded so results are attributable to the exact existing binary, which may differ from a newer source checkout.
 
@@ -65,6 +66,7 @@ The HTTP version check does not invoke `/v2/providers/versions`: that endpoint a
 - Normal prompts return `Fixture Codex: …` or `Fixture Claude: …`.
 - Include `fixture:permission` to request an approval; the fixture returns a marker showing the decision received from the backend.
 - Include `fixture:hold` to keep a turn open for cancellation. Codex emits a holding marker before waiting for interrupt.
+- Include `fixture:slow` or `fixture:slow:<seconds>` (Claude only, at most 120) to keep a turn running for that long (default 5 s) before it completes; useful for backend follow-up queue checks.
 - Codex model discovery returns `fixture-model`. Its schema export advertises no experimental live controls or queue support.
 - The fixture understands native initialization, thread start/resume/fork, prompt, interrupt and simple compaction frames. The integration run verifies only the operations listed above.
 

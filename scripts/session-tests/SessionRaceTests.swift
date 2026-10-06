@@ -154,6 +154,9 @@ actor FakeSocket: SessionSocket {
     var controls: [JSONValue] = []
     var prompts: [(String, JSONValue)] = []
     var forks: [JSONValue] = []
+    /// `conversation.queue.*` commands in send order, with their payloads.
+    var queueCommands: [(String, JSONValue)] = []
+    var queueSnapshot: JSONValue = ["items": [], "paused": false]
     var connectGate: Gate?
     var promptGate: Gate?
     var promptError: TodexError?
@@ -184,8 +187,16 @@ actor FakeSocket: SessionSocket {
     func overflow() { for _ in 0..<2_060 { continuation.yield(["type": "workbench.fixture"]) } }
     func emit(_ event: ConversationEvent) throws { continuation.yield(["type": "conversation.event", "payload": try JSONValue(encoding: event)]) }
     func emitFrame(_ frame: JSONValue) { continuation.yield(frame) }
+    func setQueueSnapshot(_ value: JSONValue) { queueSnapshot = value }
     func command(type: String, payload: JSONValue, timeout: TimeInterval, id: String) async throws -> JSONValue {
         if type == "conversation.control" { controls.append(payload); return ["accepted": true] }
+        if type.hasPrefix("conversation.queue.") {
+            queueCommands.append((type, payload))
+            if type == "conversation.queue.add" {
+                return ["conversationId": payload["conversationId"], "itemId": payload["itemId"], "status": "queued"]
+            }
+            return ["conversationId": payload["conversationId"], "queue": queueSnapshot]
+        }
         if type.hasPrefix("agentBrowser.") {
             browserWatches.append("\(type):\(payload["conversationId"].stringValue)")
             return ["watching": .bool(type == "agentBrowser.watch")]
@@ -704,6 +715,51 @@ actor FakeSocket: SessionSocket {
     try check(await h.socket.prompts.isEmpty, "prompt reached the socket")
     h.session.disconnect()
 }
+@MainActor func backendFollowUpQueue() async throws {
+    let restored = QueuedDraft(id: "restored-1", draft: ComposerDraft(text: "kept from last launch"))
+    var snapshot = SessionSnapshot()
+    snapshot.queues = ["c": [restored]]
+    let h = try Harness([event(1, "turn.started", ["turnId": "t"])], snapshot: snapshot)
+    await h.backend.setProviders([
+        ProviderDescriptor(id: "codex", displayName: "Codex", available: true, capabilities: ["backendQueue": true])
+    ])
+    await h.socket.setQueueSnapshot([
+        "items": [["id": "restored-1", "text": "kept from last launch", "status": "queued"]], "paused": false,
+    ])
+    try await h.ready()
+    // A relaunch keeps restored candidates paused; resuming hands them to the
+    // backend queue under their own ids instead of prompting while it is busy.
+    try check(h.session.queues["c"]?.map(\.id) == ["restored-1"], "restored candidate left before resume")
+    h.session.resumeQueue(h.manifest)
+    try await eventually("restored candidate handed over") { (h.session.queues["c"] ?? []).isEmpty }
+    var commands = await h.socket.queueCommands
+    let handedOver = commands.first { $0.0 == "conversation.queue.add" }?.1 ?? .null
+    try check(handedOver["itemId"] == "restored-1" && handedOver["text"] == "kept from last launch", "handover: \(commands.map(\.0))")
+    try check(commands.contains { $0.0 == "conversation.queue.list" }, "recovery did not read the backend queue")
+    try check(h.session.runtimes["c"]?.followUps.map { $0["id"] } == ["restored-1"], "queue snapshot not adopted")
+
+    // A busy send with an attachment joins the backend queue too.
+    let withAttachment = ComposerDraft(text: "see [file]", attachments: [MessageAttachment(name: "a.txt", mimeType: "text/plain", data: Data("x".utf8))])
+    try await h.session.send(withAttachment, in: h.manifest)
+    commands = await h.socket.queueCommands
+    let busy = commands.last { $0.0 == "conversation.queue.add" }?.1 ?? .null
+    try check(busy["text"] == "see [file]" && busy["itemId"] != "restored-1", "busy send did not queue in the backend")
+    let promptsWhileBusy = await h.socket.prompts.count
+    try check((h.session.queues["c"] ?? []).isEmpty && promptsWhileBusy == 0, "busy send went local or prompted")
+    try check(await h.socket.controls.isEmpty, "backend queue must not use native queue controls")
+
+    // The loaded window can miss a running turn: a CONFLICT moves the prompt
+    // into the queue under its request id instead of failing the send.
+    try await h.socket.emit(event(2, "turn.completed", ["turnId": "t"]))
+    try await eventually("turn completed") { h.session.runtimes["c"]?.status == "completed" }
+    await h.socket.configure(error: .server(code: "CONFLICT", message: "conversation c is already running turn x"))
+    try await h.session.send(ComposerDraft(text: "after all"), in: h.manifest)
+    let prompt = await h.socket.prompts.last
+    commands = await h.socket.queueCommands
+    try check(prompt != nil && commands.last?.0 == "conversation.queue.add" && commands.last?.1["itemId"] == .string(prompt?.0 ?? ""), "CONFLICT not queued under the request id")
+    try check(h.session.pendingSends["c"] == nil && h.session.drafts["c"]?.isEmpty != false, "CONFLICT left a pending send or restored the draft")
+    h.session.disconnect()
+}
 @MainActor func fixtureNeverOverwritesCatalog() async throws {
     #if DEBUG
     let store = try TestEnvironment.store()
@@ -894,6 +950,7 @@ actor FakeSocket: SessionSocket {
             ("permanent close stops reconnect", permanentCloseStopsReconnect),
             ("subscription budget evicts idle watch", subscriptionBudgetEvictsIdleWatch),
             ("follow-up native queue + permission guard", followUpQueueAndPermissionGuard),
+            ("backend follow-up queue: busy send, CONFLICT, handover", backendFollowUpQueue),
             ("home parity: fork, labels, task details, other backend cache", homeParity),
             ("usage ledger persists across conversations", usageLedgerPersistsAcrossRestart),
             ("connection diagnostic error lifecycle", connectFailureKeepsDiagnosticError),

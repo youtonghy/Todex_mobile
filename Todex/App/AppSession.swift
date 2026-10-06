@@ -430,9 +430,6 @@ extension SessionSocket {
             checkBackendVersion(api)
             try await refresh()
             try checkRevision(current)
-            for conversation in conversations where hasBackendQueue(conversation) && !(queues[conversation.id] ?? []).isEmpty {
-                handOverQueue(conversation.id, conversation: conversation)
-            }
             if !legacyCursors.isEmpty {
                 _ = try await socket.command(
                     type: "session.resume",
@@ -1380,7 +1377,8 @@ extension SessionSocket {
         changed()
     }
     /// Moves local candidates (restored after a relaunch, or queued while the
-    /// backend's capabilities were unknown) into the backend queue, in order.
+    /// backend's capabilities were unknown) into the backend queue, in order,
+    /// once the local queue is resumed; restarts and disconnects still pause it.
     /// The backend then decides when each one runs, busy or not.
     private func handOverQueue(_ id: String, conversation: ConversationManifest) {
         guard isConnected, !pausedQueues.contains(id), queueDispatches[id] == nil, !(queues[id] ?? []).isEmpty

@@ -468,6 +468,49 @@ def verify(root, manifest):
             return ccid
         check("Claude-stream-json-permission-and-completion", claude)
 
+        def follow_up_queue():
+            conversation = ws.command("conversation.create", {"provider": "claude-code", "workspace": manifest["workspace"], "title": "Simulator follow-up queue"})
+            qid = conversation["id"]
+            ws.command("conversation.subscribe", {"conversationId": qid})
+
+            def queue():
+                return ws.command("conversation.queue.list", {"conversationId": qid})["queue"]
+
+            def delivered(item_id):
+                return ws.wait(lambda f: f.get("type") == "conversation.event" and f["payload"].get("conversationId") == qid
+                               and f["payload"].get("type") == "message.created"
+                               and f["payload"]["payload"].get("clientRequestId") == item_id, timeout=30)["payload"]
+
+            ws.command("conversation.prompt", {"conversationId": qid, "text": "fixture:slow:3"})
+            ws.command("conversation.prompt", {"conversationId": qid, "text": "too early"}, error="CONFLICT")
+            queued = ws.command("conversation.queue.add", {"conversationId": qid, "itemId": "fixture-follow-up",
+                                                         "text": "queued after slow", "content": [{"type": "text", "text": "note"}]})
+            require(queued["status"] == "queued", "Busy conversation must queue: " + json.dumps(queued))
+            again = ws.command("conversation.queue.add", {"conversationId": qid, "itemId": "fixture-follow-up", "text": "queued after slow",
+                                                        "content": [{"type": "text", "text": "note"}]})
+            require(again["status"] == "queued" and [item["id"] for item in queue()["items"]] == ["fixture-follow-up"], "Re-adding must be idempotent")
+            created = delivered("fixture-follow-up")
+            ws.event(qid, "turn.completed", created["sequence"])
+            require(queue()["items"] == [], "Completed turn must drain the queue")
+
+            hold = ws.command("conversation.prompt", {"conversationId": qid, "text": "fixture:hold"})
+            ws.command("conversation.queue.add", {"conversationId": qid, "itemId": "fixture-after-cancel", "text": "after cancel"})
+            # Cancel once the fake CLI is inside the turn, not during its initialization.
+            ws.wait(lambda f: f.get("type") == "conversation.event" and f["payload"].get("conversationId") == qid
+                    and f["payload"].get("type") == "provider.event" and f["payload"]["payload"].get("turnId") == hold["turnId"])
+            ws.command("conversation.cancel", {"conversationId": qid})
+            deadline = time.monotonic() + 15
+            while not queue()["paused"]:
+                require(time.monotonic() < deadline, "Cancelled turn must pause the queue")
+                time.sleep(0.1)
+            require(queue()["pauseReason"] == "turn_cancelled", "Pause reason")
+            ws.command("conversation.queue.resume", {"conversationId": qid})
+            resumed = delivered("fixture-after-cancel")
+            ws.event(qid, "turn.completed", resumed["sequence"])
+            require(queue() == {"items": [], "paused": False, "pauseReason": None, "pauseMessage": None}, "Resume must drain the queue")
+            return qid
+        check("backend-follow-up-queue", follow_up_queue)
+
         def terminal():
             terminal_id = "fixture-terminal-" + uuid.uuid4().hex
             scope = {"terminalId": terminal_id, "tenantId": "local"}

@@ -3,7 +3,9 @@
 import json
 import os
 from pathlib import Path
+import re
 import sys
+import time
 import uuid
 
 
@@ -114,6 +116,11 @@ def main():
                     pending = "fixture-claude-permission-" + uuid.uuid4().hex
                     send({"type": "control_request", "request_id": pending, "request": {
                         "subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "echo fixture-only"}}})
+                elif "fixture:slow" in text:
+                    # `fixture:slow[:seconds]` keeps the turn running, then completes.
+                    delay = re.search(r"fixture:slow:(\d+)", text)
+                    time.sleep(min(int(delay.group(1)), 120) if delay else 5)
+                    claude_complete()
                 elif "fixture:hold" not in text:
                     claude_complete()
             elif kind == "control_response" and message.get("response", {}).get("request_id") == pending:
