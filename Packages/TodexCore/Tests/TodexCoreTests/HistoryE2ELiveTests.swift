@@ -84,14 +84,37 @@ extension RealtimeLiveTests {
             }
 
             // Retry needs the decrypted prompt, taken the way AppSession takes
-            // it: the newest user message of the projected runtime.
+            // it: the newest user message of the projected runtime. Prompts run
+            // trimmed and the journal shows them so; the backend's textMac
+            // covers that form, so surrounding whitespace must not break retry.
+            let latestPrompt = "  Second prompt " + token + "\n"
+            try await withLiveClient(fixture.connection) { client, frames in
+                let head = try await api.conversation(id: conversationID).lastSequence
+                _ = try await client.command(
+                    type: "conversation.subscribe",
+                    payload: ["conversationId": .string(conversationID), "afterSequence": .number(Double(head))],
+                    timeout: 10)
+                let second = try await client.command(
+                    type: "conversation.prompt",
+                    payload: ["conversationId": .string(conversationID), "text": .string(latestPrompt)], timeout: 10)
+                let secondTurn = try #require(second["turnId"].optionalString)
+                _ = try await frames.wait {
+                    $0["type"] == "conversation.event" && $0["payload"]["type"] == "turn.completed"
+                        && $0["payload"]["payload"]["turnId"] == .string(secondTurn)
+                }
+            }
             try await withLiveClient(fixture.connection) { client, frames in
                 let full = try await restReplay(api: api, keys: keys, conversationID: conversationID, detail: "full")
                 var runtime = ConversationRuntime(conversationId: conversationID)
                 for event in full.map(\.plain) { runtime.ingest(event) }
                 let retryPrompt = try #require(
                     runtime.messages.first { $0.role == "user" && !$0.text.isEmpty }?.text)
-                #expect(retryPrompt == prompt)
+                #expect(retryPrompt == latestPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
+                var older = ["conversationId": .string(conversationID)] as JSONValue
+                older["prompt"] = .string(prompt)
+                await expectServerError(["CONFLICT", "409"]) {
+                    _ = try await client.command(type: "conversation.retry", payload: older, timeout: 10)
+                }
                 let target: JSONValue = ["conversationId": .string(conversationID)]
                 await expectServerError(["INVALID_REQUEST", "400"]) {
                     _ = try await client.command(type: "conversation.retry", payload: target, timeout: 10)
