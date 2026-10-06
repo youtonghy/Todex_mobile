@@ -122,6 +122,15 @@ extension RealtimeLiveTests {
                 #expect(!HistoryEncryption.isLocked(plain.payload))
             }
 
+            // A fork copies the ciphertext with its source's AAD id and
+            // sequences; its keys are fetched under the fork's own id.
+            let fork = try await wrapsClient.command(
+                type: "conversation.fork", payload: ["conversationId": .string(conversationID)], timeout: 10)
+            let forkID = try #require(fork["conversationId"].optionalString)
+            let forked = try await restReplay(api: api, keys: keys, conversationID: forkID, detail: "full")
+            #expect(forked.contains { $0.raw.payload[HistoryEncryption.Envelope.field]["c"] == .string(conversationID) })
+            try checkPlaintext(forked.map(\.plain), contains: [prompt, "Fixture Codex: " + prompt], detail: "fork")
+
             // Clients that do not declare `historyEncryption=1` are refused.
             await expectServerError(["CLIENT_UPGRADE_REQUIRED", "426"]) {
                 _ = try await HTTPClient(connection: fixture.connection).request(
