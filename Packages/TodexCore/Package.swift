@@ -15,7 +15,10 @@ let package = Package(
         .target(
             name: "TodexCore", dependencies: [.product(name: "Sodium", package: "swift-sodium")],
             resources: [.process("Resources")]),
-        .testTarget(name: "TodexCoreTests", dependencies: ["TodexCore"])
+        .testTarget(
+            name: "TodexCoreTests", dependencies: ["TodexCore"],
+            // Cross-language vectors shared verbatim with the backend and TodeX_protocol.
+            resources: [.copy("Fixtures")])
     ],
     swiftLanguageModes: [.v6]
 )
