@@ -178,15 +178,47 @@ struct TransportV2Tests {
             clientPublic: clientKey.publicKey.rawRepresentation, clientNonce: hex(v["clientNonce"]))
         #expect(commitment == (try hex(v["commitment"])))
         #expect(CryptoEncoding.encode(commitment) == v["commitmentBase64Url"].stringValue)
-        let material = try PairingMaterial(
-            v3RequestID: v["requestId"].stringValue, privateKey: clientKey, serverPublicKey: hex(v["serverPublicKey"]),
-            device: device, clientNonce: hex(v["clientNonce"]))
+        func bound(_ transportProtocol: JSONValue, _ transportPublicKey: JSONValue, loopback: Bool = false) throws
+            -> PairingMaterial
+        {
+            let (transport, key) = try PairingTransport.validated(
+                protocol: transportProtocol.optionalString, publicKey: transportPublicKey.optionalString,
+                loopback: loopback)
+            return try PairingMaterial(
+                v3RequestID: v["requestId"].stringValue, privateKey: clientKey,
+                serverPublicKey: hex(v["serverPublicKey"]), device: device, clientNonce: hex(v["clientNonce"]),
+                transport: transport, transportKey: key)
+        }
+        // The bound transport is the ML-KEM server static key of the vectors.
+        #expect(v["transportProtocol"] == "ml-kem-768")
+        let material = try bound(v["transportProtocol"], v["transportPublicKey"])
         #expect(material.transcript == (try hex(v["transcript"])))
         #expect(Data(SHA256.hash(data: material.transcript)) == (try hex(v["transcriptHash"])))
         #expect(material.verificationCode == v["verificationCode"].stringValue)
         #expect(material.wrapKey.bytes == (try hex(v["wrapKey"])))
         #expect(material.pollProof.bytes == (try hex(v["pollProof"])))
         #expect(material.cancelProof.bytes == (try hex(v["cancelProof"])))
+        #expect(material.transport.fingerprint == v["fingerprint"].stringValue)
+        // The credential plaintext, sealed under the wrap key with the full
+        // transcript as AAD.
+        let credential = v["credential"]
+        #expect(credential["nonceBase64Url"].stringValue == CryptoEncoding.encode(try hex(credential["nonce"])))
+        #expect(credential["ciphertextBase64Url"].stringValue == CryptoEncoding.encode(try hex(credential["ciphertext"])))
+        let opened = try XChaChaAEAD.open(
+            hex(credential["ciphertext"]), key: material.wrapKey, nonce: hex(credential["nonce"]), aad: material.transcript)
+        #expect(opened == Data(credential["plaintext"].stringValue.utf8))
+        let sealed = try XChaChaAEAD.seal(
+            Data(credential["plaintext"].stringValue.utf8), key: material.wrapKey, nonce: hex(credential["nonce"]),
+            aad: material.transcript)
+        #expect(sealed == (try hex(credential["ciphertext"])))
+        for (name, loopback) in [("tampered", false), ("noneCase", true)] {
+            let entry = v[name]
+            let other = try bound(entry["transportProtocol"], entry["transportPublicKey"], loopback: loopback)
+            #expect(Data(SHA256.hash(data: other.transcript)) == (try hex(entry["transcriptHash"])), "\(name)")
+            #expect(other.verificationCode == entry["verificationCode"].stringValue, "\(name)")
+            #expect(other.verificationCode != material.verificationCode, "\(name)")
+        }
+        #expect(v["noneCase"]["fingerprint"] == "none")
         #expect(throws: TodexError.self) {
             try DevicePairingV3.commitment(clientPublic: clientKey.publicKey.rawRepresentation, clientNonce: Data(count: 16))
         }
@@ -276,9 +308,38 @@ struct TransportV2Tests {
 
     @Test func modeFollowsClientRules() {
         let key = CryptoEncoding.encode(Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation)
-        func mode(_ url: String, _ encryption: EncryptionProtocol = .none, _ publicKey: String = "") -> SecureTransportMode {
-            .resolve(BackendConnection(serverURL: url, encryption: encryption, publicKey: publicKey))
+        func profile(_ url: String, _ encryption: EncryptionProtocol = .none, _ publicKey: String = "", verified: Bool = true)
+            -> BackendConnection
+        {
+            BackendConnection(serverURL: url, encryption: encryption, publicKey: publicKey, transportVerified: verified)
         }
+        func mode(_ url: String, _ encryption: EncryptionProtocol = .none, _ publicKey: String = "", verified: Bool = true)
+            -> SecureTransportMode
+        {
+            .resolve(profile(url, encryption, publicKey, verified: verified))
+        }
+        // A pin no device verification confirmed is refused everywhere,
+        // loopback included, with the re-pair error; never plaintext.
+        for url in ["https://lan.example:7345", "http://127.0.0.1:7345"] {
+            for (encryption, publicKey) in [(EncryptionProtocol.x25519, key), (.none, key), (.mlkem768, "")] {
+                let unverified = profile(url, encryption, publicKey, verified: false)
+                #expect(SecureTransportMode.resolve(unverified) == .refused, "\(url) \(encryption)")
+                #expect(SecureTransportError.refusal(unverified).localizedDescription
+                    == SecureTransportError.unverifiedKey.localizedDescription)
+            }
+            // Verified but incomplete: an unusable key, not plaintext.
+            for (encryption, publicKey) in [(EncryptionProtocol.x25519, ""), (.mlkem768, "  "), (.none, key)] {
+                let incomplete = profile(url, encryption, publicKey)
+                #expect(SecureTransportMode.resolve(incomplete) == .refused, "\(url) \(encryption) incomplete")
+                #expect(SecureTransportError.refusal(incomplete).localizedDescription
+                    == SecureTransportError.invalidPinnedKey.localizedDescription)
+            }
+        }
+        // `none` with no key is plaintext on loopback whatever the flag says.
+        #expect(mode("http://127.0.0.1:7345", verified: false) == .plaintext)
+        #expect(mode("https://lan.example:7345", verified: false) == .refused)
+        #expect(SecureTransportError.refusal(profile("https://lan.example")).localizedDescription
+            == SecureTransportError.encryptionRequired.localizedDescription)
         #expect(mode("https://lan.example:7345", .x25519, key) == .v2(.x25519))
         #expect(mode("http://127.0.0.1:7345", .mlkem768, key) == .v2(.mlkem768))
         #expect(mode("http://192.168.1.2:7345") == .refused)
@@ -301,7 +362,8 @@ struct TransportV2Tests {
             #expect(BackendConnection.isLoopbackHost(host), "\(host)")
         }
         #expect(mode("http://127.0.0.08:7345") == .refused)
-        let pinned = BackendConnection(serverURL: "https://lan.example", encryption: .x25519, publicKey: key)
+        let pinned = BackendConnection(
+            serverURL: "https://lan.example", encryption: .x25519, publicKey: key, transportVerified: true)
         #expect(throws: Never.self) { try SecureTransportError.checkPolicy(pinned, requiredProtocol: "x25519") }
         #expect(throws: Never.self) { try SecureTransportError.checkPolicy(pinned, requiredProtocol: "none") }
         #expect(throws: TodexError.self) { try SecureTransportError.checkPolicy(pinned, requiredProtocol: "ml-kem-768") }
@@ -342,6 +404,7 @@ struct TransportV2Tests {
             var connection = fixture.client().connection
             connection.encryption = encryption
             connection.publicKey = key
+            connection.transportVerified = true
             let transport = BackendSecureTransport(
                 connection: connection, session: fixture.session, makeSocket: { _ in FakeV2Server.unreachable() })
             for method in [HTTPMethod.get, .post] {
@@ -708,6 +771,7 @@ private struct FakeServerKeys: Sendable {
         var connection = fixture.client(deviceSecret: deviceSecret).connection
         connection.encryption = encryption
         connection.publicKey = CryptoEncoding.encode(publicKey)
+        connection.transportVerified = true
         return connection
     }
 

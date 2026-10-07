@@ -52,12 +52,14 @@ struct RealtimeLiveTests {
 
     /// Device pairing v3 against the real backend: commit, reveal, the code
     /// the operator sees, local approval (the TUI's decision file), then the
-    /// new device connects over the fixture's transport (v2 when pinned).
+    /// new device pins the transport the approval bound and connects over it.
     @Test func actualPairingV3EnrollsADeviceThatThenConnects() async throws {
         let fixture = try LiveFixture()
         let device = DeviceIdentity()
+        // Start from the address only, as a scanned pairing link leaves it.
         var connection = fixture.connection
-        connection.deviceSecret = device.secretKeyBase64URL
+        connection.deviceSecret = ""
+        connection.clearTransportPin()
         let session = try await DevicePairingSession.begin(
             connection: connection, deviceName: "Swift live pairing", device: device)
         let directory = fixture.dataDirectory.appendingPathComponent("device-pairing")
@@ -84,7 +86,30 @@ struct RealtimeLiveTests {
             try await Task.sleep(for: .milliseconds(session.pollIntervalMilliseconds))
             status = try await session.poll()
         }
-        #expect(status == .approved)
+        guard case .approved(let transport) = status else {
+            Issue.record("pairing was not approved: \(status)")
+            return
+        }
+        // The pin is the backend's real handshake key (the fixture manifest
+        // reads it from the backend), not anything a link carried.
+        #expect(transport.encryption == fixture.connection.encryption)
+        #expect(transport.publicKey == fixture.connection.publicKey)
+        #expect(transport == session.transport)
+        // The same key saved without verification is refused, loopback too.
+        var unverified = connection
+        unverified.deviceSecret = device.secretKeyBase64URL
+        unverified.encryption = transport.encryption
+        unverified.publicKey = transport.publicKey
+        if unverified.hasPinnedTransport {
+            #expect(SecureTransportMode.resolve(unverified) == .refused)
+            do {
+                _ = try await APIClient(connection: unverified).workspaces()
+                Issue.record("an unverified pinned key was used")
+            } catch TodexError.configuration(let message) {
+                #expect(message == SecureTransportError.unverifiedKey.localizedDescription)
+            }
+        }
+        connection.pin(transport, deviceSecret: device.secretKeyBase64URL)
         let pong = try await withLiveClient(connection) { client, _ in
             try await client.command(type: "server.ping", payload: [:], timeout: 5)
         }
@@ -215,7 +240,10 @@ struct LiveFixture: Sendable {
         connection = BackendConnection(
             name: "Isolated live test", serverURL: serverURL, deviceSecret: deviceSecret,
             encryption: manifest["encryption"].optionalString.flatMap(EncryptionProtocol.init) ?? .none,
-            publicKey: manifest["publicKey"].optionalString ?? "")
+            publicKey: manifest["publicKey"].optionalString ?? "",
+            // Test-only pin from the fixture manifest, as if device
+            // verification had confirmed it.
+            transportVerified: !(manifest["publicKey"].optionalString ?? "").isEmpty)
         workspace = try #require(manifest["workspace"].optionalString)
         conversationID = try #require(manifest["conversationId"].optionalString)
         dataDirectory = URL(fileURLWithPath: try #require(manifest["dataDir"].optionalString))

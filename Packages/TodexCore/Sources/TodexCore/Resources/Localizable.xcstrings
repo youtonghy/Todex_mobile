@@ -29,30 +29,30 @@
         }
       }
     },
-    "%@。请在“配对与设备验证”中扫描后端提供的配对二维码。": {
+    "%@。请在“配对与设备验证”中重新配对，并在后端核对随机码与公钥指纹。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@. Scan the pairing QR code shown by the backend in “Pairing & Device Verification”."
+            "value": "%@. Re-pair in “Pairing & Device Verification” and check the code and key fingerprint on the backend."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@。「ペアリングとデバイス認証」でバックエンドが表示するペアリング QR コードをスキャンしてください。"
+            "value": "%@。「ペアリングとデバイス認証」で再ペアリングし、バックエンドで確認コードと公開鍵フィンガープリントを照合してください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@. “페어링 및 기기 인증”에서 백엔드가 표시하는 페어링 QR 코드를 스캔하세요."
+            "value": "%@. “페어링 및 기기 인증”에서 다시 페어링하고 백엔드에서 확인 코드와 공개 키 지문을 대조하세요."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@。请在“配对与设备验证”中扫描后端提供的配对二维码。"
+            "value": "%@。请在“配对与设备验证”中重新配对，并在后端核对随机码与公钥指纹。"
           }
         }
       }
@@ -557,34 +557,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "不支持的历史加密格式"
-          }
-        }
-      }
-    },
-    "不支持的配对加密协议": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unsupported pairing encryption protocol"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未対応のペアリング暗号化プロトコル"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "지원하지 않는 페어링 암호화 프로토콜"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "不支持的配对加密协议"
           }
         }
       }
@@ -1345,34 +1317,6 @@
         }
       }
     },
-    "同一序号的配对分片内容冲突": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing parts with the same index have conflicting content"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "同じ番号のペアリングパートの内容が競合しています"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "같은 번호의 페어링 조각 내용이 충돌합니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "同一序号的配对分片内容冲突"
-          }
-        }
-      }
-    },
     "后端事件格式无效": {
       "localizations": {
         "en": {
@@ -1625,30 +1569,30 @@
         }
       }
     },
-    "后端拒绝了加密连接，请重新扫码配对": {
+    "后端拒绝了加密连接，请重新配对": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The backend rejected the encrypted connection. Scan the QR code again to re-pair."
+            "value": "The backend rejected the encrypted connection. Pair again."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "バックエンドが暗号化接続を拒否しました。QR コードを再度スキャンしてペアリングし直してください。"
+            "value": "バックエンドが暗号化接続を拒否しました。再ペアリングしてください"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "백엔드가 암호화 연결을 거부했습니다. QR 코드를 다시 스캔하여 다시 페어링하세요."
+            "value": "백엔드가 암호화 연결을 거부했습니다. 다시 페어링하세요"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "后端拒绝了加密连接，请重新扫码配对"
+            "value": "后端拒绝了加密连接，请重新配对"
           }
         }
       }
@@ -2017,30 +1961,30 @@
         }
       }
     },
-    "后端要求加密连接，请扫码进行加密配对": {
+    "后端要求加密连接，请重新配对": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The backend requires an encrypted connection. Scan the QR code to pair with encryption."
+            "value": "The backend requires an encrypted connection. Pair again."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "バックエンドは暗号化接続を必要としています。QR コードをスキャンして暗号化ペアリングを行ってください。"
+            "value": "バックエンドは暗号化接続を必要とします。再ペアリングしてください"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "백엔드에 암호화 연결이 필요합니다. QR 코드를 스캔하여 암호화 페어링을 진행하세요."
+            "value": "백엔드에 암호화 연결이 필요합니다. 다시 페어링하세요"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "后端要求加密连接，请扫码进行加密配对"
+            "value": "后端要求加密连接，请重新配对"
           }
         }
       }
@@ -2069,6 +2013,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "后端返回 HTTP %lld，请稍后重试或检查后端日志。"
+          }
+        }
+      }
+    },
+    "后端返回的传输加密信息无效，请更新后端后重新配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backend returned invalid transport encryption details. Update the backend and pair again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドが返した転送暗号化情報が無効です。バックエンドを更新してから再ペアリングしてください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드가 반환한 전송 암호화 정보가 올바르지 않습니다. 백엔드를 업데이트한 후 다시 페어링하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端返回的传输加密信息无效，请更新后端后重新配对"
+          }
+        }
+      }
+    },
+    "后端返回的传输加密公钥无效，请重新配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backend returned an invalid transport public key. Pair again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドが返した転送暗号化の公開鍵が無効です。再ペアリングしてください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드가 반환한 전송 암호화 공개 키가 올바르지 않습니다. 다시 페어링하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端返回的传输加密公钥无效，请重新配对"
           }
         }
       }
@@ -2349,6 +2349,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "导入文件过大"
+          }
+        }
+      }
+    },
+    "已保存的加密公钥不完整或无法使用，请重新配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The saved encryption key is incomplete or unusable. Pair again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存された暗号化公開鍵が不完全か使用できません。再ペアリングしてください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "저장된 암호화 공개 키가 불완전하거나 사용할 수 없습니다. 다시 페어링하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已保存的加密公钥不完整或无法使用，请重新配对"
           }
         }
       }
@@ -2857,34 +2885,6 @@
         }
       }
     },
-    "无效的配对链接": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid pairing link"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "無効なペアリングリンクです"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "잘못된 페어링 링크"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无效的配对链接"
-          }
-        }
-      }
-    },
     "无法生成安全随机数": {
       "localizations": {
         "en": {
@@ -3217,6 +3217,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "此后端已开启会话历史端到端加密，当前客户端无法读取，请更新 TodeX 应用。"
+          }
+        }
+      }
+    },
+    "此后端的加密公钥未经设备验证确认，请重新配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This backend's encryption key was not confirmed by device verification. Pair again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このバックエンドの暗号化公開鍵はデバイス認証で確認されていません。再ペアリングしてください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 백엔드의 암호화 공개 키는 기기 인증으로 확인되지 않았습니다. 다시 페어링하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此后端的加密公钥未经设备验证确认，请重新配对"
           }
         }
       }
@@ -3809,6 +3837,34 @@
         }
       }
     },
+    "设备验证结果与后端的传输加密公钥不一致，请重新配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The verification result does not match the backend's transport key. Pair again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "認証結果がバックエンドの転送暗号化公開鍵と一致しません。再ペアリングしてください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "인증 결과가 백엔드의 전송 암호화 공개 키와 일치하지 않습니다. 다시 페어링하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备验证结果与后端的传输加密公钥不一致，请重新配对"
+          }
+        }
+      }
+    },
     "设备验证结果与本机设备密钥不匹配": {
       "localizations": {
         "en": {
@@ -4257,30 +4313,30 @@
         }
       }
     },
-    "远程后端必须使用加密连接，请重新扫码进行加密配对": {
+    "远程后端必须使用加密连接，请重新配对": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Remote backends require an encrypted connection. Scan the QR code again to pair with encryption."
+            "value": "A remote backend requires an encrypted connection. Pair again."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "リモートのバックエンドには暗号化接続が必要です。QR コードを再度スキャンして暗号化ペアリングを行ってください。"
+            "value": "リモートバックエンドには暗号化接続が必要です。再ペアリングしてください"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "원격 백엔드는 암호화 연결이 필요합니다. QR 코드를 다시 스캔하여 암호화 페어링을 진행하세요."
+            "value": "원격 백엔드는 암호화 연결을 사용해야 합니다. 다시 페어링하세요"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "远程后端必须使用加密连接，请重新扫码进行加密配对"
+            "value": "远程后端必须使用加密连接，请重新配对"
           }
         }
       }
@@ -4505,174 +4561,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "配对内容过大"
-          }
-        }
-      }
-    },
-    "配对分片不属于同一批次": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing chunks aren't from the same batch"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリングのフラグメントが同じバッチのものではありません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 조각이 같은 배치에 속하지 않습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "配对分片不属于同一批次"
-          }
-        }
-      }
-    },
-    "配对分片内容或序号无效": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid pairing chunk content or index"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリングのフラグメントの内容または番号が無効です"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 조각 내용 또는 순번이 유효하지 않습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "配对分片内容或序号无效"
-          }
-        }
-      }
-    },
-    "配对分片内容过大": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing chunk is too large"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリングのフラグメントが大きすぎます"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 조각이 너무 큽니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "配对分片内容过大"
-          }
-        }
-      }
-    },
-    "配对分片校验失败": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing chunk verification failed"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリングのフラグメントの検証に失敗しました"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 조각 검증 실패"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "配对分片校验失败"
-          }
-        }
-      }
-    },
-    "配对加密方式和公钥不匹配": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing encryption method doesn't match the public key"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリングの暗号化方式と公開鍵が一致しません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 암호화 방식과 공개 키가 일치하지 않습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "配对加密方式和公钥不匹配"
-          }
-        }
-      }
-    },
-    "配对链接不是有效 UTF-8": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing link isn't valid UTF-8"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリングリンクが有効な UTF-8 ではありません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 링크가 유효한 UTF-8이 아닙니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "配对链接不是有效 UTF-8"
           }
         }
       }

@@ -15,14 +15,21 @@ struct PairingTests {
         #expect(encoded(material.pollProof) == v["pollProof"].stringValue)
         #expect(encoded(material.cancelProof) == v["cancelProof"].stringValue)
         // The backend seals the credential with the full v3 transcript as AAD.
-        #expect(try material.unwrap(approvedFixture()) == v["deviceId"].stringValue)
+        let expected = PairingTransport(encryption: .mlkem768, publicKey: v["transportPublicKey"].stringValue)
+        #expect(try material.unwrap(approvedFixture()) == expected)
         var shortAAD = try approvedFixture()
         shortAAD["ciphertext"] = .string(
             try CryptoEncoding.encode(
                 XChaChaAEAD.seal(
-                    Data(#"{"deviceId":"\#(v["deviceId"].stringValue)"}"#.utf8), key: material.wrapKey,
+                    credentialPlaintext(), key: material.wrapKey,
                     nonce: CryptoEncoding.decode(v["nonce"].stringValue), aad: material.transcript.dropLast(32))))
         #expect(throws: (any Error).self) { try material.unwrap(shortAAD) }
+        // The transport is part of the transcript: another key changes the
+        // code, so the operator sees the substitution.
+        let tampered = try TodexCoreTests.material(transportPublicKey: v["tamperedTransportPublicKey"].stringValue)
+        #expect(tampered.verificationCode == v["tamperedVerificationCode"].stringValue)
+        #expect(tampered.verificationCode != material.verificationCode)
+        #expect(throws: (any Error).self) { try tampered.unwrap(approvedFixture()) }
     }
 
     @Test func forgedEnrollmentAndTranscriptSubstitutionAreRejected() throws {
@@ -51,8 +58,12 @@ struct PairingTests {
             damaged["nonce"] = .string(nonce)
             #expect(throws: (any Error).self) { try original.unwrap(damaged) }
         }
+        #expect(throws: Never.self) { try original.unwrap(approval(plaintext: credentialPlaintext(extra: #","future":1"#))) }
         for deviceId: JSONValue in ["", "dev_wrong0000000000", .string(String(repeating: "a", count: 4097)), 42, nil] {
-            let payload: JSONValue = ["deviceId": deviceId]
+            let payload: JSONValue = [
+                "deviceId": deviceId, "transportProtocol": (try fixture())["transportProtocol"],
+                "transportPublicKey": (try fixture())["transportPublicKey"],
+            ]
             damaged = try approval(plaintext: JSONEncoder().encode(payload))
             #expect(throws: (any Error).self) { try original.unwrap(damaged) }
         }
@@ -60,112 +71,150 @@ struct PairingTests {
         #expect(throws: (any Error).self) { try original.unwrap(malformedUTF8) }
     }
 
-    @Test func importsPreserveOnlyCredentialsForTheSameBackend() throws {
-        var importer = PairingImporter()
+    @Test func credentialMustRepeatTheAnnouncedTransportExactly() throws {
+        let material = try fixtureMaterial()
+        let v = try fixture()
+        let other = try MLKEM768.PrivateKey().publicKey.rawRepresentation
+        let otherX25519 = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        for (transportProtocol, transportPublicKey): (JSONValue, JSONValue) in [
+            ("x25519", v["transportPublicKey"]), ("none", ""), ("ml-kem-768", .string(CryptoEncoding.encode(other))),
+            ("x25519", .string(CryptoEncoding.encode(otherX25519))), ("ml-kem-768", .string(v["transportPublicKey"].stringValue + "A")),
+            (nil, v["transportPublicKey"]), ("ml-kem-768", nil), (42, v["transportPublicKey"]),
+        ] {
+            var payload: JSONValue = ["deviceId": v["deviceId"]]
+            if transportProtocol != nil { payload["transportProtocol"] = transportProtocol }
+            if transportPublicKey != nil { payload["transportPublicKey"] = transportPublicKey }
+            let response = try approval(plaintext: JSONEncoder().encode(payload))
+            #expect(throws: (any Error).self, "\(payload)") { try material.unwrap(response) }
+        }
+    }
+
+    @Test func linksFillTheAddressOnlyAndIgnoreTransportFields() throws {
         let current = BackendConnection(
-            id: "stable", name: "保留名称", serverURL: "HTTP://EXAMPLE.COM:7345/v2/", deviceSecret: "enrolled", color: "purple")
-        let imported = try importer.ingest(link().prettyPrinted, current: current)
-        let same = try #require(imported)
-        #expect(same.deviceSecret == "enrolled")
-        #expect(same.serverURL == "http://example.com:7345")
-        #expect(same.id == current.id && same.name == current.name && same.color == current.color)
-        #expect(same.encryption == .x25519)
+            id: "stable", name: "保留名称", serverURL: "HTTP://EXAMPLE.COM:7345/v2/", deviceSecret: "enrolled",
+            encryption: .x25519, publicKey: "pinned", transportVerified: true, color: "purple")
+        for version: JSONValue in [1, 2] {
+            var payload = try link()
+            payload["version"] = version
+            let same = try PairingImporter.ingest(payload.prettyPrinted, current: current)
+            // Same backend: the device key and verified pin survive; nothing
+            // in the link (protocol, key, authToken) is read.
+            #expect(same.serverURL == "http://example.com:7345")
+            #expect(same.deviceSecret == "enrolled")
+            #expect(same.encryption == .x25519 && same.publicKey == "pinned" && same.transportVerified)
+            #expect(same.id == current.id && same.name == current.name && same.color == current.color)
+        }
         var other = try link()
         other["serverUrl"] = "https://elsewhere.example"
-        #expect(try importer.ingest(other.prettyPrinted, current: current)?.deviceSecret == "")
-        // Device credentials never travel in a pairing link: an authToken
-        // field from an older backend is ignored, not imported.
         other["authToken"] = "stale-token"
-        #expect(try importer.ingest(other.prettyPrinted, current: current)?.deviceSecret == "")
-        var noEncryption = try link()
-        noEncryption["preferredEncryption"] = "none"
-        noEncryption["protocol"] = nil
-        // Transport v2 client rules: a keyless remote pairing could never
-        // connect, so it is refused instead of saved.
-        do {
-            _ = try importer.ingest(noEncryption.prettyPrinted, current: same)
-            Issue.record("a keyless remote pairing link was imported")
-        } catch TodexError.configuration(let message) {
-            #expect(message == SecureTransportError.encryptionRequired.localizedDescription)
-        }
-        noEncryption["serverUrl"] = "http://127.0.0.1:7345"
-        let local = BackendConnection(id: "local", serverURL: "http://127.0.0.1:7345", deviceSecret: "enrolled")
-        let importedNone = try importer.ingest(noEncryption.prettyPrinted, current: local)
-        let none = try #require(importedNone)
-        #expect(none.encryption == .none && none.publicKey.isEmpty && none.deviceSecret == "enrolled")
-        noEncryption["authToken"] = ""
-        #expect(try importer.ingest(noEncryption.prettyPrinted, current: local)?.deviceSecret == "enrolled")
+        let moved = try PairingImporter.ingest(other.prettyPrinted, current: current)
+        #expect(moved.serverURL == "https://elsewhere.example")
+        #expect(moved.deviceSecret.isEmpty && moved.encryption == .none && moved.publicKey.isEmpty)
+        #expect(!moved.transportVerified)
+        // A remote address with no key is still importable: verification
+        // pins the key next; until then the profile is refused.
+        #expect(SecureTransportMode.resolve(moved) == .refused)
+        let keyless = try PairingImporter.ingest(
+            #"{"kind":"todex-pairing-link","version":2,"serverUrl":"http://127.0.0.1:7345"}"#, current: .init())
+        #expect(keyless.serverURL == "http://127.0.0.1:7345" && keyless.encryption == .none)
     }
 
-    @Test func mlkemQRFragmentsSupportUnorderedRepeatedScans() throws {
-        let key = try MLKEM768.PrivateKey().publicKey.rawRepresentation
-        var payload = try link()
-        payload["preferredEncryption"] = "ml-kem-768"
-        payload["protocol"] = ["id": "ml-kem-768", "publicKey": .string(CryptoEncoding.encode(key))]
-        let fragments = try chunks(payload)
-        #expect(fragments.count > 10)
-        var importer = PairingImporter()
-        let current = BackendConnection()
-        #expect(try importer.ingest(fragments.last!.prettyPrinted, current: current) == nil)
-        #expect(try importer.ingest(fragments.last!.prettyPrinted, current: current) == nil)
-        #expect(importer.receivedCount == 1 && importer.totalCount == fragments.count)
-        var completed: BackendConnection?
-        for frame in fragments.dropLast().reversed() {
-            completed = try importer.ingest(frame.prettyPrinted, current: current)
-        }
-        #expect(completed?.encryption == .mlkem768)
-        #expect(completed?.publicKey == CryptoEncoding.encode(key))
-        #expect(importer.receivedCount == 0 && importer.totalCount == 0)
-    }
-
-    @Test func invalidAndConflictingChunksDoNotDestroyProgress() throws {
-        let frames = try chunks(link())
-        var importer = PairingImporter()
-        let current = BackendConnection()
-        #expect(try importer.ingest(frames[0].prettyPrinted, current: current) == nil)
-        var bad = frames[0]
-        bad["data"] = .string(String(repeating: "A", count: 160))
-        #expect(throws: (any Error).self) { try importer.ingest(bad.prettyPrinted, current: current) }
-        bad = frames[1]
-        bad["checksum"] = .string(CryptoEncoding.encode(Data(repeating: 1, count: 32)))
-        #expect(throws: (any Error).self) { try importer.ingest(bad.prettyPrinted, current: current) }
-        bad = frames[1]
-        bad["total"] = .number(Double(frames.count + 1))
-        #expect(throws: (any Error).self) { try importer.ingest(bad.prettyPrinted, current: current) }
-        for index: JSONValue in [0, -1, 1.5, 999, true] {
-            bad = frames[1]
-            bad["index"] = index
-            #expect(throws: (any Error).self) { try importer.ingest(bad.prettyPrinted, current: current) }
-        }
-        #expect(importer.receivedCount == 1 && importer.totalCount == frames.count)
-        for frame in frames.dropFirst().dropLast() { _ = try importer.ingest(frame.prettyPrinted, current: current) }
-        bad = frames.last!
-        bad["data"] = .string(String(repeating: "A", count: bad["data"].stringValue.count))
-        #expect(throws: (any Error).self) { try importer.ingest(bad.prettyPrinted, current: current) }
-        #expect(importer.receivedCount == frames.count - 1)
-        #expect(try importer.ingest(frames.last!.prettyPrinted, current: current) != nil)
-    }
-
-    @Test func malformedLinksAreRejectedWithoutDowngrade() throws {
-        var importer = PairingImporter()
+    @Test func malformedLinksAndRetiredChunksAreRejected() throws {
         let original = try link()
-        var badLinks: [JSONValue] = [nil, true, []]
+        var badLinks: [JSONValue] = [nil, true, [], "text"]
         for (field, value): (String, JSONValue) in [
-            ("kind", "other"), ("version", 2), ("serverUrl", "file:///tmp"),
-            ("serverUrl", "https://user:pass@example.com"), ("serverUrl", "https://example.com?token=leak"),
-            ("serverUrl", "https://example.com/v1"), ("preferredEncryption", "unknown"),
-            ("protocol", nil), ("protocol", ["id": "ml-kem-768", "publicKey": "AA"]),
+            ("kind", "todex-pairing-chunk"), ("kind", "other"), ("version", 3), ("version", 0), ("version", "2"),
+            ("serverUrl", nil), ("serverUrl", "file:///tmp"), ("serverUrl", "https://user:pass@example.com"),
+            ("serverUrl", "https://example.com?token=leak"), ("serverUrl", "https://example.com/v1"),
         ] {
             var bad = original
             bad[field] = value
             badLinks.append(bad)
         }
+        // The chunk format is gone; a chunk from an older backend is not a link.
+        badLinks.append([
+            "kind": "todex-pairing-chunk", "version": 1, "checksum": .string(CryptoEncoding.encode(Data(count: 32))),
+            "index": 1, "total": 1, "data": "AAAA",
+        ])
         for bad in badLinks {
-            #expect(throws: (any Error).self) { try importer.ingest(bad.prettyPrinted, current: .init()) }
+            #expect(throws: (any Error).self, "\(bad)") { try PairingImporter.ingest(bad.prettyPrinted, current: .init()) }
         }
         #expect(throws: (any Error).self) {
-            try importer.ingest(String(repeating: " ", count: 65_537), current: .init())
+            try PairingImporter.ingest(String(repeating: " ", count: 65_537), current: .init())
         }
+    }
+
+    @Test func createResponseTransportIsValidatedBeforeAnythingIsDerived() async throws {
+        let zero = CryptoEncoding.encode(Data(count: 32))
+        let x25519 = CryptoEncoding.encode(Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation)
+        let mlkem = try CryptoEncoding.encode(MLKEM768.PrivateKey().publicKey.rawRepresentation)
+        for (transportProtocol, transportPublicKey): (JSONValue, JSONValue) in [
+            (nil, .string(mlkem)), ("ml-kem-768", nil), ("future", .string(mlkem)), (1, .string(mlkem)),
+            ("x25519", .string(zero)), ("x25519", .string(mlkem)), ("x25519", .string(x25519 + "=")),
+            ("ml-kem-768", .string(x25519)), ("ml-kem-768", .string(CryptoEncoding.encode(Data(repeating: 0xff, count: 1184)))),
+            ("none", .string(x25519)), ("none", nil),
+        ] {
+            var response = try createFixture()
+            response["transportProtocol"] = transportProtocol
+            response["transportPublicKey"] = transportPublicKey
+            let invalid = try PairingEndpoint(createResponse: response)
+            await #expect(throws: (any Error).self, "\(transportProtocol) \(transportPublicKey)") {
+                try await begin(invalid)
+            }
+            #expect(await invalid.calls.map(\.action) == ["create"])
+        }
+        // `none` is for loopback only: a remote server answering plaintext
+        // asks for encryption instead of pinning nothing.
+        var plaintext = try createFixture()
+        plaintext["transportProtocol"] = "none"
+        plaintext["transportPublicKey"] = ""
+        let remote = try PairingEndpoint(createResponse: plaintext)
+        do {
+            _ = try await begin(remote, loopback: false)
+            Issue.record("a remote plaintext pairing was accepted")
+        } catch TodexError.configuration(let message) {
+            #expect(message == SecureTransportError.encryptionRequired.localizedDescription)
+        }
+        let local = try PairingEndpoint(createResponse: plaintext)
+        let session = try await begin(local, loopback: true)
+        #expect(session.transport == PairingTransport(encryption: .none, publicKey: ""))
+        #expect(session.transport.fingerprint == "none")
+        #expect(session.verificationCode == (try fixture())["noneVerificationCode"].stringValue)
+    }
+
+    @Test func profilesPinOnlyThroughVerificationAndForgetPinsOnAnotherAddress() throws {
+        // Saved by an older build: the key decodes unverified and is refused,
+        // loopback included.
+        let old = try JSONDecoder().decode(
+            BackendConnection.self,
+            from: Data(
+                #"{"id":"a","name":"n","serverURL":"http://127.0.0.1:7345","encryption":"x25519","publicKey":"k"}"#.utf8))
+        #expect(!old.transportVerified)
+        #expect(SecureTransportMode.resolve(old) == .refused)
+        let saved = try JSONDecoder().decode(
+            BackendConnection.self, from: JSONEncoder().encode(BackendConnection(transportVerified: true)))
+        #expect(saved.transportVerified)
+        #expect(!BackendConnection().transportVerified)
+        let transport = PairingTransport(encryption: .mlkem768, publicKey: (try fixture())["transportPublicKey"].stringValue)
+        var profile = BackendConnection(serverURL: "https://lan.example:7345")
+        profile.pin(transport, deviceSecret: "seed")
+        #expect(profile.deviceSecret == "seed" && profile.encryption == .mlkem768 && profile.transportVerified)
+        #expect(SecureTransportMode.resolve(profile) == .v2(.mlkem768))
+        // The same origin spelled differently keeps everything.
+        profile.setServerURL("HTTPS://LAN.EXAMPLE:7345/v2")
+        #expect(profile.deviceSecret == "seed" && profile.publicKey == transport.publicKey && profile.transportVerified)
+        profile.setServerURL("https://other.example:7345")
+        #expect(profile.deviceSecret.isEmpty && profile.encryption == .none && profile.publicKey.isEmpty)
+        #expect(!profile.transportVerified)
+    }
+
+    @Test func fingerprintGroupsTheFirstEightBytesOfTheKeyHash() throws {
+        let v = try fixture()
+        let transport = PairingTransport(encryption: .mlkem768, publicKey: v["transportPublicKey"].stringValue)
+        #expect(transport.fingerprint == v["fingerprint"].stringValue)
+        #expect(transport.fingerprint.range(of: "^[0-9A-F]{4}(-[0-9A-F]{4}){3}$", options: .regularExpression) != nil)
+        #expect(PairingTransport.fingerprint(encryption: .x25519, publicKey: "not base64!") == nil)
+        #expect(PairingTransport(encryption: .none, publicKey: "").fingerprint == "none")
     }
 
     @Test func enrollmentUsesCorrectProofsAndDeliversCredentialOnce() async throws {
@@ -174,8 +223,9 @@ struct PairingTests {
         #expect(session.verificationCode == (try fixture())["verificationCode"].stringValue)
         #expect(session.expiresAt == 2_000_000_300_000)
         #expect(session.pollIntervalMilliseconds == 1000)
+        #expect(session.transport.encryption == .mlkem768)
         #expect(try await session.poll() == .pending)
-        #expect(try await session.poll() == .approved)
+        #expect(try await session.poll() == .approved(session.transport))
         #expect(try await session.poll() == .expired)
         try await session.cancel()
         let calls = await endpoint.calls
@@ -184,7 +234,8 @@ struct PairingTests {
         #expect(calls[0].body["deviceName"] == "Mac测试")
         #expect(calls[0].body["clientCommitment"] == (try fixture())["commitment"])
         #expect(calls[0].body["devicePublicKey"] == (try fixture())["devicePublicKey"])
-        #expect(calls[0].body.objectValue.count == 3)
+        #expect(calls[0].body["transportBinding"] == 1)
+        #expect(calls[0].body.objectValue.count == 4)
         #expect(
             calls[1].body == [
                 "requestId": (try fixture())["requestId"], "clientPublicKey": (try fixture())["clientPublicKey"],
@@ -341,6 +392,8 @@ struct PairingTests {
         }
     }
 
+    /// A version 1 link as older backends emitted it: the protocol fields
+    /// must be ignored.
     private func link() throws -> JSONValue {
         [
             "kind": "todex-pairing-link", "version": 1, "serverUrl": "http://example.com:7345",
@@ -349,27 +402,12 @@ struct PairingTests {
         ]
     }
 
-    private func chunks(_ payload: JSONValue) throws -> [JSONValue] {
-        // Exactly the backend's UTF-8 -> unpadded base64url -> 160-byte chunks.
-        let raw = try JSONEncoder().encode(payload)
-        let encoded = Array(CryptoEncoding.encode(raw).utf8)
-        let checksum = CryptoEncoding.encode(Data(SHA256.hash(data: raw)))
-        let total = (encoded.count + 159) / 160
-        return (0..<total).map { index -> JSONValue in
-            let slice = encoded[(index * 160)..<min((index + 1) * 160, encoded.count)]
-            return [
-                "kind": "todex-pairing-chunk", "version": 1, "checksum": .string(checksum),
-                "index": .number(Double(index + 1)), "total": .number(Double(total)),
-                "data": .string(String(decoding: slice, as: UTF8.self)),
-            ]
-        }
-    }
-
     private func begin(
-        _ endpoint: PairingEndpoint, name: String = "Swift client", clock: PairingTestClock = .init(1_900_000_000_000)
+        _ endpoint: PairingEndpoint, name: String = "Swift client", loopback: Bool = false,
+        clock: PairingTestClock = .init(1_900_000_000_000)
     ) async throws -> DevicePairingSession {
         try await DevicePairingSession.begin(
-            deviceName: name, device: fixtureDevice(), privateKey: fixturePrivateKey(),
+            deviceName: name, device: fixtureDevice(), loopback: loopback, privateKey: fixturePrivateKey(),
             clientNonce: CryptoEncoding.decode((try fixture())["clientNonce"].stringValue), post: { action, body in try await endpoint.post(action, body) }, now: { clock.now })
     }
 }
@@ -389,6 +427,10 @@ private func fixture() throws -> JSONValue {
         "commitment": v["commitmentBase64Url"], "transcript": try b64("transcript"),
         "verificationCode": v["verificationCode"], "wrapKey": try b64("wrapKey"), "pollProof": try b64("pollProof"),
         "cancelProof": try b64("cancelProof"), "nonce": .string(CryptoEncoding.encode(Data(repeating: 0x0b, count: 24))),
+        "transportProtocol": v["transportProtocol"], "transportPublicKey": v["transportPublicKey"],
+        "fingerprint": v["fingerprint"], "tamperedTransportPublicKey": v["tampered"]["transportPublicKey"],
+        "tamperedVerificationCode": v["tampered"]["verificationCode"],
+        "noneVerificationCode": v["noneCase"]["verificationCode"],
     ]
 }
 private func hexBytes(_ value: JSONValue) throws -> Data {
@@ -404,13 +446,17 @@ private func fixturePrivateKey() throws -> Curve25519.KeyAgreement.PrivateKey {
 }
 private func material(
     requestID: String? = nil, privateKey: Curve25519.KeyAgreement.PrivateKey? = nil, device: DeviceIdentity? = nil,
-    clientNonce: Data? = nil
+    clientNonce: Data? = nil, transportPublicKey: String? = nil
 ) throws -> PairingMaterial {
     let v = try fixture()
+    let (transport, key) = try PairingTransport.validated(
+        protocol: v["transportProtocol"].stringValue,
+        publicKey: transportPublicKey ?? v["transportPublicKey"].stringValue, loopback: false)
     return try PairingMaterial(
         v3RequestID: requestID ?? v["requestId"].stringValue, privateKey: privateKey ?? fixturePrivateKey(),
         serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue), device: device ?? fixtureDevice(),
-        clientNonce: clientNonce ?? CryptoEncoding.decode(v["clientNonce"].stringValue))
+        clientNonce: clientNonce ?? CryptoEncoding.decode(v["clientNonce"].stringValue), transport: transport,
+        transportKey: key)
 }
 private func fixtureMaterial() throws -> PairingMaterial { try material() }
 private func fixtureDevice() throws -> DeviceIdentity {
@@ -421,14 +467,20 @@ private func createFixture() throws -> JSONValue {
     let v = try fixture()
     return [
         "requestId": v["requestId"], "serverPublicKey": v["serverPublicKey"], "expiresAt": v["expiresAt"],
-        "pollIntervalMs": 1000,
+        "pollIntervalMs": 1000, "transportProtocol": v["transportProtocol"], "transportPublicKey": v["transportPublicKey"],
     ]
 }
 /// What the backend's poll returns once approved: the device credential
 /// sealed under the v3 wrap key with the full transcript as AAD.
 private func approvedFixture() throws -> JSONValue {
+    try approval(plaintext: credentialPlaintext())
+}
+/// The credential in the backend's field order; extra fields are ignored.
+private func credentialPlaintext(extra: String = "") throws -> Data {
     let v = try fixture()
-    return try approval(plaintext: JSONEncoder().encode(["deviceId": v["deviceId"]] as JSONValue))
+    return Data(
+        #"{"deviceId":"\#(v["deviceId"].stringValue)","transportProtocol":"\#(v["transportProtocol"].stringValue)","transportPublicKey":"\#(v["transportPublicKey"].stringValue)"\#(extra)}"#
+            .utf8)
 }
 private func approval(plaintext: Data) throws -> JSONValue {
     let v = try fixture()

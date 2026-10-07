@@ -3,8 +3,12 @@ import Synchronization
 
 // The one place business code talks to a backend under transport v2. It
 // applies the spec's "Client rules", like TodeX_protocol's `secureTransport.ts`:
-// - pinned protocol + key -> v2 everywhere (REST through POST /v2/sealed,
-//   WebSocket with tv=2), loopback included;
+// - a protocol + key pinned by device verification (`transportVerified`) ->
+//   v2 everywhere (REST through POST /v2/sealed, WebSocket with tv=2),
+//   loopback included;
+// - a pinned key that no verification bound -> refused everywhere, loopback
+//   included, until the user re-pairs; a verified pin missing its protocol or
+//   key -> refused as an invalid key, never plaintext;
 // - no pinned key, remote -> refused, never a plaintext fallback;
 // - no pinned key, loopback -> plaintext.
 // Callers see plain requests, responses and JSON text messages.
@@ -15,24 +19,43 @@ public enum SecureTransportMode: Sendable, Equatable {
     case refused
 
     public static func resolve(_ connection: BackendConnection) -> Self {
-        if connection.encryption != .none,
-            !connection.publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
+        if connection.hasPinnedTransport {
+            guard connection.transportVerified, connection.encryption != .none,
+                !connection.publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return .refused }
             return .v2(connection.encryption)
         }
         return connection.isLoopback ? .plaintext : .refused
     }
 
     /// Throws the user-facing re-pair error for `.refused`.
-    func requireAllowed() throws {
-        if self == .refused { throw SecureTransportError.encryptionRequired }
+    func requireAllowed(_ connection: BackendConnection) throws {
+        if self == .refused { throw SecureTransportError.refusal(connection) }
     }
 }
 
 public enum SecureTransportError {
     /// Remote host without a pinned key: the user must pair with encryption.
     public static var encryptionRequired: TodexError {
-        .configuration(String(localized: "远程后端必须使用加密连接，请重新扫码进行加密配对", bundle: .module))
+        .configuration(String(localized: "远程后端必须使用加密连接，请重新配对", bundle: .module))
+    }
+
+    /// A pinned key that no device verification confirmed (saved by an older
+    /// build, or tampered with): never used, never downgraded to plaintext.
+    public static var unverifiedKey: TodexError {
+        .configuration(String(localized: "此后端的加密公钥未经设备验证确认，请重新配对", bundle: .module))
+    }
+
+    /// A verified pin missing its protocol or its key: unusable, and never
+    /// read as plaintext.
+    public static var invalidPinnedKey: TodexError {
+        .configuration(String(localized: "已保存的加密公钥不完整或无法使用，请重新配对", bundle: .module))
+    }
+
+    /// The error for a profile `SecureTransportMode.resolve` refuses.
+    public static func refusal(_ connection: BackendConnection) -> TodexError {
+        guard connection.hasPinnedTransport else { return encryptionRequired }
+        return connection.transportVerified ? invalidPinnedKey : unverifiedKey
     }
 
     /// The server now requires a different protocol than the pinned one.
@@ -45,7 +68,7 @@ public enum SecureTransportError {
     /// newer transport (`426 PROTOCOL_UPGRADE_REQUIRED`). Retrying with the
     /// same profile cannot succeed.
     public static var transportRejected: TodexError {
-        .configuration(String(localized: "后端拒绝了加密连接，请重新扫码配对", bundle: .module))
+        .configuration(String(localized: "后端拒绝了加密连接，请重新配对", bundle: .module))
     }
 
     /// Maps an unauthenticated outer rejection (Clarification 10) to the
@@ -63,7 +86,7 @@ public enum SecureTransportError {
     /// that requires encryption asks for encrypted pairing.
     public static func checkPolicy(_ connection: BackendConnection, requiredProtocol: String?) throws {
         let mode = SecureTransportMode.resolve(connection)
-        try mode.requireAllowed()
+        try mode.requireAllowed(connection)
         guard let requiredProtocol, let required = EncryptionProtocol(rawValue: requiredProtocol), required != .none
         else { return }
         switch mode {
@@ -77,7 +100,7 @@ public enum SecureTransportError {
 
     /// An unpinned (loopback) profile whose backend requires encryption.
     public static var pairingRequired: TodexError {
-        .configuration(String(localized: "后端要求加密连接，请扫码进行加密配对", bundle: .module))
+        .configuration(String(localized: "后端要求加密连接，请重新配对", bundle: .module))
     }
 }
 
@@ -198,7 +221,7 @@ public final class BackendSecureTransport: SecureTransport {
     public func openWebSocket(path: String = "/v2/ws", query: [String: String] = [:]) async throws
         -> any SecureWebSocket
     {
-        try mode.requireAllowed()
+        try mode.requireAllowed(connection)
         let device = DeviceIdentity(secretKeyBase64URL: connection.deviceSecret)
         var parameters = query
         var handshake: TransportWebSocketHandshake?

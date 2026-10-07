@@ -15,13 +15,17 @@ public struct BackendConnection: Identifiable, Codable, Sendable, Equatable {
     public var tenantId: String
     public var encryption: EncryptionProtocol
     public var publicKey: String
+    /// True only when `encryption`/`publicKey` were pinned by an approved
+    /// device verification whose transcript bound them (pairing v3 with
+    /// `transportBinding: 1`). A pinned key without it is refused everywhere.
+    public var transportVerified: Bool
     /// Label color as `#rrggbb`. An empty or non-hex value (older builds stored
     /// "teal") counts as unset and resolves to the id-derived default.
     public var color: String
     public init(
         id: String = UUID().uuidString, name: String = "我的后端", serverURL: String = "http://127.0.0.1:7345",
         deviceSecret: String = "", tenantId: String = "local", encryption: EncryptionProtocol = .none,
-        publicKey: String = "", color: String = ""
+        publicKey: String = "", transportVerified: Bool = false, color: String = ""
     ) {
         self.id = id
         self.name = name
@@ -30,10 +34,11 @@ public struct BackendConnection: Identifiable, Codable, Sendable, Equatable {
         self.tenantId = tenantId
         self.encryption = encryption
         self.publicKey = publicKey
+        self.transportVerified = transportVerified
         self.color = Self.normalizeLabelColor(color) ?? Self.defaultLabelColor(for: id)
     }
     // The device key lives in Keychain only.
-    enum CodingKeys: String, CodingKey { case id, name, serverURL, tenantId, encryption, publicKey, color }
+    enum CodingKeys: String, CodingKey { case id, name, serverURL, tenantId, encryption, publicKey, transportVerified, color }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -43,6 +48,9 @@ public struct BackendConnection: Identifiable, Codable, Sendable, Equatable {
         tenantId = try c.decodeIfPresent(String.self, forKey: .tenantId) ?? "local"
         encryption = try c.decodeIfPresent(EncryptionProtocol.self, forKey: .encryption) ?? .none
         publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey) ?? ""
+        // Profiles saved before the pairing bound the transport key decode as
+        // unverified, so a key they still pin forces a re-pair.
+        transportVerified = try c.decodeIfPresent(Bool.self, forKey: .transportVerified) ?? false
         let stored = try c.decodeIfPresent(String.self, forKey: .color) ?? ""
         color = Self.normalizeLabelColor(stored) ?? Self.defaultLabelColor(for: id)
     }
@@ -67,6 +75,45 @@ public struct BackendConnection: Identifiable, Codable, Sendable, Equatable {
         return labelColors[Int(hash % UInt32(labelColors.count))]
     }
     public func normalizedURL() throws -> URL { try Self.normalize(serverURL) }
+
+    /// The normalized origin, or the trimmed text when it does not parse.
+    var addressKey: String {
+        (try? normalizedURL().absoluteString) ?? serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether the profile pins a transport protocol or key at all.
+    public var hasPinnedTransport: Bool {
+        encryption != .none || !publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Points the profile at `raw`. A different backend (normalized origin)
+    /// drops the device key and everything pinned for the old one: only a
+    /// device verification against the new address may pin again.
+    public mutating func setServerURL(_ raw: String) {
+        var next = self
+        next.serverURL = raw
+        if next.addressKey != addressKey {
+            next.deviceSecret = ""
+            next.clearTransportPin()
+        }
+        self = next
+    }
+
+    /// Drops the pinned protocol and key.
+    public mutating func clearTransportPin() {
+        encryption = .none
+        publicKey = ""
+        transportVerified = false
+    }
+
+    /// Pins what an approved device verification bound, in one write with the
+    /// device key it enrolled.
+    public mutating func pin(_ transport: PairingTransport, deviceSecret: String) {
+        self.deviceSecret = deviceSecret
+        encryption = transport.encryption
+        publicKey = transport.publicKey
+        transportVerified = true
+    }
     public static func normalize(_ raw: String) throws -> URL {
         let raw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var c = URLComponents(string: raw), ["http", "https"].contains(c.scheme?.lowercased() ?? ""),
@@ -141,11 +188,7 @@ public struct DeviceCredentialPlan: Sendable, Equatable {
 
     private static func sameAddress(_ lhs: BackendConnection, _ rhs: BackendConnection?) -> Bool {
         guard let rhs, lhs.id == rhs.id else { return false }
-        func address(_ connection: BackendConnection) -> String {
-            (try? connection.normalizedURL().absoluteString)
-                ?? connection.serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return address(lhs) == address(rhs)
+        return lhs.addressKey == rhs.addressKey
     }
 }
 

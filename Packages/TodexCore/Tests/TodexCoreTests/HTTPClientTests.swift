@@ -88,7 +88,7 @@ struct HTTPClientTests {
         #expect(
             configurationMessage(result(200, #"{"requiredProtocol":"x25519"}"#), local)
                 == SecureTransportError.pairingRequired.localizedDescription)
-        let encrypted = BackendConnection(encryption: .x25519, publicKey: "configured")
+        let encrypted = BackendConnection(encryption: .x25519, publicKey: "configured", transportVerified: true)
         try RealtimeClient.validatePolicy(result(200, #"{"requiredProtocol":"none"}"#), connection: encrypted)
         try RealtimeClient.validatePolicy(result(200, #"{"requiredProtocol":"x25519"}"#), connection: encrypted)
         #expect(

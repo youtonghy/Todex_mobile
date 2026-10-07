@@ -43,7 +43,7 @@ public struct ConnectionDiagnostic: Sendable, Equatable {
         case TodexError.configuration(let message):
             return .init(
                 category: .encryptionPolicy, title: String(localized: "传输加密配置不匹配", bundle: .module),
-                suggestion: String(localized: "\(message)。请在“配对与设备验证”中扫描后端提供的配对二维码。", bundle: .module),
+                suggestion: String(localized: "\(message)。请在“配对与设备验证”中重新配对，并在后端核对随机码与公钥指纹。", bundle: .module),
                 technicalDetails: details, retryable: false)
         case TodexError.server(let code, _):
             let upper = code.uppercased()

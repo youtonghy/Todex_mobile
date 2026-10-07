@@ -1,141 +1,115 @@
 import CryptoKit
 import Foundation
 
-/// Collects one QR batch, accepting repeated scans and out-of-order fragments.
-/// A different batch or conflicting duplicate throws without losing progress.
-/// Create a new importer to abandon a batch. Successful imports reset progress.
-public struct PairingImporter: Sendable {
-    public var receivedCount: Int { chunks.count }
-    public private(set) var totalCount = 0
-    private var checksum: String?
-    private var chunks: [Int: String] = [:]
+/// Reads a backend pairing link (QR or text). Links carry the address only:
+/// version 1 or 2, `serverUrl` used, every other field ignored. The transport
+/// key is pinned only by the device verification that follows, never by a link.
+public enum PairingImporter {
     private static let maximumBytes = 65_536
 
-    public init() {}
-
-    public mutating func ingest(_ raw: String, current: BackendConnection) throws -> BackendConnection? {
-        guard raw.utf8.count <= Self.maximumBytes else { throw TodexError.invalid(String(localized: "配对内容过大", bundle: .module)) }
-        let envelope = try JSONDecoder().decode(Envelope.self, from: Data(raw.utf8))
-        guard envelope.version == 1 else { throw TodexError.invalid(String(localized: "不支持的配对版本", bundle: .module)) }
-        if envelope.kind == "todex-pairing-link" {
-            let connection = try Self.importLink(Data(raw.utf8), current: current)
-            self = Self()
-            return connection
+    /// `current` pointed at the link's address. Pointing at a different
+    /// backend drops its device key and pinned transport.
+    public static func ingest(_ raw: String, current: BackendConnection) throws -> BackendConnection {
+        guard raw.utf8.count <= maximumBytes else { throw TodexError.invalid(String(localized: "配对内容过大", bundle: .module)) }
+        let link: Link
+        do { link = try JSONDecoder().decode(Link.self, from: Data(raw.utf8)) } catch {
+            throw TodexError.invalid(String(localized: "不是有效的 TodeX 配对二维码", bundle: .module))
         }
-        guard envelope.kind == "todex-pairing-chunk" else { throw TodexError.invalid(String(localized: "不是有效的 TodeX 配对二维码", bundle: .module)) }
-        let chunk = try JSONDecoder().decode(Chunk.self, from: Data(raw.utf8))
-        guard (1...128).contains(chunk.total), (1...chunk.total).contains(chunk.index),
-            !chunk.data.isEmpty, chunk.data.utf8.count <= 4096, chunk.data.utf8.allSatisfy(CryptoEncoding.isBase64URL)
-        else {
-            throw TodexError.invalid(String(localized: "配对分片内容或序号无效", bundle: .module))
+        guard link.kind == "todex-pairing-link" else {
+            throw TodexError.invalid(String(localized: "不是有效的 TodeX 配对二维码", bundle: .module))
         }
-        _ = try CryptoEncoding.decode(chunk.checksum, count: 32)
-        guard checksum == nil || (checksum == chunk.checksum && totalCount == chunk.total) else {
-            throw TodexError.invalid(String(localized: "配对分片不属于同一批次", bundle: .module))
+        guard link.version == 1 || link.version == 2 else {
+            throw TodexError.invalid(String(localized: "不支持的配对版本", bundle: .module))
         }
-        if let previous = chunks[chunk.index], previous != chunk.data { throw TodexError.invalid(String(localized: "同一序号的配对分片内容冲突", bundle: .module)) }
-        var candidate = chunks
-        candidate[chunk.index] = chunk.data
-        guard candidate.values.reduce(0, { $0 + $1.utf8.count }) <= Self.maximumBytes else {
-            throw TodexError.invalid(String(localized: "配对分片内容过大", bundle: .module))
-        }
-        if candidate.count == chunk.total {
-            let encoded = (1...chunk.total).compactMap { candidate[$0] }.joined()
-            let payload = try CryptoEncoding.decode(encoded)
-            guard CryptoEncoding.encode(Data(SHA256.hash(data: payload))) == chunk.checksum else {
-                throw TodexError.invalid(String(localized: "配对分片校验失败", bundle: .module))
-            }
-            let connection = try Self.importLink(payload, current: current)
-            self = Self()
-            return connection
-        }
-        chunks = candidate
-        checksum = chunk.checksum
-        totalCount = chunk.total
-        return nil
-    }
-
-    private static func importLink(_ data: Data, current: BackendConnection) throws -> BackendConnection {
-        guard String(data: data, encoding: .utf8) != nil else { throw TodexError.invalid(String(localized: "配对链接不是有效 UTF-8", bundle: .module)) }
-        let link = try JSONDecoder().decode(Link.self, from: data)
-        guard link.kind == "todex-pairing-link", link.version == 1 else { throw TodexError.invalid(String(localized: "无效的配对链接", bundle: .module)) }
         let server = try BackendConnection.normalize(link.serverUrl)
-        let protocolID = try parseProtocol(link.protocol?.id)
-        let selected = try parseProtocol(link.preferredEncryption) ?? protocolID ?? .none
-        let key: String
-        if selected == .none {
-            key = ""
-        } else {
-            guard protocolID == selected, let importedKey = link.protocol?.publicKey else {
-                throw TodexError.invalid(String(localized: "配对加密方式和公钥不匹配", bundle: .module))
-            }
-            let bytes = try CryptoEncoding.decode(importedKey, count: selected == .x25519 ? 32 : 1184)
-            if selected == .x25519 {
-                // Checking only length admits low-order points such as zero.
-                _ = try CryptoEncoding.sharedSecret(privateKey: .init(), publicKey: bytes)
-            } else {
-                _ = try MLKEM768.PublicKey(rawRepresentation: bytes)
-            }
-            key = importedKey
-        }
         var result = current
-        result.serverURL = server.absoluteString
-        result.encryption = selected
-        result.publicKey = key
-        // Transport v2 client rules: a remote backend is only reachable with
-        // a pinned key; saving a keyless remote pairing would never connect.
-        if SecureTransportMode.resolve(result) == .refused { throw SecureTransportError.encryptionRequired }
-        let sameBackend = (try? current.normalizedURL()) == server
-        // Pairing links carry transport keys only. The device key is enrolled
-        // through device verification and never travels in a QR.
-        result.deviceSecret = sameBackend ? current.deviceSecret : ""
+        result.setServerURL(server.absoluteString)
         return result
     }
 
-    private static func parseProtocol(_ value: String?) throws -> EncryptionProtocol? {
-        guard let value else { return nil }
-        guard let result = EncryptionProtocol(rawValue: value) else { throw TodexError.invalid(String(localized: "不支持的配对加密协议", bundle: .module)) }
-        return result
-    }
-
-    private struct Envelope: Decodable {
-        let kind: String
-        let version: Int
-    }
-    private struct Chunk: Decodable {
-        let checksum: String
-        let index: Int
-        let total: Int
-        let data: String
-    }
     private struct Link: Decodable {
         let kind: String
         let version: Int
         let serverUrl: String
-        let preferredEncryption: String?
-        let `protocol`: PublicKey?
-        struct PublicKey: Decodable {
-            let id: String
-            let publicKey: String
+    }
+}
+
+/// The transport protocol and static key the backend bound into a device
+/// verification transcript; what an approval lets the profile pin.
+public struct PairingTransport: Sendable, Equatable {
+    public let encryption: EncryptionProtocol
+    /// base64url without padding; empty for `none`.
+    public let publicKey: String
+
+    /// Validates a create response's `transportProtocol`/`transportPublicKey`
+    /// before anything is derived from them. `none` is accepted only for a
+    /// loopback server.
+    static func validated(protocol rawProtocol: String?, publicKey rawKey: String?, loopback: Bool) throws -> (Self, Data) {
+        guard let rawProtocol, let encryption = EncryptionProtocol(rawValue: rawProtocol), let rawKey else {
+            throw TodexError.invalid(String(localized: "后端返回的传输加密信息无效，请更新后端后重新配对", bundle: .module))
         }
+        if encryption == .none {
+            guard rawKey.isEmpty else {
+                throw TodexError.invalid(String(localized: "后端返回的传输加密公钥无效，请重新配对", bundle: .module))
+            }
+            guard loopback else { throw SecureTransportError.encryptionRequired }
+            return (Self(encryption: .none, publicKey: ""), Data())
+        }
+        let key: Data
+        do {
+            key = try CryptoEncoding.decode(
+                rawKey,
+                count: encryption == .x25519 ? TransportV2.x25519PublicKeyLength : TransportV2.mlkemPublicKeyLength)
+            // A throwaway client handshake: rejects low-order X25519 points
+            // (all-zero shared secret) and ML-KEM keys that fail the modulus check.
+            _ = try TransportClientHandshake.make(encryption, serverPublicKey: key)
+        } catch {
+            throw TodexError.invalid(String(localized: "后端返回的传输加密公钥无效，请重新配对", bundle: .module))
+        }
+        return (Self(encryption: encryption, publicKey: rawKey), key)
+    }
+
+    /// `XXXX-XXXX-XXXX-XXXX`: the first 8 bytes of SHA-256 over the raw key,
+    /// upper-case hex, as the backend TUI shows next to the code; `none` for
+    /// the plaintext (loopback) transport.
+    public var fingerprint: String { Self.fingerprint(encryption: encryption, publicKey: publicKey) ?? "none" }
+
+    /// `nil` when the key is not canonical base64url.
+    public static func fingerprint(encryption: EncryptionProtocol, publicKey: String) -> String? {
+        if encryption == .none { return "none" }
+        guard let raw = try? CryptoEncoding.decode(publicKey.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return fingerprint(raw: raw)
+    }
+
+    static func fingerprint(raw: Data) -> String {
+        let hex = SHA256.hash(data: raw).prefix(8).map { String(format: "%02X", $0) }.joined()
+        return stride(from: 0, to: 16, by: 4).map { offset in
+            let start = hex.index(hex.startIndex, offsetBy: offset)
+            return String(hex[start..<hex.index(start, offsetBy: 4)])
+        }.joined(separator: "-")
     }
 }
 
 public enum DevicePairingStatus: Sendable, Equatable {
     case pending, rejected, expired
-    /// Approval delivers the enrolled device ID, which is already bound to the
-    /// local device key — the payload is verified in `unwrap` before delivery.
-    case approved
+    /// The enrolled device ID is already bound to the local device key, and
+    /// the transport is the one the transcript bound — both are checked in
+    /// `unwrap` before delivery. Pin it together with the device key.
+    case approved(PairingTransport)
 }
 
-/// The verification code authenticates this enrollment's ephemeral transcript
-/// (device pairing v3). It does not verify or replace the separately imported
-/// transport public key.
+/// The verification code authenticates this enrollment's transcript (device
+/// pairing v3), which also binds the backend's transport protocol and static
+/// key; an approval delivers that transport for the profile to pin.
 public actor DevicePairingSession {
     public nonisolated let verificationCode: String
     /// Unix milliseconds, matching the backend and desktop contract.
     public nonisolated let expiresAt: Double
     public nonisolated let pollIntervalMilliseconds: Int
+    /// The transport the transcript binds; show its fingerprint next to the
+    /// code so the operator can compare both with the backend.
+    public nonisolated let transport: PairingTransport
     private let requestID: String
     private let post: PairingPost
     private let now: @Sendable () -> Double
@@ -148,11 +122,11 @@ public actor DevicePairingSession {
     public static func begin(connection: BackendConnection, deviceName: String, device: DeviceIdentity) async throws -> DevicePairingSession {
         _ = try connection.normalizedURL()
         // Pairing is reachable directly on every listener and never goes
-        // through the transport tunnel: a remote profile may only just have
-        // imported its key, and pairing protects itself.
+        // through the transport tunnel: pairing is what pins the key, and it
+        // protects itself.
         let client = HTTPClient.pairingBootstrap(connection: connection)
         return try await begin(
-            deviceName: deviceName, device: device, privateKey: .init(),
+            deviceName: deviceName, device: device, loopback: connection.isLoopback, privateKey: .init(),
             clientNonce: TransportBytes.random(DevicePairingV3.nonceLength),
             post: { action, body in
                 try await PairingBootstrap.post(client: client, action: action, body: body)
@@ -162,7 +136,8 @@ public actor DevicePairingSession {
     // Injectable endpoint, key, nonce and clock keep state/race tests
     // independent of a live backend; production uses the bootstrap client above.
     static func begin(
-        deviceName: String, device: DeviceIdentity, privateKey: Curve25519.KeyAgreement.PrivateKey, clientNonce: Data,
+        deviceName: String, device: DeviceIdentity, loopback: Bool, privateKey: Curve25519.KeyAgreement.PrivateKey,
+        clientNonce: Data,
         post: @escaping PairingPost, now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1000 }
     ) async throws -> DevicePairingSession {
         try Task.checkCancellation()
@@ -174,6 +149,9 @@ public actor DevicePairingSession {
                 "clientCommitment": .string(CryptoEncoding.encode(commitment)),
                 "deviceName": .string(sanitizedDeviceName(deviceName)),
                 "devicePublicKey": .string(device.publicKeyBase64URL),
+                // The server binds its transport protocol and key into the
+                // transcript; an older server answers 426.
+                "transportBinding": 1,
             ])
         try Task.checkCancellation()
         guard let id = response["requestId"].optionalString,
@@ -189,9 +167,12 @@ public actor DevicePairingSession {
             throw TodexError.invalid(String(localized: "设备验证申请无效或已过期，请重新申请", bundle: .module))
         }
         let serverKey = try CryptoEncoding.decode(encodedServerKey, count: 32)
+        let (transport, transportKey) = try PairingTransport.validated(
+            protocol: response["transportProtocol"].optionalString,
+            publicKey: response["transportPublicKey"].optionalString, loopback: loopback)
         let material = try PairingMaterial(
             v3RequestID: id, privateKey: privateKey, serverPublicKey: serverKey, device: device,
-            clientNonce: clientNonce)
+            clientNonce: clientNonce, transport: transport, transportKey: transportKey)
         let session = Self(
             requestID: id, expiresAt: expires, pollIntervalMilliseconds: Int(interval), material: material, post: post,
             now: now)
@@ -228,6 +209,7 @@ public actor DevicePairingSession {
         self.expiresAt = expiresAt
         self.pollIntervalMilliseconds = pollIntervalMilliseconds
         self.verificationCode = material.verificationCode
+        self.transport = material.transport
         self.material = material
         self.post = post
         self.now = now
@@ -261,8 +243,7 @@ public actor DevicePairingSession {
             return .expired
         case "approved":
             defer { self.material = nil }
-            _ = try material.unwrap(result)
-            return .approved
+            return .approved(try material.unwrap(result))
         default:
             throw TodexError.invalid(String(localized: "设备验证响应状态无效", bundle: .module))
         }
@@ -357,21 +338,26 @@ struct PairingMaterial: Sendable {
     let cancelProof: SymmetricKey
     let verificationCode: String
     let deviceID: String
+    let transport: PairingTransport
 
     /// Device pairing v3 (commit, then reveal): the transcript also binds the
     /// client's 32-byte nonce, whose commitment the server saw before it chose
-    /// its key, so a MITM can no longer grind a key against the 40-bit code.
-    /// HKDF is as in v2 with the v3 labels (Clarification 6).
+    /// its key, so a MITM can no longer grind a key against the 40-bit code,
+    /// and the server's transport protocol and static key, so the code also
+    /// confirms the key the profile pins. HKDF is as in v2 with the v3 labels
+    /// (Clarification 6).
     init(
         v3RequestID requestID: String, privateKey: Curve25519.KeyAgreement.PrivateKey, serverPublicKey: Data,
-        device: DeviceIdentity, clientNonce: Data
+        device: DeviceIdentity, clientNonce: Data, transport: PairingTransport, transportKey: Data
     ) throws {
         let shared = try CryptoEncoding.sharedSecret(privateKey: privateKey, publicKey: serverPublicKey)
         let transcript = try DevicePairingV3.transcript(
             requestID: requestID, clientPublic: privateKey.publicKey.rawRepresentation, serverPublic: serverPublicKey,
-            devicePublic: device.publicKey, clientNonce: clientNonce)
+            devicePublic: device.publicKey, clientNonce: clientNonce, transportProtocol: transport.encryption.rawValue,
+            transportPublicKey: transportKey)
         let salt = Data(SHA256.hash(data: transcript))
         self.transcript = transcript
+        self.transport = transport
         deviceID = device.deviceID
         wrapKey = CryptoEncoding.derive(ikm: shared, salt: salt, info: DevicePairingV3.wrapInfo)
         pollProof = CryptoEncoding.derive(ikm: shared, salt: salt, info: DevicePairingV3.pollInfo)
@@ -380,9 +366,10 @@ struct PairingMaterial: Sendable {
         verificationCode = "\(hex.prefix(5))-\(hex.suffix(5))"
     }
 
-    /// Decrypts the delivered credential and returns the enrolled device ID.
-    /// The backend pins it to this key; the check defends the contract anyway.
-    func unwrap(_ response: JSONValue) throws -> String {
+    /// Decrypts the delivered credential and returns the transport to pin.
+    /// The device ID must be this key's and the transport the one the create
+    /// response announced, byte for byte; anything else pins nothing.
+    func unwrap(_ response: JSONValue) throws -> PairingTransport {
         guard let nonceText = response["nonce"].optionalString,
             let ciphertextText = response["ciphertext"].optionalString,
             nonceText.utf8.count <= 16_384, ciphertextText.utf8.count <= 16_384
@@ -397,11 +384,15 @@ struct PairingMaterial: Sendable {
         guard payload.deviceID.range(of: "^dev_[A-Za-z0-9_-]{16}$", options: .regularExpression) != nil,
             payload.deviceID == deviceID
         else { throw TodexError.invalid(String(localized: "设备验证结果与本机设备密钥不匹配", bundle: .module)) }
-        return payload.deviceID
+        guard payload.transportProtocol == transport.encryption.rawValue, payload.transportPublicKey == transport.publicKey
+        else { throw TodexError.invalid(String(localized: "设备验证结果与后端的传输加密公钥不一致，请重新配对", bundle: .module)) }
+        return transport
     }
 
     private struct Credential: Decodable {
         let deviceId: String
+        let transportProtocol: String
+        let transportPublicKey: String
         var deviceID: String { deviceId }
     }
 }
@@ -422,16 +413,19 @@ public enum DevicePairingV3 {
             SHA256.hash(data: TransportBytes.lengthPrefixed(Data(commitLabel.utf8)) + clientPublic + clientNonce))
     }
 
-    /// `domain || request_id || 0x00 || client_public || server_public || 0x00 || device_public || client_nonce`.
+    /// `domain || request_id || 0x00 || client_public || server_public || 0x00 || device_public || client_nonce
+    /// || LP(transport_protocol) || LP(transport_public_key)`; `none` has a zero-length key.
     public static func transcript(
-        requestID: String, clientPublic: Data, serverPublic: Data, devicePublic: Data, clientNonce: Data
+        requestID: String, clientPublic: Data, serverPublic: Data, devicePublic: Data, clientNonce: Data,
+        transportProtocol: String, transportPublicKey: Data
     ) throws -> Data {
         try requireLengths(clientPublic: clientPublic, clientNonce: clientNonce)
         guard serverPublic.count == 32, devicePublic.count == 32 else {
             throw TodexError.invalid(String(localized: "设备验证密钥长度无效", bundle: .module))
         }
         return Data(transcriptDomain.utf8) + Data(requestID.utf8) + Data([0]) + clientPublic + serverPublic + Data([0])
-            + devicePublic + clientNonce
+            + devicePublic + clientNonce + TransportBytes.lengthPrefixed(Data(transportProtocol.utf8))
+            + TransportBytes.lengthPrefixed(transportPublicKey)
     }
 
     private static func requireLengths(clientPublic: Data, clientNonce: Data) throws {

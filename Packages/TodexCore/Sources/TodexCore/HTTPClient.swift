@@ -35,8 +35,8 @@ public final class HTTPClient: Sendable {
         self.init(connection: connection, session: session, bootstrap: false)
     }
 
-    /// Device pairing runs before the device is enrolled and, for a remote
-    /// backend, straight after importing the key: the backend serves
+    /// Device pairing runs before the device is enrolled and before any
+    /// transport key is pinned (pairing is what pins it): the backend serves
     /// `/v2/device-pairing/*` directly to every peer, and pairing v3 protects
     /// itself (commit/reveal, verification code, transcript-bound wrap). This
     /// client reaches only those routes, unsigned and never through the tunnel.
@@ -141,7 +141,7 @@ public final class HTTPClient: Sendable {
             throw TodexError.invalid(String(localized: "HTTP 请求限制无效", bundle: .module))
         }
         let mode = transportMode
-        try mode.requireAllowed()
+        try mode.requireAllowed(connection)
         if bootstrap {
             guard path.hasPrefix("/v2/device-pairing/"), !authenticated else {
                 throw TodexError.invalid(String(localized: "接口路径无效", bundle: .module))
