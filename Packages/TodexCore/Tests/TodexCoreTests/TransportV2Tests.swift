@@ -52,12 +52,28 @@ struct TransportV2Tests {
         let serverPublic = try hex(v["server"]["publicKey"])
         let handshake = try clientHandshake(v, rest)
         let clientNonce = try hex(rest["clientNonce"])
-        let keys = TransportKeySchedule.derive(
-            label: TransportV2.restLabel, deviceID: "", serverStaticPublic: serverPublic, handshake: handshake,
-            clientNonce: clientNonce, serverNonce: Data())
+        let keys = TransportKeySchedule.restKeys(
+            serverStaticPublic: serverPublic, handshake: handshake, clientNonce: clientNonce)
         #expect(keys.th == (try hex(rest["th"])))
+        #expect(keys.prk.bytes == (try hex(rest["prk"])))
         #expect(keys.kUp.bytes == (try hex(rest["kUp"])))
-        #expect(keys.kDown.bytes == (try hex(rest["kDown"])))
+        // Sealed REST revision 2: k_down is bound to the response nonce; the
+        // revision 1 key (no nonce) and another nonce give other keys.
+        let responseNonce = try hex(rest["responseNonce"])
+        #expect(responseNonce.count == TransportV2.responseNonceLength)
+        let kDown = try TransportKeySchedule.restDownKey(prk: keys.prk, responseNonce: responseNonce)
+        #expect(kDown.bytes == (try hex(rest["kDown"])))
+        let second = rest["secondResponse"]
+        let secondDown = try TransportKeySchedule.restDownKey(prk: keys.prk, responseNonce: hex(second["responseNonce"]))
+        #expect(secondDown.bytes == (try hex(second["kDown"])) && secondDown.bytes != kDown.bytes)
+        let withoutNonce = HKDF<SHA256>.expand(
+            pseudoRandomKey: keys.prk, info: Data("\(TransportV2.restLabel)/down".utf8), outputByteCount: 32)
+        #expect(withoutNonce.bytes == (try hex(rest["kDownWithoutNonce"])) && withoutNonce.bytes != kDown.bytes)
+        for length in [0, 31, 33] {
+            #expect(throws: TransportCryptoError.self) {
+                try TransportKeySchedule.restDownKey(prk: keys.prk, responseNonce: Data(count: length))
+            }
+        }
 
         // Clarification 5: seal the vector plaintext, never a re-serialization.
         let requestPlaintext = try hex(rest["request"]["plaintext"])
@@ -68,28 +84,37 @@ struct TransportV2Tests {
         #expect(inner.headers["x-todex-device-id"] == "dev_LobItzFYN8xbKubO")
         #expect(inner.body == (try hex(rest["request"]["body"])))
 
-        // Outer headers are byte-exact; our own body must open on the server side.
+        // Outer headers are byte-exact (revision header included); our own
+        // body must open on the server side.
         let sealed = try TransportRestTunnel.seal(
             inner, serverPublicKey: serverPublic, handshake: handshake, clientNonce: clientNonce)
         #expect(sealed.headers == rest["outerHeaders"].objectValue.mapValues(\.stringValue))
+        #expect(sealed.headers[TransportV2.Header.sealedRevision] == "2")
         let serverUp = TransportRecordCipher(key: keys.kUp, th: keys.th, direction: TransportV2.directionUp)
         #expect(try TransportInnerRequest.decode(TransportRecordStream.open(sealed.body, cipher: serverUp)) == inner)
 
-        let response = try TransportRestTunnel.openResponse(
-            hex(rest["response"]["stream"]), cipher: sealed.responseCipher)
+        // The response body is response_nonce || records.
+        let stream = try hex(rest["response"]["stream"])
+        let recordStream = try hex(rest["response"]["recordStream"])
+        #expect(stream == responseNonce + recordStream)
+        let response = try TransportRestTunnel.openResponse(stream, key: sealed.responseKey)
         #expect(response.status == 201)
         #expect(response.headers == ["content-type": "application/json"])
         #expect(response.body == (try hex(rest["response"]["body"])))
-        let down = TransportRecordCipher(key: keys.kDown, th: keys.th, direction: TransportV2.directionDown)
-        #expect(
-            try TransportRecordStream.seal(hex(rest["response"]["plaintext"]), cipher: down)
-                == (try hex(rest["response"]["stream"])))
+        // The response key is single use.
+        #expect(throws: TransportCryptoError.self) { try TransportRestTunnel.openResponse(stream, key: sealed.responseKey) }
+        let down = TransportRecordCipher(key: kDown, th: keys.th, direction: TransportV2.directionDown)
+        #expect(try TransportRecordStream.seal(hex(rest["response"]["plaintext"]), cipher: down) == recordStream)
+        // The same answer under another nonce opens to the same response.
+        #expect(try TransportRestTunnel.openResponse(hex(second["stream"]), key: restResponseKey(v)) == response)
+        let contentType = HTTPClient.parseContentType(rest["responseHeaders"]["content-type"].stringValue)
+        #expect(contentType.media == TransportV2.sealedContentType && contentType.parameters["r"] == "2")
 
-        // Streaming: byte-at-a-time delivery yields the same head and body.
-        let streaming = TransportSealedResponseDecoder(
-            cipher: TransportRecordCipher(key: keys.kDown, th: keys.th, direction: TransportV2.directionDown))
+        // Streaming: byte-at-a-time delivery (the nonce spans 32 chunks)
+        // yields the same head and body.
+        let streaming = TransportSealedResponseDecoder(responseKey: try restResponseKey(v))
         var body = Data()
-        for byte in try hex(rest["response"]["stream"]) {
+        for byte in stream {
             for part in try streaming.push(Data([byte])) { body += part }
         }
         try streaming.finish()
@@ -107,23 +132,25 @@ struct TransportV2Tests {
         let plaintext = TransportBytes.u32(head.count) + head + body
         #expect(plaintext.count == multi["plaintextLength"].intValue)
         #expect(sha256Hex(plaintext) == multi["plaintextSha256"].stringValue)
-        let keys = try restKeys(v)
-        let stream = try TransportRecordStream.seal(
-            plaintext, cipher: TransportRecordCipher(key: keys.kDown, th: keys.th, direction: TransportV2.directionDown))
-        #expect(stream.count == multi["streamLength"].intValue)
-        #expect(sha256Hex(stream) == multi["streamSha256"].stringValue)
+        let records = try TransportRecordStream.seal(
+            plaintext,
+            cipher: TransportRecordCipher(key: SymmetricKey(data: hex(rest["kDown"])), th: hex(rest["th"]), direction: TransportV2.directionDown))
+        #expect(records.count == multi["recordStreamLength"].intValue)
+        #expect(sha256Hex(records) == multi["recordStreamSha256"].stringValue)
         var offset = 0
         for record in multi["records"].arrayValue {
-            let length = TransportBytes.readU32(stream.dropFirst(offset))
+            let length = TransportBytes.readU32(records.dropFirst(offset))
             #expect(length == record["ciphertextLength"].intValue)
-            #expect(sha256Hex(stream.subdata(in: offset + 4..<offset + 4 + length)) == record["ciphertextSha256"].stringValue)
+            #expect(sha256Hex(records.subdata(in: offset + 4..<offset + 4 + length)) == record["ciphertextSha256"].stringValue)
             offset += 4 + length
         }
-        #expect(offset == stream.count)
+        #expect(offset == records.count)
+        let stream = try hex(rest["responseNonce"]) + records
+        #expect(stream.count == multi["streamLength"].intValue)
+        #expect(sha256Hex(stream) == multi["streamSha256"].stringValue)
 
-        // Streamed open in uneven chunks that straddle record boundaries.
-        let decoder = TransportSealedResponseDecoder(
-            cipher: TransportRecordCipher(key: keys.kDown, th: keys.th, direction: TransportV2.directionDown))
+        // Streamed open in uneven chunks that straddle the nonce and record boundaries.
+        let decoder = TransportSealedResponseDecoder(responseKey: try restResponseKey(v))
         var opened = Data()
         var index = 0
         var size = 1
@@ -142,7 +169,13 @@ struct TransportV2Tests {
     func everyFailureVectorFails(_ name: String) throws {
         let v = try protocolVector(name)
         let failures = v["failures"].arrayValue
-        #expect(failures.count == 13)
+        #expect(failures.count == 18)
+        for required in [
+            "rest-short-prefix", "rest-prefix-only", "rest-down-key-without-nonce", "rest-missing-prefix",
+            "rest-nonce-swapped",
+        ] {
+            #expect(failures.contains { $0["name"].stringValue == required }, "\(required)")
+        }
         for failure in failures {
             let input = try hex(failure["input"])
             switch failure["kind"].stringValue {
@@ -150,14 +183,13 @@ struct TransportV2Tests {
                 let channel = try wsChannel(v)
                 #expect(throws: TransportCryptoError.self, "\(failure["name"].stringValue)") { try channel.open(input) }
             case "rest":
-                let keys = try restKeys(v)
-                let cipher = TransportRecordCipher(key: keys.kDown, th: keys.th, direction: TransportV2.directionDown)
+                // Inputs are full response bodies (nonce prefix included).
+                let key = try restResponseKey(v)
                 #expect(throws: TransportCryptoError.self, "\(failure["name"].stringValue)") {
-                    try TransportRestTunnel.openResponse(input, cipher: cipher)
+                    try TransportRestTunnel.openResponse(input, key: key)
                 }
                 // The streaming decoder rejects it too, however it is chunked.
-                let streaming = TransportSealedResponseDecoder(
-                    cipher: TransportRecordCipher(key: keys.kDown, th: keys.th, direction: TransportV2.directionDown))
+                let streaming = TransportSealedResponseDecoder(responseKey: try restResponseKey(v))
                 #expect(throws: TransportCryptoError.self, "\(failure["name"].stringValue) streamed") {
                     for byte in input { _ = try streaming.push(Data([byte])) }
                     try streaming.finish()
@@ -178,17 +210,20 @@ struct TransportV2Tests {
             clientPublic: clientKey.publicKey.rawRepresentation, clientNonce: hex(v["clientNonce"]))
         #expect(commitment == (try hex(v["commitment"])))
         #expect(CryptoEncoding.encode(commitment) == v["commitmentBase64Url"].stringValue)
-        func bound(_ transportProtocol: JSONValue, _ transportPublicKey: JSONValue, loopback: Bool = false) throws
-            -> PairingMaterial
-        {
+        func bound(
+            _ transportProtocol: JSONValue, _ transportPublicKey: JSONValue, loopback: Bool = false,
+            deviceName: JSONValue? = nil
+        ) throws -> PairingMaterial {
             let (transport, key) = try PairingTransport.validated(
                 protocol: transportProtocol.optionalString, publicKey: transportPublicKey.optionalString,
                 loopback: loopback)
             return try PairingMaterial(
                 v3RequestID: v["requestId"].stringValue, privateKey: clientKey,
                 serverPublicKey: hex(v["serverPublicKey"]), device: device, clientNonce: hex(v["clientNonce"]),
-                transport: transport, transportKey: key)
+                transport: transport, transportKey: key, deviceName: (deviceName ?? v["deviceName"]).stringValue)
         }
+        // The transcript ends with LP(utf8(deviceName)).
+        #expect(Data(v["deviceName"].stringValue.utf8) == (try hex(v["deviceNameUtf8"])))
         // The bound transport is the ML-KEM server static key of the vectors.
         #expect(v["transportProtocol"] == "ml-kem-768")
         let material = try bound(v["transportProtocol"], v["transportPublicKey"])
@@ -219,9 +254,54 @@ struct TransportV2Tests {
             #expect(other.verificationCode != material.verificationCode, "\(name)")
         }
         #expect(v["noneCase"]["fingerprint"] == "none")
+        // The device name is bound: another name, ASCII or not, changes the code.
+        for name in ["nonAsciiName", "tamperedName"] {
+            let entry = v[name]
+            #expect(Data(entry["deviceName"].stringValue.utf8) == (try hex(entry["deviceNameUtf8"])), "\(name)")
+            #expect(entry["deviceName"].stringValue.unicodeScalars.count == entry["scalarCount"].intValue, "\(name)")
+            let other = try bound(v["transportProtocol"], v["transportPublicKey"], deviceName: entry["deviceName"])
+            #expect(other.transcript.suffix(4 + entry["deviceNameUtf8"].stringValue.count / 2)
+                == TransportBytes.lengthPrefixed(try hex(entry["deviceNameUtf8"])), "\(name)")
+            #expect(Data(SHA256.hash(data: other.transcript)) == (try hex(entry["transcriptHash"])), "\(name)")
+            #expect(other.verificationCode == entry["verificationCode"].stringValue, "\(name)")
+            #expect(other.verificationCode != material.verificationCode, "\(name)")
+        }
         #expect(throws: TodexError.self) {
             try DevicePairingV3.commitment(clientPublic: clientKey.publicKey.rawRepresentation, clientNonce: Data(count: 16))
         }
+    }
+
+    @Test func deviceNameRulesMatchVectors() throws {
+        let v = try vectors()["pairingV3"]
+        #expect(v["deviceNameRules"]["maxScalars"].intValue == DevicePairingName.maxScalars)
+        let valid = v["validDeviceNames"].arrayValue
+        let invalid = v["invalidDeviceNames"].arrayValue
+        #expect(valid.count == 6 && invalid.count == 13)
+        for entry in valid {
+            let name = entry["deviceName"].stringValue
+            #expect(Data(name.utf8) == (try hex(entry["deviceNameUtf8"])), "\(entry["name"])")
+            #expect(DevicePairingName.failure(name) == nil, "\(entry["name"])")
+            // A valid name is sent unchanged.
+            #expect(Data(DevicePairingName.normalize(name).utf8) == Data(name.utf8), "\(entry["name"])")
+        }
+        for entry in invalid {
+            let name = entry["deviceName"].stringValue
+            #expect(Data(name.utf8) == (try hex(entry["deviceNameUtf8"])), "\(entry["name"])")
+            #expect(DevicePairingName.failure(name)?.rawValue == entry["failure"].stringValue, "\(entry["name"])")
+            // Normalizing always yields a name the backend accepts.
+            #expect(DevicePairingName.failure(DevicePairingName.normalize(name)) == nil, "\(entry["name"])")
+        }
+        // U+FEFF is not White_Space (unlike JS trim); U+0085 is Cc before it is whitespace.
+        #expect(DevicePairingName.failure("\u{FEFF}Mac\u{FEFF}") == nil)
+        #expect(DevicePairingName.failure("Mac\u{0085}") == .control)
+        #expect(DevicePairingName.normalize("  Mac\u{00A0}\u{3000}") == "Mac")
+        #expect(DevicePairingName.normalize("\u{202E}\u{200F} \n\u{0007}") == "TodeX")
+        #expect(DevicePairingName.normalize("", fallback: " iPad ") == "iPad")
+        #expect(DevicePairingName.normalize("\u{0085}", fallback: "\u{2066}") == "TodeX")
+        #expect(DevicePairingName.normalize("\u{FEFF}Mac") == "\u{FEFF}Mac")
+        // The cut keeps 80 scalars and trims what the cut exposed.
+        #expect(DevicePairingName.normalize(String(repeating: "📱", count: 100)).unicodeScalars.count == 80)
+        #expect(DevicePairingName.normalize(String(repeating: "a", count: 79) + "  b") == String(repeating: "a", count: 79))
     }
 
     @Test func vectorFileMatchesProtocolCheckout() throws {
@@ -364,11 +444,33 @@ struct TransportV2Tests {
         #expect(mode("http://127.0.0.08:7345") == .refused)
         let pinned = BackendConnection(
             serverURL: "https://lan.example", encryption: .x25519, publicKey: key, transportVerified: true)
-        #expect(throws: Never.self) { try SecureTransportError.checkPolicy(pinned, requiredProtocol: "x25519") }
-        #expect(throws: Never.self) { try SecureTransportError.checkPolicy(pinned, requiredProtocol: "none") }
-        #expect(throws: TodexError.self) { try SecureTransportError.checkPolicy(pinned, requiredProtocol: "ml-kem-768") }
+        #expect(throws: Never.self) {
+            try SecureTransportError.checkPolicy(pinned, requiredProtocol: "x25519", sealedRevision: 2)
+        }
+        #expect(throws: Never.self) { try SecureTransportError.checkPolicy(pinned, requiredProtocol: "none", sealedRevision: 2) }
         #expect(throws: TodexError.self) {
-            try SecureTransportError.checkPolicy(BackendConnection(serverURL: "https://lan.example"), requiredProtocol: "none")
+            try SecureTransportError.checkPolicy(pinned, requiredProtocol: "ml-kem-768", sealedRevision: 2)
+        }
+        #expect(throws: TodexError.self) {
+            try SecureTransportError.checkPolicy(
+                BackendConnection(serverURL: "https://lan.example"), requiredProtocol: "none", sealedRevision: 2)
+        }
+        // A pinned profile needs sealed REST revision 2; no fallback. A
+        // different protocol still asks for re-pairing first.
+        for revision in [nil, 1, 3] as [Int?] {
+            let error = #expect(throws: TodexError.self, "\(String(describing: revision))") {
+                try SecureTransportError.checkPolicy(pinned, requiredProtocol: "x25519", sealedRevision: revision)
+            }
+            #expect(error?.localizedDescription == SecureTransportError.backendUpgradeRequired.localizedDescription)
+        }
+        let repair = #expect(throws: TodexError.self) {
+            try SecureTransportError.checkPolicy(pinned, requiredProtocol: "ml-kem-768", sealedRevision: nil)
+        }
+        #expect(repair?.localizedDescription == SecureTransportError.repairRequired.localizedDescription)
+        // An unpinned loopback profile does not use the tunnel.
+        #expect(throws: Never.self) {
+            try SecureTransportError.checkPolicy(
+                BackendConnection(serverURL: "http://127.0.0.1:7345"), requiredProtocol: "none", sealedRevision: nil)
         }
     }
 
@@ -433,7 +535,7 @@ struct TransportV2Tests {
                 TransportInnerResponse(
                     status: inner.path == "/v2/missing" ? 404 : 200, headers: ["Content-Type": "application/json"],
                     body: Data(#"{"echo":\#(String(decoding: inner.body.isEmpty ? Data("null".utf8) : inner.body, as: UTF8.self))}"#.utf8)),
-                cipher: down)
+                key: down)
         }
         defer { fixture.close() }
         let transport = server.transport(fixture, deviceSecret: "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU")
@@ -493,7 +595,7 @@ struct TransportV2Tests {
         let fixture = NetworkHTTPFixture { request in
             let (_, down) = try server.openRequest(request)
             return try server.reply(
-                TransportInnerResponse(status: 200, body: Data(repeating: 0x20, count: 4096)), cipher: down)
+                TransportInnerResponse(status: 200, body: Data(repeating: 0x20, count: 4096)), key: down)
         }
         defer { fixture.close() }
         let transport = server.transport(fixture)
@@ -518,7 +620,7 @@ struct TransportV2Tests {
             case "plain200":
                 return .json(["requiredProtocol": "none"])
             default:
-                var reply = try server.reply(TransportInnerResponse(status: 200, body: Data("{}".utf8)), cipher: down)
+                var reply = try server.reply(TransportInnerResponse(status: 200, body: Data("{}".utf8)), key: down)
                 reply = NetworkHTTPReply(
                     status: 200, data: reply.data.dropLast() + Data([reply.data.last! ^ 1]), headers: reply.headers)
                 return reply
@@ -546,6 +648,157 @@ struct TransportV2Tests {
         }
     }
 
+    @Test func sealedAnswerWithoutRevisionTwoAsksForABackendUpdate() async throws {
+        let server = try FakeServerKeys(protocolVector("x25519"))
+        let contentType = Mutex(TransportV2.sealedContentType)
+        let fixture = NetworkHTTPFixture { request in
+            let (_, down) = try server.openRequest(request)
+            return try server.reply(
+                TransportInnerResponse(status: 200, body: Data("{}".utf8)), key: down,
+                contentType: contentType.withLock { $0 })
+        }
+        defer { fixture.close() }
+        let transport = server.transport(fixture)
+        for type in [TransportV2.sealedContentType, "application/vnd.todex.sealed; r=1", "application/vnd.todex.sealed;r=\"3\""] {
+            contentType.withLock { $0 = type }
+            // Never opened, and never an unknown outcome: an older backend
+            // cannot have run a revision 2 request.
+            for method in [HTTPMethod.get, .post] {
+                let error = await #expect(throws: TodexError.self, "\(type) \(method)") {
+                    _ = try await transport.request(method: method, path: "/v2/x", body: Data("{}".utf8))
+                }
+                #expect(error?.localizedDescription == SecureTransportError.backendUpgradeRequired.localizedDescription)
+            }
+        }
+        // Parameters are case-insensitive by name and may be quoted.
+        contentType.withLock { $0 = "Application/Vnd.Todex.Sealed; R=\"2\"" }
+        #expect(try await transport.request(method: .get, path: "/v2/x").status == 200)
+    }
+
+    @Test func transportBusyIsRetriedOnceWithAFreshSignature() async throws {
+        let server = try FakeServerKeys(protocolVector("x25519"))
+        let busyAnswers = Mutex(1)
+        let nonces = Mutex<[String]>([])
+        let fixture = NetworkHTTPFixture { request in
+            let (inner, down) = try server.openRequest(request)
+            nonces.withLock { $0.append(inner.headers["x-todex-auth-nonce"] ?? "") }
+            let busy = busyAnswers.withLock { remaining in
+                defer { remaining -= 1 }
+                return remaining > 0
+            }
+            guard busy else { return try server.reply(TransportInnerResponse(status: 201, body: Data("{}".utf8)), key: down) }
+            return try server.reply(
+                TransportInnerResponse(
+                    status: 503, headers: ["retry-after": "0", "content-type": "application/json"],
+                    body: Data(#"{"code":"TRANSPORT_BUSY","message":"busy"}"#.utf8)),
+                key: down)
+        }
+        defer { fixture.close() }
+        let transport = server.transport(fixture, deviceSecret: "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU")
+        // A mutation is retried too: the backend guarantees it did not run.
+        let response = try await transport.request(method: .post, path: "/v2/x", body: Data("{}".utf8))
+        #expect(response.status == 201)
+        #expect(fixture.requests.count == 2)
+        let seen = nonces.withLock { $0 }
+        #expect(seen.count == 2 && !seen[0].isEmpty && seen[0] != seen[1])
+        // Only once: a second busy answer is the caller's.
+        busyAnswers.withLock { $0 = 2 }
+        let busy = try await transport.request(method: .post, path: "/v2/x", body: Data("{}".utf8))
+        #expect(busy.status == 503)
+        #expect(fixture.requests.count == 4)
+    }
+
+    @Test func busyRetryHonoursRetryAfterWithinBounds() {
+        #expect(HTTPClient.busyRetryDelay("0") == .zero)
+        #expect(HTTPClient.busyRetryDelay(" 2 ") == .seconds(2))
+        #expect(HTTPClient.busyRetryDelay("120") == .seconds(5))
+        for value in [nil, "", "1.5", "-1", "soon", "1234567", "Wed, 21 Oct 2026 07:28:00 GMT"] as [String?] {
+            #expect(HTTPClient.busyRetryDelay(value) == .seconds(1), "\(String(describing: value))")
+        }
+    }
+
+    @Test func timestampRejectionLearnsTheBackendClockAndRetriesOnce() async throws {
+        let server = try FakeServerKeys(protocolVector("x25519"))
+        let serverTime = Int(Date().timeIntervalSince1970) + 3600
+        let rejections = Mutex(1)
+        let stamps = Mutex<[Int]>([])
+        let fixture = NetworkHTTPFixture { request in
+            let (inner, down) = try server.openRequest(request)
+            stamps.withLock { $0.append(Int(inner.headers["x-todex-auth-ts"] ?? "") ?? 0) }
+            let reject = rejections.withLock { remaining in
+                defer { remaining -= 1 }
+                return remaining > 0
+            }
+            guard reject else { return try server.reply(TransportInnerResponse(status: 200, body: Data("{}".utf8)), key: down) }
+            return try server.reply(
+                TransportInnerResponse(
+                    status: 401, headers: ["content-type": "application/json"],
+                    body: Data(#"{"code":"AUTH_TIMESTAMP_REJECTED","message":"clock","serverTime":\#(serverTime)}"#.utf8)),
+                key: down)
+        }
+        defer { fixture.close() }
+        let socket = Mutex<FakeV2Server?>(nil)
+        let connection = server.connection(fixture, deviceSecret: "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU")
+        let transport = BackendSecureTransport(
+            connection: connection, session: fixture.session,
+            makeSocket: { request in
+                let fake = FakeV2Server(request: request, keys: server)
+                socket.withLock { $0 = fake }
+                return fake
+            })
+        #expect(try await transport.request(method: .post, path: "/v2/x", body: Data("{}".utf8)).status == 200)
+        var seen = stamps.withLock { $0 }
+        #expect(seen.count == 2)
+        #expect(abs(seen[0] - (serverTime - 3600)) <= 5)
+        #expect(abs(seen[1] - serverTime) <= 5)
+        // Later requests and the WebSocket upgrade sign with the learned offset.
+        #expect(try await transport.request(method: .get, path: "/v2/x").status == 200)
+        seen = stamps.withLock { $0 }
+        #expect(seen.count == 3 && abs(seen[2] - serverTime) <= 5)
+        let ws = try await transport.openWebSocket()
+        ws.cancel()
+        let upgradeStamp = try #require(socket.withLock { $0?.query["auth_ts"] }.flatMap { Int($0) })
+        #expect(abs(upgradeStamp - serverTime) <= 5)
+        // Only once per request: a second rejection is the caller's.
+        rejections.withLock { $0 = 2 }
+        #expect(try await transport.request(method: .get, path: "/v2/x").status == 401)
+        #expect(stamps.withLock { $0.count } == 5)
+    }
+
+    @Test func unauthenticatedAnswersNeverMoveTheClock() async throws {
+        let server = try FakeServerKeys(protocolVector("x25519"))
+        let serverTime = Int(Date().timeIntervalSince1970) + 3600
+        let body = Data(#"{"code":"AUTH_TIMESTAMP_REJECTED","message":"clock","serverTime":\#(serverTime)}"#.utf8)
+        let fixture = NetworkHTTPFixture { _ in NetworkHTTPReply(status: 401, data: body) }
+        defer { fixture.close() }
+        let connection = server.connection(fixture, deviceSecret: "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU")
+        let transport = BackendSecureTransport(
+            connection: connection, session: fixture.session, makeSocket: { _ in FakeV2Server.unreachable() })
+        // An unsealed answer on the tunnel is an error, not a clock.
+        await #expect(throws: TodexError.self) { _ = try await transport.request(method: .get, path: "/v2/x") }
+        #expect(fixture.requests.count == 1)
+        #expect(BackendClock.offset(for: connection) == 0)
+
+        // The plaintext loopback transport is authenticated by the device key.
+        let plain = Mutex(0)
+        let loopback = NetworkHTTPFixture { request in
+            let attempt = plain.withLock {
+                $0 += 1
+                return $0
+            }
+            #expect(request.value(forHTTPHeaderField: "x-todex-auth-ts") != nil)
+            return attempt == 1 ? NetworkHTTPReply(status: 401, data: body) : .json(["ok": true])
+        }
+        defer { loopback.close() }
+        let client = loopback.client(deviceSecret: "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU")
+        #expect(client.transportMode == .plaintext)
+        #expect(try await client.request(path: "/v2/x") == ["ok": true])
+        #expect(loopback.requests.count == 2)
+        let stamp = try #require(loopback.requests.last?.value(forHTTPHeaderField: "x-todex-auth-ts").flatMap { Int($0) })
+        #expect(abs(stamp - serverTime) <= 5)
+        #expect(abs(BackendClock.offset(for: client.connection) - 3600) <= 5)
+    }
+
     // MARK: WebSocket end to end (in-memory server)
 
     @Test(arguments: ["x25519", "ml-kem-768"])
@@ -557,8 +810,8 @@ struct TransportV2Tests {
             return try server.reply(
                 TransportInnerResponse(
                     status: 200, headers: ["content-type": "application/json"],
-                    body: Data(#"{"requiredProtocol":"\#(server.encryption.rawValue)","transportVersion":2}"#.utf8)),
-                cipher: down)
+                    body: Data(#"{"requiredProtocol":"\#(server.encryption.rawValue)","transportVersion":2,"sealedRevision":2}"#.utf8)),
+                key: down)
         }
         defer { fixture.close() }
         let socket = Mutex<FakeV2Server?>(nil)
@@ -667,11 +920,9 @@ private func wsChannel(_ v: JSONValue, maxFrameBytes: Int = TransportV2.maxWebSo
     ).acceptHello(ws["hello"].stringValue)
 }
 
-private func restKeys(_ v: JSONValue) throws -> TransportKeys {
-    let rest = v["rest"]
-    return try TransportKeySchedule.derive(
-        label: TransportV2.restLabel, deviceID: "", serverStaticPublic: hex(v["server"]["publicKey"]),
-        handshake: clientHandshake(v, rest), clientNonce: hex(rest["clientNonce"]), serverNonce: Data())
+/// A fresh response key for the vector request (`prk` and `th`).
+private func restResponseKey(_ v: JSONValue) throws -> TransportRestResponseKey {
+    TransportRestResponseKey(prk: SymmetricKey(data: try hex(v["rest"]["prk"])), th: try hex(v["rest"]["th"]))
 }
 
 private func sha256Hex(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
@@ -747,24 +998,30 @@ private struct FakeServerKeys: Sendable {
             clientNonce: clientNonce, serverNonce: serverNonce)
     }
 
-    func openRequest(_ request: URLRequest) throws -> (TransportInnerRequest, TransportRecordCipher) {
+    /// Opens a sealed request; the returned key (`prk`, `th`) seals the answer.
+    func openRequest(_ request: URLRequest) throws -> (TransportInnerRequest, TransportRestResponseKey) {
         func header(_ name: String) throws -> String { try #require(request.value(forHTTPHeaderField: name)) }
         #expect(try header("Content-Type") == TransportV2.sealedContentType)
         #expect(try header("x-todex-transport") == "2" && header("x-todex-encryption") == encryption.rawValue)
+        #expect(try header("x-todex-sealed-revision") == "2")
         let material = try CryptoEncoding.decode(
             header(encryption == .x25519 ? TransportV2.Header.clientKey : TransportV2.Header.kemCiphertext))
-        let keys = try keys(
-            label: TransportV2.restLabel, deviceID: "", material: material,
-            clientNonce: CryptoEncoding.decode(header(TransportV2.Header.requestNonce), count: 32), serverNonce: Data())
+        let keys = TransportKeySchedule.restKeys(
+            serverStaticPublic: publicKey, handshake: try handshake(material: material),
+            clientNonce: try CryptoEncoding.decode(header(TransportV2.Header.requestNonce), count: 32))
         let up = TransportRecordCipher(key: keys.kUp, th: keys.th, direction: TransportV2.directionUp)
         let inner = try TransportInnerRequest.decode(TransportRecordStream.open(requestBody(request), cipher: up))
-        return (inner, TransportRecordCipher(key: keys.kDown, th: keys.th, direction: TransportV2.directionDown))
+        return (inner, TransportRestResponseKey(prk: keys.prk, th: keys.th))
     }
 
-    func reply(_ response: TransportInnerResponse, cipher: TransportRecordCipher) throws -> NetworkHTTPReply {
-        NetworkHTTPReply(
-            status: 200, data: try TransportRecordStream.seal(response.encoded(), cipher: cipher),
-            headers: ["Content-Type": TransportV2.sealedContentType])
+    /// `200`, `application/vnd.todex.sealed; r=2`, body = fresh response nonce || records.
+    func reply(
+        _ response: TransportInnerResponse, key: TransportRestResponseKey,
+        contentType: String = "application/vnd.todex.sealed; r=2"
+    ) throws -> NetworkHTTPReply {
+        let nonce = TransportBytes.random(TransportV2.responseNonceLength)
+        let records = try TransportRecordStream.seal(response.encoded(), cipher: key.cipher(for: nonce))
+        return NetworkHTTPReply(status: 200, data: nonce + records, headers: ["Content-Type": contentType])
     }
 
     func connection(_ fixture: NetworkHTTPFixture, deviceSecret: String = "") -> BackendConnection {

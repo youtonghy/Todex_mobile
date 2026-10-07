@@ -131,6 +131,13 @@ public final class HTTPClient: Sendable {
     /// Keeps the actual HTTP status, headers and bytes for callers that need
     /// more than JSON. Under transport v2 the status, headers and body are the authenticated
     /// inner response; the outer `/v2/sealed` exchange stays invisible.
+    ///
+    /// Two authenticated answers are retried once, re-signed with a fresh
+    /// nonce, whatever the method: an inner `503 TRANSPORT_BUSY` (the backend
+    /// guarantees the request did not run and its nonce was not spent) after
+    /// `Retry-After` (at most 5 s), and a `401 AUTH_TIMESTAMP_REJECTED` after
+    /// recording the backend's clock offset from its `serverTime`. Unsealed
+    /// answers on the tunnel are never trusted for either.
     func response(
         _ method: HTTPMethod = .get, path: String, query: [String: String] = [:], body: JSONValue? = nil,
         rawBody: Data? = nil, headers extraHeaders: [String: String] = [:], authenticated: Bool = true,
@@ -149,24 +156,100 @@ public final class HTTPClient: Sendable {
         }
         let requestURL = try url(path: path, query: query)
         let components = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)
-        let encodedPath = components?.percentEncodedPath ?? "/"
-        let encodedQuery = components?.percentEncodedQuery ?? ""
         var headers = ["accept": "application/json"]
         let bodyData = try body.map { try JSONEncoder().encode($0) } ?? rawBody ?? Data()
-        if body != nil || rawBody != nil { headers["content-type"] = "application/json" }
+        let hasBody = body != nil || rawBody != nil
+        if hasBody { headers["content-type"] = "application/json" }
         for (name, value) in extraHeaders { headers[name.lowercased()] = value }
-        if authenticated, let device = DeviceIdentity(secretKeyBase64URL: connection.deviceSecret) {
+        let request = PreparedRequest(
+            method: method, url: requestURL, path: components?.percentEncodedPath ?? "/",
+            query: components?.percentEncodedQuery ?? "", headers: headers, body: hasBody ? bodyData : nil,
+            device: authenticated ? DeviceIdentity(secretKeyBase64URL: connection.deviceSecret) : nil,
+            maximumBytes: maximumBytes)
+        let deadline = ContinuousClock.now + .seconds(timeout)
+        var busyRetried = false
+        var clockRetried = false
+        while true {
+            let remaining = deadline - ContinuousClock.now
+            let result = try await attempt(request, mode: mode, timeout: remaining)
+            // Only authenticated answers get here: the sealed inner response,
+            // or plaintext (loopback or pairing bootstrap).
+            let envelope = result.errorEnvelope
+            if case .v2 = mode, !busyRetried, result.statusCode == 503, envelope.code == Self.transportBusyCode {
+                busyRetried = true
+                let delay = Self.busyRetryDelay(result.headers["retry-after"])
+                // No time left for a second attempt: report the busy answer.
+                guard ContinuousClock.now + delay + .seconds(1) < deadline else { return result }
+                try await Task.sleep(for: delay)
+                continue
+            }
+            if request.device != nil, !clockRetried, result.statusCode == 401,
+                envelope.code == Self.timestampRejectedCode, let serverTime = envelope.serverTime,
+                ContinuousClock.now + .seconds(1) < deadline
+            {
+                clockRetried = true
+                BackendClock.record(serverTime: serverTime, for: connection)
+                DebugLog.record("http.clock.offset", ["seconds": String(Int(BackendClock.offset(for: connection)))])
+                continue
+            }
+            return result
+        }
+    }
+
+    static let transportBusyCode = "TRANSPORT_BUSY"
+    static let timestampRejectedCode = "AUTH_TIMESTAMP_REJECTED"
+    /// Upper bound and default for honouring `Retry-After` on `TRANSPORT_BUSY`.
+    static let busyRetryMaxDelay: Duration = .seconds(5)
+    static let busyRetryDefaultDelay: Duration = .seconds(1)
+
+    /// `Retry-After` in delta-seconds, capped; anything else waits the default second.
+    static func busyRetryDelay(_ value: String?) -> Duration {
+        let text = (value ?? "").trimmingCharacters(in: .whitespaces)
+        guard (1...6).contains(text.utf8.count), text.utf8.allSatisfy({ (48...57).contains($0) }), let seconds = Int(text)
+        else { return busyRetryDefaultDelay }
+        return min(.seconds(seconds), busyRetryMaxDelay)
+    }
+
+    /// Everything about one request that stays the same across retries; the
+    /// device signature and the seal are fresh for every attempt.
+    private struct PreparedRequest: Sendable {
+        let method: HTTPMethod
+        /// Plaintext URL (the tunnel posts to `/v2/sealed` instead).
+        let url: URL
+        /// Percent-encoded path and query exactly as signed.
+        let path: String
+        let query: String
+        let headers: [String: String]
+        /// `nil` sends no body.
+        let body: Data?
+        /// Signs every attempt when present.
+        let device: DeviceIdentity?
+        let maximumBytes: Int
+    }
+
+    private func attempt(_ prepared: PreparedRequest, mode: SecureTransportMode, timeout: Duration) async throws
+        -> HTTPResult
+    {
+        let method = prepared.method
+        let timeout = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
+        let maximumBytes = prepared.maximumBytes
+        let bodyData = prepared.body ?? Data()
+        var headers = prepared.headers
+        if let device = prepared.device {
             // Sign the percent-encoded request target exactly as it appears on
             // the wire (or in the inner request); the daemon verifies
-            // uri.path() + canonicalized query.
-            let target = encodedPath + (encodedQuery.isEmpty ? "" : "?\(encodedQuery)")
-            for (key, value) in try device.authHeaders(method: method.rawValue, pathAndQuery: target, body: bodyData) {
+            // uri.path() + canonicalized query. Signing time follows the
+            // backend's clock (`BackendClock`).
+            let target = prepared.path + (prepared.query.isEmpty ? "" : "?\(prepared.query)")
+            for (key, value) in try device.authHeaders(
+                method: method.rawValue, pathAndQuery: target, body: bodyData, now: BackendClock.now(for: connection))
+            {
                 headers[key] = value
             }
         }
         var request: URLRequest
-        // `k_down` for the answer to a sealed request, handed to the network task.
-        var responseKey: ResponseCipherSlot?
+        // The response key material of a sealed request, handed to the network task.
+        var responseKey: ResponseKeySlot?
         if case .v2(let encryption) = mode {
             request = URLRequest(
                 url: try url(path: TransportV2.sealedPath), cachePolicy: .reloadIgnoringLocalCacheData,
@@ -179,7 +262,7 @@ public final class HTTPClient: Sendable {
             do {
                 sealed = try TransportRestTunnel.seal(
                     TransportInnerRequest(
-                        method: method.rawValue, path: encodedPath, query: encodedQuery, headers: headers,
+                        method: method.rawValue, path: prepared.path, query: prepared.query, headers: headers,
                         body: bodyData),
                     encryption: encryption, serverPublicKey: try pinnedServerKey(),
                     maxBodyBytes: TransportV2.maxRestBodyBytes)
@@ -191,11 +274,11 @@ public final class HTTPClient: Sendable {
             }
             request.httpBody = sealed.body
             for (name, value) in sealed.headers { request.setValue(value, forHTTPHeaderField: name) }
-            responseKey = ResponseCipherSlot(sealed.responseCipher)
+            responseKey = ResponseKeySlot(sealed.responseKey)
         } else {
-            request = URLRequest(url: requestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+            request = URLRequest(url: prepared.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
             request.httpMethod = method.rawValue
-            if body != nil || rawBody != nil { request.httpBody = bodyData }
+            if prepared.body != nil { request.httpBody = bodyData }
             for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         }
         request.httpShouldHandleCookies = false
@@ -244,6 +327,11 @@ public final class HTTPClient: Sendable {
             // surface as plain API errors; a "success" is a crypto failure.
             guard !(200..<300).contains(result.statusCode) else { throw TransportCryptoError("unsealed success response") }
             throw SecureTransportError.outerRejection(result.apiError())
+        case .outdatedSealed:
+            // A sealed answer of an older revision: the request reached a
+            // backend that predates sealed REST revision 2. It cannot have
+            // run (that backend cannot open a revision 2 request).
+            throw SecureTransportError.backendUpgradeRequired
         }
     }
 
@@ -269,42 +357,65 @@ public final class HTTPClient: Sendable {
         }
     }
 
-    /// Moves the response cipher of a sealed request into the network task
-    /// (single use); a cipher never taken is wiped with the slot.
-    private final class ResponseCipherSlot: Sendable {
-        private let cipher: Mutex<TransportRecordCipher?>
-        init(_ cipher: sending TransportRecordCipher) { self.cipher = Mutex(cipher) }
-        func take() -> TransportRecordCipher? { cipher.withLock { $0.take() } }
-        deinit { cipher.withLock { $0?.dispose() } }
+    /// Moves the response key material of a sealed request into the network
+    /// task (single use); a key never taken is wiped with the slot.
+    private final class ResponseKeySlot: Sendable {
+        private let key: Mutex<TransportRestResponseKey?>
+        init(_ key: sending TransportRestResponseKey) { self.key = Mutex(key) }
+        func take() -> TransportRestResponseKey? { key.withLock { $0.take() } }
+        deinit { key.withLock { $0?.dispose() } }
     }
 
     private enum Outcome: Sendable {
         case result(HTTPResult)
         /// Outer response without the sealed content type or status 200.
         case unsealed(HTTPResult)
+        /// The sealed content type without `r=2`: the backend must be updated.
+        case outdatedSealed
+    }
+
+    /// `type/subtype; name=value` -> lowercase media type and parameters
+    /// (names lowercased, first wins, surrounding quotes removed).
+    static func parseContentType(_ value: String?) -> (media: String, parameters: [String: String]) {
+        let parts = (value ?? "").split(separator: ";", omittingEmptySubsequences: false)
+        var parameters: [String: String] = [:]
+        for part in parts.dropFirst() {
+            guard let equals = part.firstIndex(of: "=") else { continue }
+            let name = part[..<equals].trimmingCharacters(in: .whitespaces).lowercased()
+            var parameter = part[part.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            if parameter.count >= 2, parameter.hasPrefix("\""), parameter.hasSuffix("\"") {
+                parameter = String(parameter.dropFirst().dropLast())
+            }
+            if !name.isEmpty, parameters[name] == nil { parameters[name] = parameter }
+        }
+        return ((parts.first.map(String.init) ?? "").trimmingCharacters(in: .whitespaces).lowercased(), parameters)
     }
 
     /// Sends one already sealed request and stream-opens the answer. The
-    /// response cipher dies inside this task; the inner body limit applies to
-    /// the plaintext and is enforced while reading.
+    /// response key dies inside this task; the inner body limit applies to
+    /// the plaintext and is enforced while reading. Only `200` with
+    /// `application/vnd.todex.sealed; r=2` is opened.
     private static func exchangeSealed(
-        session: URLSession, request: URLRequest, responseKey: ResponseCipherSlot, maximumBytes: Int
+        session: URLSession, request: URLRequest, responseKey: ResponseKeySlot, maximumBytes: Int
     ) async throws -> Outcome {
-        guard let cipher = responseKey.take() else { throw TransportCryptoError("response key already used") }
-        let decoder = TransportSealedResponseDecoder(cipher: cipher)
+        guard let key = responseKey.take() else { throw TransportCryptoError("response key already used") }
+        let decoder = TransportSealedResponseDecoder(responseKey: key)
         defer { decoder.dispose() }
         let (bytes, response) = try await session.bytes(for: request, delegate: NoRedirectDelegate())
         defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse else { throw TodexError.invalid(String(localized: "后端响应无效", bundle: .module)) }
-        let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").split(separator: ";").first
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-        guard http.statusCode == 200, contentType == TransportV2.sealedContentType else {
+        let contentType = parseContentType(http.value(forHTTPHeaderField: "Content-Type"))
+        let sealedType = contentType.media == TransportV2.sealedContentType
+        if sealedType, contentType.parameters["r"] != String(TransportV2.sealedRevision) { return .outdatedSealed }
+        guard http.statusCode == 200, sealedType else {
             let data = try await read(bytes, response: http, limit: 64 * 1024)
             return .unsealed(HTTPResult(statusCode: http.statusCode, data: data, headers: headers(of: http)))
         }
-        // Outer bytes = inner body + head + per-record framing and tags.
+        // Outer bytes = response nonce + inner body + head + per-record framing and tags.
         let records = (maximumBytes + 4 + TransportV2.maxHeadBytes) / TransportV2.recordPlaintextMax + 1
-        let outerLimit = maximumBytes + 4 + TransportV2.maxHeadBytes + records * (4 + TransportV2.tagLength)
+        let outerLimit =
+            TransportV2.responseNonceLength + maximumBytes + 4 + TransportV2.maxHeadBytes + records
+            * (4 + TransportV2.tagLength)
         var received = 0
         var chunk = Data()
         chunk.reserveCapacity(16 * 1024)
@@ -373,6 +484,21 @@ struct HTTPResult: Sendable {
             throw TodexError.invalid(String(localized: "后端未返回有效 JSON", bundle: .module))
         }
         return value
+    }
+
+    /// `code` and `serverTime` of the backend's top-level error envelope
+    /// (`{"code", "message"[, "serverTime"]}`); `serverTime` is unix seconds.
+    var errorEnvelope: (code: String?, serverTime: Int64?) {
+        guard !(200..<300).contains(statusCode), !data.isEmpty, data.count <= 64 * 1024,
+            let value = try? JSONDecoder().decode(JSONValue.self, from: data), case .object = value
+        else { return (nil, nil) }
+        var serverTime: Int64?
+        if let time = value["serverTime"].doubleValue, time.isFinite, time.rounded() == time, time > 0,
+            time <= 9_007_199_254_740_991
+        {
+            serverTime = Int64(time)
+        }
+        return (value["code"].optionalString, serverTime)
     }
 
     /// The API error for a non-2xx answer: the envelope's code and message

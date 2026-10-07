@@ -219,7 +219,8 @@ struct PairingTests {
 
     @Test func enrollmentUsesCorrectProofsAndDeliversCredentialOnce() async throws {
         let endpoint = try PairingEndpoint(results: [["status": "pending"], approvedFixture()])
-        let session = try await begin(endpoint, name: "  Mac\u{0000}\u{202E}测试  ")
+        // Normalized to the vector name, which the transcript (and so the code) binds.
+        let session = try await begin(endpoint, name: "  TodeX\u{0000} Vector Mac\u{202E}\u{3000}")
         #expect(session.verificationCode == (try fixture())["verificationCode"].stringValue)
         #expect(session.expiresAt == 2_000_000_300_000)
         #expect(session.pollIntervalMilliseconds == 1000)
@@ -231,11 +232,12 @@ struct PairingTests {
         let calls = await endpoint.calls
         #expect(calls.map(\.action) == ["create", "reveal", "poll", "poll"])
         // Commit first: create carries only the commitment, never the key.
-        #expect(calls[0].body["deviceName"] == "Mac测试")
+        #expect(calls[0].body["deviceName"] == (try fixture())["deviceName"])
         #expect(calls[0].body["clientCommitment"] == (try fixture())["commitment"])
         #expect(calls[0].body["devicePublicKey"] == (try fixture())["devicePublicKey"])
         #expect(calls[0].body["transportBinding"] == 1)
-        #expect(calls[0].body.objectValue.count == 4)
+        #expect(calls[0].body["deviceNameBinding"] == 1)
+        #expect(calls[0].body.objectValue.count == 5)
         #expect(
             calls[1].body == [
                 "requestId": (try fixture())["requestId"], "clientPublicKey": (try fixture())["clientPublicKey"],
@@ -309,8 +311,10 @@ struct PairingTests {
         let calls = await badReveal.calls
         #expect(calls.map(\.action) == ["create", "reveal", "cancel"])
         #expect(calls.last?.body["proof"] == (try fixture())["cancelProof"])
-        #expect(DevicePairingSession.sanitizedDeviceName(" \n\u{202E}") == "TodeX")
-        #expect(DevicePairingSession.sanitizedDeviceName(String(repeating: "🦦", count: 100)).unicodeScalars.count == 80)
+        // The bound name always passes the backend's rule.
+        let names = try PairingEndpoint(results: [])
+        _ = try await begin(names, name: " \n\u{202E}")
+        #expect(await names.calls.first?.body["deviceName"] == "TodeX")
     }
 
     @Test func bootstrapIsUnauthenticatedBoundedAndDoesNotRetry() async throws {
@@ -376,6 +380,8 @@ struct PairingTests {
         (401, "{}", "poll", "设备验证请求未被接受，请重新申请"),
         (403, #"{"code":"UNAUTHORIZED","message":"denied"}"#, "create", "设备验证请求未被接受，请重新申请"),
         (502, "", "create", "设备验证失败（HTTP %@），请检查后端状态"),
+        (503, #"{"code":"PAIRING_BUSY","message":"busy"}"#, "poll", "设备验证失败（HTTP %@），请检查后端状态"),
+        (429, #"{"code":"PAIRING_BUSY","message":"busy"}"#, "poll", "设备申请过于频繁或队列已满，请稍后重试"),
         (400, #"{"code":"INVALID_REQUEST","message":"bad key"}"#, "create", "bad key"),
     ])
     func bootstrapHTTPFailuresAreActionable(_ status: Int, _ body: String, _ action: String, _ expected: String)
@@ -389,7 +395,40 @@ struct PairingTests {
             // Expected text is a catalog key (server messages pass through).
             let format = String(localized: String.LocalizationValue(expected), bundle: CoreLocalization.bundle)
             #expect(error.localizedDescription == (expected.contains("%@") ? String(format: format, String(status)) : format))
+            // 429 and 5xx are transient: polling backs off and continues.
+            #expect((error is DevicePairingRetryableError) == (status == 429 || status >= 500), "\(status)")
         }
+    }
+
+    @Test func transientPairingFailuresAreRetryable() async throws {
+        let unreachable = PairingURLProtocol.client { _ in throw URLError(.networkConnectionLost) }
+        let network = await #expect(throws: DevicePairingRetryableError.self) {
+            try await PairingBootstrap.post(client: unreachable, action: "poll", body: [:])
+        }
+        #expect(
+            network?.localizedDescription
+                == String(localized: "无法连接后端完成设备验证，请检查网络连接", bundle: CoreLocalization.bundle))
+        let stalled = PairingURLProtocol.client { _ in nil }
+        await #expect(throws: DevicePairingRetryableError.self) {
+            try await PairingBootstrap.post(client: stalled, action: "poll", body: [:], timeout: .milliseconds(30))
+        }
+        // Backoff: doubled, at least Retry-After, at most 5 s.
+        let plain = DevicePairingRetryableError(message: "x", retryAfter: nil)
+        #expect(DevicePairingSession.nextPollDelay(after: .seconds(1), error: plain) == .seconds(2))
+        #expect(DevicePairingSession.nextPollDelay(after: .seconds(4), error: plain) == .seconds(5))
+        #expect(
+            DevicePairingSession.nextPollDelay(
+                after: .milliseconds(500), error: .init(message: "x", retryAfter: .seconds(3))) == .seconds(3))
+        #expect(
+            DevicePairingSession.nextPollDelay(after: .seconds(1), error: .init(message: "x", retryAfter: .seconds(60)))
+                == .seconds(5))
+        #expect(PairingBootstrap.retryAfter("2") == .seconds(2))
+        #expect(PairingBootstrap.retryAfter("soon") == nil)
+        // A transient poll failure keeps the request: the next poll succeeds.
+        let endpoint = try PairingEndpoint(results: [["status": "pending"]], failFirstPoll: true)
+        let session = try await begin(endpoint)
+        await #expect(throws: DevicePairingRetryableError.self) { try await session.poll() }
+        #expect(try await session.poll() == .pending)
     }
 
     /// A version 1 link as older backends emitted it: the protocol fields
@@ -403,7 +442,7 @@ struct PairingTests {
     }
 
     private func begin(
-        _ endpoint: PairingEndpoint, name: String = "Swift client", loopback: Bool = false,
+        _ endpoint: PairingEndpoint, name: String = "TodeX Vector Mac", loopback: Bool = false,
         clock: PairingTestClock = .init(1_900_000_000_000)
     ) async throws -> DevicePairingSession {
         try await DevicePairingSession.begin(
@@ -429,7 +468,7 @@ private func fixture() throws -> JSONValue {
         "cancelProof": try b64("cancelProof"), "nonce": .string(CryptoEncoding.encode(Data(repeating: 0x0b, count: 24))),
         "transportProtocol": v["transportProtocol"], "transportPublicKey": v["transportPublicKey"],
         "fingerprint": v["fingerprint"], "tamperedTransportPublicKey": v["tampered"]["transportPublicKey"],
-        "tamperedVerificationCode": v["tampered"]["verificationCode"],
+        "tamperedVerificationCode": v["tampered"]["verificationCode"], "deviceName": v["deviceName"],
         "noneVerificationCode": v["noneCase"]["verificationCode"],
     ]
 }
@@ -456,7 +495,7 @@ private func material(
         v3RequestID: requestID ?? v["requestId"].stringValue, privateKey: privateKey ?? fixturePrivateKey(),
         serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue), device: device ?? fixtureDevice(),
         clientNonce: clientNonce ?? CryptoEncoding.decode(v["clientNonce"].stringValue), transport: transport,
-        transportKey: key)
+        transportKey: key, deviceName: v["deviceName"].stringValue)
 }
 private func fixtureMaterial() throws -> PairingMaterial { try material() }
 private func fixtureDevice() throws -> DeviceIdentity {
@@ -506,17 +545,19 @@ private actor PairingEndpoint {
     private var results: [JSONValue]
     private var callWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private let holdPoll: Bool
+    private var failPoll: Bool
     private var pollContinuation: CheckedContinuation<JSONValue, Never>?
     private var startedContinuation: CheckedContinuation<Void, Never>?
 
     init(
         createResponse: JSONValue? = nil, revealResponse: JSONValue = ["status": "pending"], results: [JSONValue] = [],
-        holdPoll: Bool = false
+        holdPoll: Bool = false, failFirstPoll: Bool = false
     ) throws {
         self.createResponse = try createResponse ?? createFixture()
         self.revealResponse = revealResponse
         self.results = results
         self.holdPoll = holdPoll
+        failPoll = failFirstPoll
     }
     func post(_ action: String, _ body: JSONValue) async throws -> JSONValue {
         calls.append(Call(action: action, body: body))
@@ -526,6 +567,10 @@ private actor PairingEndpoint {
         if action == "create" { return createResponse }
         if action == "reveal" { return revealResponse }
         if action == "cancel" { return ["status": "expired"] }
+        if failPoll {
+            failPoll = false
+            throw DevicePairingRetryableError(message: "transient", retryAfter: nil)
+        }
         if holdPoll {
             return await withCheckedContinuation {
                 pollContinuation = $0

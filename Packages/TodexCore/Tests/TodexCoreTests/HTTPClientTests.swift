@@ -89,11 +89,22 @@ struct HTTPClientTests {
             configurationMessage(result(200, #"{"requiredProtocol":"x25519"}"#), local)
                 == SecureTransportError.pairingRequired.localizedDescription)
         let encrypted = BackendConnection(encryption: .x25519, publicKey: "configured", transportVerified: true)
-        try RealtimeClient.validatePolicy(result(200, #"{"requiredProtocol":"none"}"#), connection: encrypted)
-        try RealtimeClient.validatePolicy(result(200, #"{"requiredProtocol":"x25519"}"#), connection: encrypted)
+        try RealtimeClient.validatePolicy(
+            result(200, #"{"requiredProtocol":"none","sealedRevision":2}"#), connection: encrypted)
+        try RealtimeClient.validatePolicy(
+            result(200, #"{"requiredProtocol":"x25519","sealedRevision":2}"#), connection: encrypted)
         #expect(
-            configurationMessage(result(200, #"{"requiredProtocol":"ml-kem-768"}"#), encrypted)
+            configurationMessage(result(200, #"{"requiredProtocol":"ml-kem-768","sealedRevision":2}"#), encrypted)
                 == SecureTransportError.repairRequired.localizedDescription)
+        // A pinned profile needs sealed REST revision 2: no fallback.
+        for policy in [
+            #"{"requiredProtocol":"x25519"}"#, #"{"requiredProtocol":"x25519","sealedRevision":1}"#,
+            #"{"requiredProtocol":"x25519","sealedRevision":"2"}"#, #"{"requiredProtocol":"x25519","sealedRevision":2.5}"#,
+        ] {
+            #expect(
+                configurationMessage(result(200, policy), encrypted)
+                    == SecureTransportError.backendUpgradeRequired.localizedDescription, "\(policy)")
+        }
         let remote = BackendConnection(serverURL: "https://lan.example")
         #expect(
             configurationMessage(result(200, #"{"requiredProtocol":"none"}"#), remote)

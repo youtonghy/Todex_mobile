@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import Synchronization
 
 /// Per-device Ed25519 identity. The 32-byte seed is the only secret material;
 /// it is stored in Keychain and never leaves the device. `deviceID` is
@@ -105,10 +106,14 @@ public struct DeviceIdentity: Sendable {
     }
 
     /// Signed headers for an HTTP request (or a WebSocket handshake that can
-    /// set headers). `pathAndQuery` is the request target as sent on the wire.
-    public func authHeaders(method: String, pathAndQuery: String, body: Data = Data()) throws -> [String: String] {
+    /// set headers). `pathAndQuery` is the request target as sent on the wire;
+    /// `now` is the signing time (`BackendClock.now(for:)` corrects it by the
+    /// backend's clock offset).
+    public func authHeaders(method: String, pathAndQuery: String, body: Data = Data(), now: Date = Date()) throws
+        -> [String: String]
+    {
         let (path, query) = Self.split(pathAndQuery)
-        let timestamp = String(Int(Date().timeIntervalSince1970))
+        let timestamp = String(Int(now.timeIntervalSince1970))
         var nonceBytes = Data(count: 16)
         let status = nonceBytes.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
         // A failed RNG would leave an all-zero nonce, which the daemon's replay
@@ -132,8 +137,8 @@ public struct DeviceIdentity: Sendable {
     /// Credential as URL query parameters for clients that cannot set headers.
     /// The signature covers the existing query — including transport-encryption
     /// handshake parameters.
-    public func authQuery(pathAndQuery: String) throws -> String {
-        let headers = try authHeaders(method: "GET", pathAndQuery: pathAndQuery)
+    public func authQuery(pathAndQuery: String, now: Date = Date()) throws -> String {
+        let headers = try authHeaders(method: "GET", pathAndQuery: pathAndQuery, now: now)
         return [
             "device_id": deviceID,
             "auth_ts": headers["x-todex-auth-ts"]!,
@@ -158,5 +163,38 @@ public struct DeviceIdentity: Sendable {
 
     private static func escapeByte(_ byte: UInt8) -> String {
         String(format: "%%%02X", byte)
+    }
+}
+
+/// Per-backend clock offsets learned from authenticated `401
+/// AUTH_TIMESTAMP_REJECTED` answers (their `serverTime`), so a device whose
+/// clock drifted past the backend's ±300 s window can still sign. Only
+/// authenticated answers move it (inside the transport v2 tunnel, or the
+/// plaintext loopback transport); process-wide and bounded.
+enum BackendClock {
+    private static let limit = 32
+    /// Insertion-ordered: the oldest entry is evicted first.
+    private static let offsets = Mutex<[(key: String, seconds: TimeInterval)]>([])
+
+    /// Seconds to add to local time when signing for `connection`; 0 until learned.
+    static func offset(for connection: BackendConnection) -> TimeInterval {
+        let key = connection.addressKey
+        return offsets.withLock { $0.last { $0.key == key }?.seconds ?? 0 }
+    }
+
+    /// Local time corrected by the backend's offset.
+    static func now(for connection: BackendConnection, local: Date = Date()) -> Date {
+        local.addingTimeInterval(offset(for: connection))
+    }
+
+    /// Records `serverTime` (unix seconds) against the local clock.
+    static func record(serverTime: Int64, for connection: BackendConnection, local: Date = Date()) {
+        let key = connection.addressKey
+        let seconds = TimeInterval(serverTime) - local.timeIntervalSince1970
+        offsets.withLock { entries in
+            entries.removeAll { $0.key == key }
+            if entries.count >= limit { entries.removeFirst(entries.count - limit + 1) }
+            entries.append((key, seconds))
+        }
     }
 }

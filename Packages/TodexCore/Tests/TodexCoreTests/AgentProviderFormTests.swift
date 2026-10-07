@@ -199,6 +199,7 @@ struct ConnectionDiagnosticTests {
         (URLError(.notConnectedToInternet), .networkOffline, true),
         (URLError(.serverCertificateUntrusted), .tls, true),
         (TodexError.configuration("后端要求 x25519 加密，请导入对应公钥"), .encryptionPolicy, false),
+        (SecureTransportError.backendUpgradeRequired, .protocolMismatch, false),
         (TodexError.server(code: "401", message: "后端拒绝认证"), .authenticationFailed, false),
         (TodexError.server(code: "UNAUTHORIZED", message: "x"), .authenticationFailed, false),
         (TodexError.server(code: "502", message: "WebSocket 握手失败（HTTP 502）"), .serverError, true),

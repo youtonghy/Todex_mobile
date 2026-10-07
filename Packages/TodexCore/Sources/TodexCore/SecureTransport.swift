@@ -12,6 +12,12 @@ import Synchronization
 // - no pinned key, remote -> refused, never a plaintext fallback;
 // - no pinned key, loopback -> plaintext.
 // Callers see plain requests, responses and JSON text messages.
+//
+// Sealed REST is revision 2 (`X-Todex-Sealed-Revision: 2`, responses typed
+// `application/vnd.todex.sealed; r=2` and prefixed with a response nonce). A
+// sealed answer without `r=2`, or a transport policy without
+// `"sealedRevision": 2`, comes from an outdated backend
+// (`SecureTransportError.backendUpgradeRequired`); there is no fallback.
 
 public enum SecureTransportMode: Sendable, Equatable {
     case v2(EncryptionProtocol)
@@ -80,20 +86,31 @@ public enum SecureTransportError {
         return transportRejected
     }
 
+    /// The backend predates sealed REST revision 2: its `/v2/transport-policy`
+    /// lacks `"sealedRevision": 2`, or it answered a sealed request without
+    /// `r=2`. Never falls back; the backend must be updated.
+    public static var backendUpgradeRequired: TodexError {
+        .configuration(String(localized: "后端版本过旧，与当前客户端的加密请求格式不兼容。请升级后端后重新连接。", bundle: .module))
+    }
+
     /// Checks a `/v2/transport-policy` answer against the profile. The answer
     /// never downgrades a pinned profile to plaintext; a different required
-    /// protocol asks for re-pairing, and an unpinned profile facing a backend
-    /// that requires encryption asks for encrypted pairing.
-    public static func checkPolicy(_ connection: BackendConnection, requiredProtocol: String?) throws {
+    /// protocol asks for re-pairing, an unpinned profile facing a backend
+    /// that requires encryption asks for encrypted pairing, and a pinned
+    /// profile needs `sealedRevision` 2 (else the backend must be updated).
+    public static func checkPolicy(
+        _ connection: BackendConnection, requiredProtocol: String?, sealedRevision: Int?
+    ) throws {
         let mode = SecureTransportMode.resolve(connection)
         try mode.requireAllowed(connection)
-        guard let requiredProtocol, let required = EncryptionProtocol(rawValue: requiredProtocol), required != .none
-        else { return }
+        let required = requiredProtocol.flatMap(EncryptionProtocol.init(rawValue:)).flatMap { $0 == .none ? nil : $0 }
         switch mode {
-        case .v2(let pinned): if required != pinned { throw repairRequired }
+        case .v2(let pinned):
+            if let required, required != pinned { throw repairRequired }
+            if sealedRevision != TransportV2.sealedRevision { throw backendUpgradeRequired }
         // The backend refuses a plaintext WebSocket whenever it requires
         // encryption, loopback included; say so instead of a bare 403.
-        case .plaintext: throw pairingRequired
+        case .plaintext: if required != nil { throw pairingRequired }
         case .refused: return
         }
     }
@@ -239,7 +256,10 @@ public final class BackendSecureTransport: SecureTransport {
             // The signature covers the transport parameters (tv, enc, nonce,
             // key), binding the handshake to this enrolled device. The same
             // `device.deviceID` is bound into the key schedule above.
-            let auth = try device.authQuery(pathAndQuery: components.percentEncodedPath + (encoded.isEmpty ? "" : "?\(encoded)"))
+            // Signing time follows the backend's clock (`BackendClock`).
+            let auth = try device.authQuery(
+                pathAndQuery: components.percentEncodedPath + (encoded.isEmpty ? "" : "?\(encoded)"),
+                now: BackendClock.now(for: connection))
             encoded = encoded.isEmpty ? auth : "\(encoded)&\(auth)"
         }
         components.percentEncodedQuery = encoded.isEmpty ? nil : encoded

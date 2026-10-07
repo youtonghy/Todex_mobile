@@ -40,6 +40,12 @@ public struct ConnectionDiagnostic: Sendable, Equatable {
             return classify(URLError(URLError.Code(rawValue: nsError.code)), details: details)
         }
         switch error {
+        case TodexError.configuration(let message)
+        where message == SecureTransportError.backendUpgradeRequired.localizedDescription:
+            // Sealed REST revision 2 missing: updating the backend fixes it, re-pairing does not.
+            return .init(
+                category: .protocolMismatch, title: String(localized: "后端版本不兼容", bundle: .module),
+                suggestion: message, technicalDetails: details, retryable: false)
         case TodexError.configuration(let message):
             return .init(
                 category: .encryptionPolicy, title: String(localized: "传输加密配置不匹配", bundle: .module),

@@ -286,13 +286,15 @@ public actor RealtimeClient {
     /// `/v2/transport-policy` under the transport v2 client rules: the answer
     /// must be a valid policy (an older backend without it cannot speak v2),
     /// it never downgrades a pinned profile, and a different required
-    /// protocol than the pinned one asks for re-pairing.
+    /// protocol than the pinned one asks for re-pairing, and a pinned profile
+    /// needs `"sealedRevision": 2` (sealed REST revision 2).
     static func validatePolicy(_ response: HTTPResult, connection: BackendConnection) throws {
         let value = try response.json()
         guard case .object = value, let name = value["requiredProtocol"].optionalString,
             EncryptionProtocol(rawValue: name) != nil
         else { throw TodexError.invalid(CoreMessage.invalidPolicy) }
-        try SecureTransportError.checkPolicy(connection, requiredProtocol: name)
+        let revision = value["sealedRevision"].doubleValue.flatMap { $0.rounded() == $0 && abs($0) < 1e9 ? Int($0) : nil }
+        try SecureTransportError.checkPolicy(connection, requiredProtocol: name, sealedRevision: revision)
     }
 
     static func socketError(_ error: any Error, response: URLResponse?) -> any Error {

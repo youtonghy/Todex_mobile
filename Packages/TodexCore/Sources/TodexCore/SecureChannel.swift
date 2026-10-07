@@ -32,6 +32,13 @@ public enum TransportV2 {
     /// refused as `TRANSPORT_CRYPTO_FAILED`, so clients reject it before sealing.
     public static let maxRestBodyBytes = 32 * 1024 * 1024
     public static let sealedContentType = "application/vnd.todex.sealed"
+    /// Sealed REST revision 2: requests carry `X-Todex-Sealed-Revision: 2`,
+    /// responses `Content-Type: application/vnd.todex.sealed; r=2` and a body
+    /// of `response_nonce || records`, and `/v2/transport-policy` reports
+    /// `"sealedRevision": 2`.
+    public static let sealedRevision = 2
+    /// Length of the raw `response_nonce` that prefixes every sealed REST response body.
+    public static let responseNonceLength = 32
     public static let sealedPath = "/v2/sealed"
     public static let wsCloseCode = 4400
     public static let wsCloseReason = "transport crypto failure"
@@ -43,6 +50,7 @@ public enum TransportV2 {
         public static let clientKey = "x-todex-client-key"
         public static let kemCiphertext = "x-todex-kem-ciphertext"
         public static let requestNonce = "x-todex-request-nonce"
+        public static let sealedRevision = "x-todex-sealed-revision"
     }
 
     static let recordCiphertextMax = recordPlaintextMax + tagLength
@@ -171,11 +179,14 @@ public enum TransportKeySchedule {
         return Data(SHA256.hash(data: transcript))
     }
 
-    /// HKDF-SHA256 with `salt = th`, `ikm = shared`, info `label/up` and `label/down`.
+    /// WebSocket key schedule: HKDF-SHA256 with `salt = th`, `ikm = shared`,
+    /// info `label/up` and `label/down`. REST derives its down key per
+    /// response (`restKeys` + `restDownKey`), so it never uses this.
     static func derive(
         label: String, deviceID: String, serverStaticPublic: Data, handshake: TransportClientHandshake,
         clientNonce: Data, serverNonce: Data
     ) -> TransportKeys {
+        assert(label != TransportV2.restLabel, "REST keys come from restKeys and restDownKey")
         let th = transcriptHash(
             label: label, encryption: handshake.encryption, deviceID: deviceID, serverStaticPublic: serverStaticPublic,
             clientMaterial: handshake.clientMaterial, clientNonce: clientNonce, serverNonce: serverNonce)
@@ -183,6 +194,73 @@ public enum TransportKeySchedule {
             th: th,
             kUp: CryptoEncoding.derive(ikm: handshake.shared, salt: th, info: "\(label)/up"),
             kDown: CryptoEncoding.derive(ikm: handshake.shared, salt: th, info: "\(label)/down"))
+    }
+
+    /// REST key schedule up to the request: `th`, `prk = HKDF-Extract(salt =
+    /// th, ikm = shared)` and `k_up = HKDF-Expand(prk, "todex.transport.v2/rest/up", 32)`.
+    /// The response key needs the server's `response_nonce` (`restDownKey`).
+    static func restKeys(
+        serverStaticPublic: Data, handshake: TransportClientHandshake, clientNonce: Data
+    ) -> TransportRestKeys {
+        let th = transcriptHash(
+            label: TransportV2.restLabel, encryption: handshake.encryption, deviceID: "",
+            serverStaticPublic: serverStaticPublic, clientMaterial: handshake.clientMaterial, clientNonce: clientNonce,
+            serverNonce: Data())
+        let prk = SymmetricKey(data: HKDF<SHA256>.extract(inputKeyMaterial: handshake.shared, salt: th))
+        return TransportRestKeys(
+            th: th, prk: prk,
+            kUp: HKDF<SHA256>.expand(
+                pseudoRandomKey: prk, info: Data("\(TransportV2.restLabel)/up".utf8),
+                outputByteCount: TransportV2.keyLength))
+    }
+
+    /// `k_down = HKDF-Expand(prk, "todex.transport.v2/rest/down" || response_nonce, 32)`.
+    static func restDownKey(prk: SymmetricKey, responseNonce: Data) throws -> SymmetricKey {
+        guard prk.bitCount == TransportV2.keyLength * 8 else { throw TransportCryptoError("rest prk length") }
+        guard responseNonce.count == TransportV2.responseNonceLength else {
+            throw TransportCryptoError("response nonce length")
+        }
+        return HKDF<SHA256>.expand(
+            pseudoRandomKey: prk, info: Data("\(TransportV2.restLabel)/down".utf8) + responseNonce,
+            outputByteCount: TransportV2.keyLength)
+    }
+}
+
+/// The REST key schedule before the response arrives.
+struct TransportRestKeys: Sendable {
+    let th: Data
+    /// Kept until the response nonce arrives (`TransportRestResponseKey`).
+    let prk: SymmetricKey
+    let kUp: SymmetricKey
+}
+
+/// The response key material of one sealed request: `prk` and `th`, waiting
+/// for the 32-byte `response_nonce` that prefixes the response body. Single
+/// use: `cipher(for:)` derives `k_down` and drops `prk`.
+public final class TransportRestResponseKey {
+    private var prk: SymmetricKey?
+    private var th: Data
+
+    init(prk: SymmetricKey, th: Data) {
+        self.prk = prk
+        self.th = th
+    }
+
+    deinit { dispose() }
+
+    /// The down cipher for `responseNonce`; a second call throws.
+    public func cipher(for responseNonce: Data) throws -> TransportRecordCipher {
+        guard let prk else { throw TransportCryptoError("response already opened") }
+        self.prk = nil
+        defer { TransportBytes.wipe(&th) }
+        let kDown = try TransportKeySchedule.restDownKey(prk: prk, responseNonce: responseNonce)
+        return TransportRecordCipher(key: kDown, th: th, direction: TransportV2.directionDown)
+    }
+
+    /// Drops `prk` (CryptoKit zeroizes it on release) and wipes `th`.
+    public func dispose() {
+        prk = nil
+        TransportBytes.wipe(&th)
     }
 }
 
@@ -467,18 +545,37 @@ enum TransportInnerHead {
     }
 }
 
-/// Streaming decoder for a sealed REST response: authenticates the inner head
-/// as soon as its records arrive, then yields body chunks record by record.
+/// Streaming decoder for a sealed REST response body (`response_nonce ||
+/// records`): collects the 32-byte nonce (it may span chunks), derives
+/// `k_down`, authenticates the inner head as soon as its records arrive, then
+/// yields body chunks record by record.
 public final class TransportSealedResponseDecoder {
-    private let records: TransportRecordStreamDecoder
+    private var key: TransportRestResponseKey?
+    private var nonce = Data()
+    private var records: TransportRecordStreamDecoder?
     private var pending = Data()
     private var headLength: Int?
     public private(set) var head: TransportInnerResponseHead?
 
-    public init(cipher: TransportRecordCipher) { records = TransportRecordStreamDecoder(cipher: cipher) }
+    /// Takes ownership of `responseKey`.
+    public init(responseKey: TransportRestResponseKey) { key = responseKey }
+
+    deinit { dispose() }
 
     /// Body chunks completed by `chunk` (empty until the head is known).
     public func push(_ chunk: Data) throws -> [Data] {
+        var chunk = chunk
+        if records == nil {
+            guard let key else { throw TransportCryptoError("response key disposed") }
+            let take = min(chunk.count, TransportV2.responseNonceLength - nonce.count)
+            nonce += chunk.prefix(take)
+            guard nonce.count == TransportV2.responseNonceLength else { return [] }
+            self.key = nil
+            records = TransportRecordStreamDecoder(cipher: try key.cipher(for: nonce))
+            TransportBytes.wipe(&nonce)
+            chunk = Data(chunk.dropFirst(take))
+        }
+        guard let records else { throw TransportCryptoError("response key disposed") }
         let plaintexts = try records.push(chunk)
         if head != nil { return plaintexts.filter { !$0.isEmpty } }
         for plaintext in plaintexts { pending += plaintext }
@@ -494,12 +591,16 @@ public final class TransportSealedResponseDecoder {
     }
 
     public func finish() throws {
+        guard let records else { throw TransportCryptoError("truncated response nonce") }
         try records.finish()
         guard head != nil else { throw TransportCryptoError("truncated before inner head") }
     }
 
     public func dispose() {
-        records.dispose()
+        key?.dispose()
+        key = nil
+        records?.dispose()
+        TransportBytes.wipe(&nonce)
         TransportBytes.wipe(&pending)
     }
 }
@@ -507,13 +608,14 @@ public final class TransportSealedResponseDecoder {
 // MARK: - REST tunnel (client side)
 
 /// The outer `POST /v2/sealed` request for one inner request. Keep
-/// `responseCipher` to open the response; it holds `k_down` only.
+/// `responseKey` to open the response; it holds `prk` and `th` only, until
+/// the response nonce arrives.
 public struct TransportSealedRequest {
     /// Outer request headers (lowercase names).
     public let headers: [String: String]
     /// Record stream sealed with `k_up`.
     public let body: Data
-    public let responseCipher: TransportRecordCipher
+    public let responseKey: TransportRestResponseKey
 }
 
 public enum TransportRestTunnel {
@@ -533,9 +635,8 @@ public enum TransportRestTunnel {
         guard clientNonce.count == TransportV2.nonceLength else { throw TransportCryptoError("client nonce length") }
         var plaintext = try request.encoded()
         defer { TransportBytes.wipe(&plaintext) }
-        let keys = TransportKeySchedule.derive(
-            label: TransportV2.restLabel, deviceID: "", serverStaticPublic: serverPublicKey, handshake: handshake,
-            clientNonce: clientNonce, serverNonce: Data())
+        let keys = TransportKeySchedule.restKeys(
+            serverStaticPublic: serverPublicKey, handshake: handshake, clientNonce: clientNonce)
         let up = TransportRecordCipher(key: keys.kUp, th: keys.th, direction: TransportV2.directionUp)
         defer { up.dispose() }
         let body = try TransportRecordStream.seal(plaintext, cipher: up)
@@ -544,18 +645,24 @@ public enum TransportRestTunnel {
             headers: [
                 "content-type": TransportV2.sealedContentType,
                 TransportV2.Header.transport: String(TransportV2.version),
+                TransportV2.Header.sealedRevision: String(TransportV2.sealedRevision),
                 TransportV2.Header.encryption: handshake.encryption.rawValue,
                 handshake.encryption == .x25519 ? TransportV2.Header.clientKey : TransportV2.Header.kemCiphertext: material,
                 TransportV2.Header.requestNonce: CryptoEncoding.encode(clientNonce),
             ],
             body: body,
-            responseCipher: TransportRecordCipher(key: keys.kDown, th: keys.th, direction: TransportV2.directionDown))
+            responseKey: TransportRestResponseKey(prk: keys.prk, th: keys.th))
     }
 
-    /// One-shot open of a complete sealed response body.
-    public static func openResponse(_ body: Data, cipher: TransportRecordCipher) throws -> TransportInnerResponse {
+    /// One-shot open of a complete sealed response body: `response_nonce`
+    /// (32 bytes) followed by the record stream sealed with the nonce-bound `k_down`.
+    public static func openResponse(_ body: Data, key: TransportRestResponseKey) throws -> TransportInnerResponse {
+        defer { key.dispose() }
+        let body = Data(body)
+        guard body.count >= TransportV2.responseNonceLength else { throw TransportCryptoError("truncated response nonce") }
+        let cipher = try key.cipher(for: body.prefix(TransportV2.responseNonceLength))
         defer { cipher.dispose() }
-        var plaintext = try TransportRecordStream.open(body, cipher: cipher)
+        var plaintext = try TransportRecordStream.open(body.dropFirst(TransportV2.responseNonceLength), cipher: cipher)
         defer { TransportBytes.wipe(&plaintext) }
         return try TransportInnerResponse.decode(plaintext)
     }

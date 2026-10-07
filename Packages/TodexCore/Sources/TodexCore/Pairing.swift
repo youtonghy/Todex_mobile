@@ -119,6 +119,8 @@ public actor DevicePairingSession {
     /// Device pairing v3: commit to an ephemeral key and nonce, learn the
     /// server's key, then reveal. The code is fixed only after the reveal, so
     /// a man in the middle cannot grind its key against the 40-bit code.
+    /// `deviceName` is normalized (`DevicePairingName.normalize`) and sent
+    /// exactly as the transcript binds it.
     public static func begin(connection: BackendConnection, deviceName: String, device: DeviceIdentity) async throws -> DevicePairingSession {
         _ = try connection.normalizedURL()
         // Pairing is reachable directly on every listener and never goes
@@ -143,15 +145,18 @@ public actor DevicePairingSession {
         try Task.checkCancellation()
         let publicKey = privateKey.publicKey.rawRepresentation
         let commitment = try DevicePairingV3.commitment(clientPublic: publicKey, clientNonce: clientNonce)
+        let boundName = DevicePairingName.normalize(deviceName)
         let response = try await post(
             "create",
             [
                 "clientCommitment": .string(CryptoEncoding.encode(commitment)),
-                "deviceName": .string(sanitizedDeviceName(deviceName)),
+                "deviceName": .string(boundName),
                 "devicePublicKey": .string(device.publicKeyBase64URL),
-                // The server binds its transport protocol and key into the
-                // transcript; an older server answers 426.
+                // The server binds its transport protocol and key, and the
+                // device name as sent, into the transcript; an older server
+                // answers 426.
                 "transportBinding": 1,
+                "deviceNameBinding": 1,
             ])
         try Task.checkCancellation()
         guard let id = response["requestId"].optionalString,
@@ -172,7 +177,7 @@ public actor DevicePairingSession {
             publicKey: response["transportPublicKey"].optionalString, loopback: loopback)
         let material = try PairingMaterial(
             v3RequestID: id, privateKey: privateKey, serverPublicKey: serverKey, device: device,
-            clientNonce: clientNonce, transport: transport, transportKey: transportKey)
+            clientNonce: clientNonce, transport: transport, transportKey: transportKey, deviceName: boundName)
         let session = Self(
             requestID: id, expiresAt: expires, pollIntervalMilliseconds: Int(interval), material: material, post: post,
             now: now)
@@ -264,14 +269,94 @@ public actor DevicePairingSession {
         ]
     }
 
-    static func sanitizedDeviceName(_ value: String) -> String {
-        let scalars = value.unicodeScalars.filter {
-            !CharacterSet.controlCharacters.contains($0) && !(0x202A...0x202E).contains($0.value)
-                && !(0x2066...0x2069).contains($0.value)
+    /// The poll delay after a transient failure (`DevicePairingRetryableError`):
+    /// doubled, at least `Retry-After`, at most 5 s. A successful poll goes
+    /// back to `pollIntervalMilliseconds`.
+    public static func nextPollDelay(after previous: Duration, error: DevicePairingRetryableError) -> Duration {
+        min(max(previous * 2, error.retryAfter ?? .zero), pollMaxBackoff)
+    }
+
+    /// Longest wait between polls after transient failures.
+    public static let pollMaxBackoff: Duration = .seconds(5)
+}
+
+/// A pairing call that failed transiently: `429`, `5xx`, a network failure or
+/// a timeout. Polling backs off (`DevicePairingSession.nextPollDelay`) and
+/// continues until the request expires; it ends only on `404`, `401`/`403`,
+/// a rejected or expired request, or when the user cancels.
+public struct DevicePairingRetryableError: Error, LocalizedError, Sendable, Equatable {
+    public let message: String
+    /// The backend's `Retry-After`, when it sent one.
+    public let retryAfter: Duration?
+    public var errorDescription: String? { message }
+}
+
+/// Device names bound by device pairing v3 ("device name binding"): 1–80
+/// Unicode scalar values, no `Cc` control character, no bidi control
+/// (U+200E/U+200F, U+202A–U+202E, U+2066–U+2069) and no leading or trailing
+/// Unicode `White_Space`. The backend validates the name exactly as sent and
+/// stores it unchanged; TodeX_protocol's `devicePairingNameFailure` /
+/// `normalizeDevicePairingName` apply the same rule.
+public enum DevicePairingName {
+    /// Longest name, in Unicode scalar values.
+    public static let maxScalars = 80
+    public static let defaultName = "TodeX"
+
+    /// Why a name is invalid; raw values match the shared vectors.
+    public enum Failure: String, Sendable, Equatable {
+        case empty
+        case tooLong = "too_long"
+        case surroundingWhitespace = "surrounding_whitespace"
+        case control
+        case bidiControl = "bidi_control"
+    }
+
+    /// Why `name` is not a valid pairing device name, or nil when it is.
+    public static func failure(_ name: String) -> Failure? {
+        let scalars = name.unicodeScalars
+        if scalars.isEmpty { return .empty }
+        if scalars.count > maxScalars { return .tooLong }
+        if scalars.contains(where: isControl) { return .control }
+        if scalars.contains(where: isBidiControl) { return .bidiControl }
+        if isWhitespace(scalars.first!) || isWhitespace(scalars.last!) { return .surroundingWhitespace }
+        return nil
+    }
+
+    /// The name a client sends: drops control and bidi characters, trims
+    /// surrounding `White_Space`, keeps at most 80 scalar values (trimming
+    /// again after the cut) and falls back to `fallback` (normalized the same
+    /// way, then "TodeX") when nothing is left. The result always passes `failure`.
+    public static func normalize(_ name: String, fallback: String = defaultName) -> String {
+        func clean(_ value: String) -> String {
+            let kept = Array(value.unicodeScalars.filter { !isControl($0) && !isBidiControl($0) })
+            return trimmed(Array(trimmed(kept).unicodeScalars.prefix(maxScalars)))
         }
-        let trimmed = String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = String(String.UnicodeScalarView(trimmed.unicodeScalars.prefix(80)))
-        return name.isEmpty ? "TodeX" : name
+        for candidate in [clean(name), clean(fallback)] where !candidate.isEmpty { return candidate }
+        return defaultName
+    }
+
+    /// `Unicode.Scalar.Properties.isWhitespace` is the Unicode `White_Space`
+    /// property (as Rust's `char::is_whitespace`): U+00A0 and U+3000 are,
+    /// U+FEFF is not.
+    static func isWhitespace(_ scalar: Unicode.Scalar) -> Bool { scalar.properties.isWhitespace }
+
+    /// General category `Cc`: U+0000–U+001F and U+007F–U+009F.
+    static func isControl(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value <= 0x1F || (0x7F...0x9F).contains(scalar.value)
+    }
+
+    static func isBidiControl(_ scalar: Unicode.Scalar) -> Bool {
+        [0x200E, 0x200F].contains(scalar.value) || (0x202A...0x202E).contains(scalar.value)
+            || (0x2066...0x2069).contains(scalar.value)
+    }
+
+    private static func trimmed(_ scalars: [Unicode.Scalar]) -> String {
+        guard let start = scalars.firstIndex(where: { !isWhitespace($0) }),
+            let end = scalars.lastIndex(where: { !isWhitespace($0) })
+        else { return "" }
+        var view = String.UnicodeScalarView()
+        view.append(contentsOf: scalars[start...end])
+        return String(view)
     }
 }
 
@@ -280,27 +365,38 @@ typealias PairingPost = @Sendable (String, JSONValue) async throws -> JSONValue
 enum PairingBootstrap {
     /// HTTPClient supplies ephemeral/no-cookie/no-cache/no-redirect requests.
     /// The deadline cancels the underlying URLSession task, including a server
-    /// that trickles bytes to keep an inactivity timeout alive. No automatic retry.
+    /// that trickles bytes to keep an inactivity timeout alive. No automatic
+    /// retry here; transient failures (`429`, `5xx`, network, timeout) throw
+    /// `DevicePairingRetryableError` so the poll loop can back off.
     static func post(client: HTTPClient, action: String, body: JSONValue, timeout: Duration = .seconds(10)) async throws
         -> JSONValue
     {
         guard ["create", "reveal", "poll", "cancel"].contains(action) else { throw TodexError.invalid(String(localized: "设备验证操作无效", bundle: .module)) }
         return try await withThrowingTaskGroup(of: JSONValue.self) { group in
             group.addTask {
-                let result: JSONValue
+                let response: HTTPResult
                 do {
-                    result = try await client.request(
+                    response = try await client.response(
                         .post, path: "/v2/device-pairing/\(action)", body: body, authenticated: false)
-                } catch { throw describe(error, action: action) }
+                } catch {
+                    try Task.checkCancellation()
+                    throw describe(error, action: action)
+                }
                 try Task.checkCancellation()
-                guard case .object = result, try JSONEncoder().encode(result).count <= 16_384 else {
+                guard (200..<300).contains(response.statusCode) else {
+                    throw describe(status: response.statusCode, headers: response.headers, error: response.apiError(), action: action)
+                }
+                guard response.data.count <= 16_384, String(data: response.data, encoding: .utf8) != nil,
+                    let result = try? JSONDecoder().decode(JSONValue.self, from: response.data), case .object = result
+                else {
                     throw TodexError.invalid(String(localized: "设备验证响应无效或过大", bundle: .module))
                 }
                 return result
             }
             group.addTask {
                 try await Task.sleep(for: timeout)
-                throw TodexError.invalid(String(localized: "设备验证请求超时，请检查后端连接", bundle: .module))
+                throw DevicePairingRetryableError(
+                    message: String(localized: "设备验证请求超时，请检查后端连接", bundle: .module), retryAfter: nil)
             }
             defer { group.cancelAll() }
             guard let result = try await group.next() else { throw CancellationError() }
@@ -308,10 +404,40 @@ enum PairingBootstrap {
         }
     }
 
-    /// Desktop devicePairing parity: HTTP failures become actionable text. A
-    /// bare 404 (no JSON body) means the route is missing on an older backend;
-    /// a NOT_FOUND on poll/cancel means this request is gone, not the feature.
+    /// Desktop devicePairing parity: HTTP failures become actionable text.
+    /// `429` and `5xx` are transient (`DevicePairingRetryableError`, with
+    /// `Retry-After`). A bare 404 (no JSON body) means the route is missing on
+    /// an older backend; a NOT_FOUND on poll/cancel means this request is
+    /// gone, not the feature.
+    static func describe(status: Int, headers: [String: String], error: TodexError, action: String) -> any Error {
+        if status == 429 || (500..<600).contains(status) {
+            let message =
+                status == 429
+                ? String(localized: "设备申请过于频繁或队列已满，请稍后重试", bundle: .module)
+                : String(localized: "设备验证失败（HTTP \(String(status))），请检查后端状态", bundle: .module)
+            return DevicePairingRetryableError(message: message, retryAfter: retryAfter(headers["retry-after"]))
+        }
+        return describe(error, action: action)
+    }
+
+    /// `Retry-After` in delta-seconds; anything else is ignored.
+    static func retryAfter(_ value: String?) -> Duration? {
+        let text = (value ?? "").trimmingCharacters(in: .whitespaces)
+        guard (1...6).contains(text.utf8.count), text.utf8.allSatisfy({ (48...57).contains($0) }), let seconds = Int(text)
+        else { return nil }
+        return .seconds(seconds)
+    }
+
+    /// Maps a failure to actionable text. A request that never produced an
+    /// answer is transient: once a POST is handed to URLSession, HTTPClient
+    /// reports a lost connection or a read failure as an unknown outcome.
     static func describe(_ error: any Error, action: String) -> any Error {
+        switch error {
+        case TodexError.unknownOutcome, is URLError:
+            return DevicePairingRetryableError(
+                message: String(localized: "无法连接后端完成设备验证，请检查网络连接", bundle: .module), retryAfter: nil)
+        default: break
+        }
         guard case TodexError.server(let code, _) = error else { return error }
         switch code.uppercased() {
         case "404":
@@ -344,17 +470,18 @@ struct PairingMaterial: Sendable {
     /// client's 32-byte nonce, whose commitment the server saw before it chose
     /// its key, so a MITM can no longer grind a key against the 40-bit code,
     /// and the server's transport protocol and static key, so the code also
-    /// confirms the key the profile pins. HKDF is as in v2 with the v3 labels
-    /// (Clarification 6).
+    /// confirms the key the profile pins, and the device name sent in the
+    /// create request, so the code also confirms the name the backend shows.
+    /// HKDF is as in v2 with the v3 labels (Clarification 6).
     init(
         v3RequestID requestID: String, privateKey: Curve25519.KeyAgreement.PrivateKey, serverPublicKey: Data,
-        device: DeviceIdentity, clientNonce: Data, transport: PairingTransport, transportKey: Data
+        device: DeviceIdentity, clientNonce: Data, transport: PairingTransport, transportKey: Data, deviceName: String
     ) throws {
         let shared = try CryptoEncoding.sharedSecret(privateKey: privateKey, publicKey: serverPublicKey)
         let transcript = try DevicePairingV3.transcript(
             requestID: requestID, clientPublic: privateKey.publicKey.rawRepresentation, serverPublic: serverPublicKey,
             devicePublic: device.publicKey, clientNonce: clientNonce, transportProtocol: transport.encryption.rawValue,
-            transportPublicKey: transportKey)
+            transportPublicKey: transportKey, deviceName: deviceName)
         let salt = Data(SHA256.hash(data: transcript))
         self.transcript = transcript
         self.transport = transport
@@ -414,18 +541,25 @@ public enum DevicePairingV3 {
     }
 
     /// `domain || request_id || 0x00 || client_public || server_public || 0x00 || device_public || client_nonce
-    /// || LP(transport_protocol) || LP(transport_public_key)`; `none` has a zero-length key.
+    /// || LP(transport_protocol) || LP(transport_public_key) || LP(utf8(device_name))`; `none` has a
+    /// zero-length key. The name is the one sent in the create request (`deviceNameBinding: 1`) and must
+    /// pass `DevicePairingName.failure`.
     public static func transcript(
         requestID: String, clientPublic: Data, serverPublic: Data, devicePublic: Data, clientNonce: Data,
-        transportProtocol: String, transportPublicKey: Data
+        transportProtocol: String, transportPublicKey: Data, deviceName: String
     ) throws -> Data {
         try requireLengths(clientPublic: clientPublic, clientNonce: clientNonce)
         guard serverPublic.count == 32, devicePublic.count == 32 else {
             throw TodexError.invalid(String(localized: "设备验证密钥长度无效", bundle: .module))
         }
-        return Data(transcriptDomain.utf8) + Data(requestID.utf8) + Data([0]) + clientPublic + serverPublic + Data([0])
-            + devicePublic + clientNonce + TransportBytes.lengthPrefixed(Data(transportProtocol.utf8))
-            + TransportBytes.lengthPrefixed(transportPublicKey)
+        guard DevicePairingName.failure(deviceName) == nil else {
+            throw TodexError.invalid(String(localized: "设备名称无效", bundle: .module))
+        }
+        var transcript = Data(transcriptDomain.utf8)
+        transcript += Data(requestID.utf8) + Data([0]) + clientPublic + serverPublic + Data([0]) + devicePublic
+        transcript += clientNonce + TransportBytes.lengthPrefixed(Data(transportProtocol.utf8))
+        transcript += TransportBytes.lengthPrefixed(transportPublicKey) + TransportBytes.lengthPrefixed(Data(deviceName.utf8))
+        return transcript
     }
 
     private static func requireLengths(clientPublic: Data, clientNonce: Data) throws {

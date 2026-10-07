@@ -1905,6 +1905,34 @@
         }
       }
     },
+    "后端版本过旧，与当前客户端的加密请求格式不兼容。请升级后端后重新连接。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backend is too old for the encrypted requests this client sends. Update the backend, then reconnect."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドが古く、このクライアントの暗号化リクエスト形式に対応していません。バックエンドを更新してから再接続してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드 버전이 오래되어 이 클라이언트의 암호화 요청 형식과 호환되지 않습니다. 백엔드를 업데이트한 후 다시 연결하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端版本过旧，与当前客户端的加密请求格式不兼容。请升级后端后重新连接。"
+          }
+        }
+      }
+    },
     "后端的加密方式已变更，请重新配对": {
       "localizations": {
         "en": {
@@ -2941,6 +2969,34 @@
         }
       }
     },
+    "无法连接后端完成设备验证，请检查网络连接": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not reach the backend for device verification. Check the network connection."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイス認証のためにバックエンドへ接続できません。ネットワーク接続を確認してください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기기 인증을 위해 백엔드에 연결할 수 없습니다. 네트워크 연결을 확인하세요"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法连接后端完成设备验证，请检查网络连接"
+          }
+        }
+      }
+    },
     "服务器暂时不可用": {
       "localizations": {
         "en": {
@@ -3497,6 +3553,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "网络不可用"
+          }
+        }
+      }
+    },
+    "设备名称无效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid device name"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイス名が無効です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기기 이름이 유효하지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备名称无效"
           }
         }
       }
