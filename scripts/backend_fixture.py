@@ -14,6 +14,34 @@ import tempfile
 import time
 import urllib.request
 
+# The backend keeps every conversation end-to-end encrypted (history v3) and
+# refuses writes until a history recipient exists (HISTORY_KEY_REQUIRED).
+# Python has no X-Wing, so the fixture device's recipient is a fixed test
+# vector: seed = SHA-256("todex-mobile-fixture-history-recipient-v1"), public
+# key = HistoryCrypto.recipientKey(seed:).publicKey (X-Wing ML-KEM-768 +
+# X25519, base64url). backend_integration.py registers the public key; the
+# Swift live tests read the seed from history-seed.txt to decrypt.
+HISTORY_RECIPIENT_SEED = "IBNsVFOslrwDGrrndmQ9Lu3Jbq-LySdj3KOQgUgy8YY"
+HISTORY_RECIPIENT_PUBLIC_KEY = (
+    "UjAcAVx7_eGO36kjHWY9BylZEzRROSW1Y_eJ-WfMe4RpuAtyHXlTgUIMTenAe9WdkvRMoitVaexeuiiidNStXgEe1SWqpFV7"
+    "OvMmtPxCT8AGTQp7fMtc6lhSDKGTz6dIHRkMJewYOXtj2QJuDqWQ5cOZsTFTpny-k4sOsLSSlfwu6cVfcaNSi6FQHyxn47gQ"
+    "jQWjASEbKDsNcPfDcbbLyaFRb7OG-RCc1gAvVoptaRywnLyZNqxzLnZEsMcwlycqn_aqeTcMTHSlMvqHOyMxXbw-Fyxs7cbL"
+    "5Nk_lLGEGyktpNEtn1JNsAzL7NmdZQcwkOaBH9Ve-CcsodVrXWN23dFGuIE3JkuBfiIUezE5z8CWIsUaVeYQ2NBbiMKCDjYH"
+    "Ngg-D_yZ3TkuTCdUvuZbM4ZWUna6JlK4oGGaZXqbF8ikMAOs9yOX8ZW9imjGUTB1a2lU5HR8wZBXjWFNfQtt4kKnWbK3cffB"
+    "XxwQAFdcWssjfCZBEUobf1AI_tiuVdq5_QFlempA-NKT75N3EJCsDbwFz6g4gAKlqwhH-Zay0bAvmvAeNtEXE8Aim8qsjYFt"
+    "XRRXnQIhzqqp7aW8LOaRWUAToOCe3rzI4ZBVQrx1zNkaI4txOqdWvsKavKN8D0k40OjMoOg0jUm1VVkW4kw_SuUGMKOA59Me"
+    "AokzLtOGkDynlSNHFNAbhAG776pl0QFKYzyIwxwP9VyHBQaxLKGsCVmax-ZPyiwUXkYjlzm4limihQYSaKyLXMauNAzOGQWP"
+    "kMIR-iNWjuQauZZD02OVKzWjU6XKDYIOpiGBASheqIdjWluuRyXIFmNwzkyRnoSEc1GJbUwyQ5fPRTiBrhA6fxrNzuGWA0CG"
+    "xOFrvGiMYHZ7V9ewk5ItSRoAOXJ1HotVciGq3FHK5gPHanGGWeNmBbqB4lgMORR9ZvfFKiIoeFl0kEWDzjdGNpfDB6FzuPDI"
+    "ICrB8dYIIMm5-xMXdyC29niigxQ-6XS85UcXaYJ5OrKn7Dq1mQY9xBJBi5ikV-hRTIeqCvI_MPuZukSayiFUbJYj7hNL1CcF"
+    "Z2qxoNunxTjKkyE1w1zKuLFRZclxVDHB-yxh7JOs0bgpnxehWnq1yRdTVBGou6h38_Erdfm56fCxhRnF_Qe_RHWF1UIr75EM"
+    "lXSV_uyKRwuHKfBHR0NhIXolNRU79jVh4OoXKfiTGyq0tlZ7NFZO-jy9-oqBUBuKOzphmqFo3oTC2Uejmgu7TOMNTFOMGWCP"
+    "TbV7h7dcCrkN88nEYBJJFyyQQ_MEeQyXnYmFHLkOc7Zh30vJRGGUZqDBYbxMDSoUlEeAUSqg-mJCE4SN77GGM-ShIfhRj5aG"
+    "UaA8WNi1YBCBlllGtxSr-FDEBAW2c8Qc6WALxCObZaJrFHVAYXB3ayKKkeBJ3aq9VnkDRQBP9cWdU7xg03UmV0BbIIRyMDdZ"
+    "_0wLX5OBvMeIpRYrfNG20IRs8SQlQfx4Y0THCIwKmTOBZ9ULuqGhd-tBq6V4bYtG6nNWgiwiZwF8b1g3sSs7RomadcETBrJP"
+    "0sv6UphQwmqt6GTGC-au0iPi3W-om5q_SOA7zu_QLneol9quTLpPDrJ7joxHS14BZ6cXMD2BAeh7hz6mMRPVNQ"
+)
+
 
 def environment(root):
     # Deliberate child-process home directories. The invoking shell is unchanged.
@@ -58,6 +86,9 @@ def start(binary):
     device_b_path = root / "device-b.txt"
     device_b_path.write_text("KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio\n")
     device_b_path.chmod(0o600)
+    history_seed_path = root / "history-seed.txt"
+    history_seed_path.write_text(HISTORY_RECIPIENT_SEED + "\n")
+    history_seed_path.chmod(0o600)
     devices = {
         "version": 1,
         "devices": {
@@ -120,7 +151,8 @@ def start(binary):
         "backendSHA256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "home": str(home), "dataDir": str(root / "data"), "configPath": str(config_path),
         "workspaceRoot": str(root / "workspaces"), "workspace": str(workspace),
-        "deviceSecretPath": str(device_path), "logPath": str(root / "logs/backend.log"),
+        "deviceSecretPath": str(device_path), "historySeedPath": str(history_seed_path),
+        "historyRecipientPublicKey": HISTORY_RECIPIENT_PUBLIC_KEY, "logPath": str(root / "logs/backend.log"),
         "providerWireLog": str(root / "logs/provider-wire.jsonl"),
         "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }

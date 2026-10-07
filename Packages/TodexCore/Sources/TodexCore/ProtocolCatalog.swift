@@ -78,8 +78,6 @@ public enum ProtocolCatalog {
         case agentBrowserWatch = "agentBrowser.watch"
         case agentBrowserUnwatch = "agentBrowser.unwatch"
         case historyEncryptionGet = "history.encryption.get"
-        case historyEncryptionEnable = "history.encryption.enable"
-        case historyEncryptionDisable = "history.encryption.disable"
         case historyRecipientRegister = "history.recipient.register"
         case historyRecipientRevoke = "history.recipient.revoke"
         case historyRecoverySet = "history.recovery.set"
@@ -189,7 +187,7 @@ public enum ProtocolCatalog {
             support = .supported
             detail =
                 "Starts or stops agentBrowser.frame for one owned conversation's agent browser tab (latest frame wins, at most 8 per connection); idempotent."
-        case .historyEncryptionGet, .historyEncryptionEnable, .historyEncryptionDisable, .historyRecipientRegister,
+        case .historyEncryptionGet, .historyRecipientRegister,
             .historyRecipientRevoke, .historyRecoverySet, .historyGrantRequest, .historyGrantList, .historyGrantDismiss,
             .historyKeysList, .historyKeysWraps, .historyGrantFulfill, .historyDeviceRestore:
             support = .conditional

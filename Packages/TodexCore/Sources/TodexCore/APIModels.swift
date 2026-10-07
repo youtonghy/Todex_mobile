@@ -123,6 +123,12 @@ public struct ConversationManifest: Codable, Sendable, Identifiable, Equatable {
     public var lastSequence: Int
     public var createdAt: String
     public var updatedAt: String
+    /// History v3: a conversation written before forced end-to-end encryption.
+    /// Its journal is plaintext and read-only: viewing, export, archive and
+    /// delete still work, every write is refused with `HISTORY_READ_ONLY`.
+    /// The backend omits the field when false.
+    public var legacyPlaintext: Bool?
+    public var isLegacyPlaintext: Bool { legacyPlaintext == true }
 
     public init(
         id: String = UUID().uuidString,
@@ -136,7 +142,8 @@ public struct ConversationManifest: Codable, Sendable, Identifiable, Equatable {
         archivedAt: String? = nil,
         lastSequence: Int = 0,
         createdAt: String = Date().ISO8601Format(),
-        updatedAt: String? = nil
+        updatedAt: String? = nil,
+        legacyPlaintext: Bool? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -150,6 +157,7 @@ public struct ConversationManifest: Codable, Sendable, Identifiable, Equatable {
         self.lastSequence = lastSequence
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
+        self.legacyPlaintext = legacyPlaintext
     }
 }
 

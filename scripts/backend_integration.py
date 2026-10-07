@@ -16,12 +16,36 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from backend_fixture import read_fixture
+from backend_fixture import HISTORY_RECIPIENT_PUBLIC_KEY, read_fixture
 
 
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+# History v3 is always end-to-end encrypted: replay and subscriptions must
+# declare it (CLIENT_UPGRADE_REQUIRED otherwise), and event content arrives
+# only as an `$enc` envelope this stdlib verifier cannot open. Content is
+# checked by the Swift live tests (RealtimeLiveTests, HistoryE2ELiveTests),
+# which decrypt with the fixture's history seed.
+HISTORY_QUERY = {"historyEncryption": "1"}
+ENVELOPE_FIELDS = {"turnId", "clientRequestId", "requestId", "permissionId", "runtimeId", "operationId", "itemId",
+                   "messageId", "toolCallId", "subagentId", "role", "status", "scope", "code", "block", "control",
+                   "requestFingerprint", "textMac", "usage", "stopReason"}
+
+
+def require_sealed(event, conversation_id):
+    """Asserts the event's content is ciphertext (docs/history-encryption.md §5.2-5.3)."""
+    payload = event["payload"]
+    sealed = payload.get("$enc")
+    require(isinstance(sealed, dict), f"{event['type']} #{event['sequence']} is not encrypted: {json.dumps(payload)[:300]}")
+    require(sealed.get("v") == 1 and isinstance(sealed.get("kid"), str) and sealed["kid"], "Envelope version or kid")
+    require(sealed.get("c") == conversation_id and sealed.get("n") == event["sequence"], "Envelope AAD id or sequence")
+    require(isinstance(sealed.get("f"), str) or isinstance(sealed.get("fr"), dict), "Envelope carries no ciphertext")
+    leaked = set(payload) - ENVELOPE_FIELDS - {"$enc"}
+    require(not leaked, f"{event['type']} #{event['sequence']} has plaintext fields {sorted(leaked)}")
+    return payload
 
 
 # --- todex.device-auth.v1 -------------------------------------------------
@@ -175,7 +199,7 @@ class HTTP:
 
 
 class WebSocket:
-    def __init__(self, url, device_seed, expected_status=101):
+    def __init__(self, url, device_seed, expected_status=101, history=True):
         parsed = urllib.parse.urlsplit(url)
         self.sock = socket.create_connection((parsed.hostname, parsed.port), timeout=10)
         self.buffer = bytearray()
@@ -183,11 +207,14 @@ class WebSocket:
         key = base64.b64encode(os.urandom(16)).decode()
         # The handshake signature rides in the query so it can cover the
         # transport-crypto parameters too (none in this fixture).
-        query = ""
+        # `historyEncryption=1` (history v3 §5.4) is covered by the signature.
+        declared = HISTORY_QUERY if history else {}
+        query = "?" + urllib.parse.urlencode(declared) if declared else ""
         if device_seed is not None:
             device = DeviceAuth(device_seed)
-            signed = device.headers("GET", "/v2/ws")
+            signed = device.headers("GET", "/v2/ws", urllib.parse.urlencode(declared))
             query = "?" + urllib.parse.urlencode({
+                **declared,
                 "device_id": device.device_id,
                 "auth_ts": signed["x-todex-auth-ts"],
                 "auth_nonce": signed["x-todex-auth-nonce"],
@@ -400,6 +427,21 @@ def verify(root, manifest):
         sockets.append(ws)
         check("WS-ping", lambda: require(ws.command("server.ping", {})["pong"], "Missing pong"))
 
+        def history_recipient():
+            state = ws.command("history.encryption.get", {})
+            require(state["mode"] == "e2e", "History must always be end-to-end encrypted: " + json.dumps(state)[:300])
+            if not any(r["kind"] == "device" and not r.get("revokedAt") for r in state["recipients"]):
+                # A fresh fixture has no recipient yet: writes are refused until one registers.
+                refused = http.request("POST", "/v2/conversations", {"workspace": manifest["workspace"], "provider": "codex"}, status=409)
+                require(refused["code"] == "HISTORY_KEY_REQUIRED", "Write without a history recipient: " + json.dumps(refused))
+            for command in ("history.encryption.enable", "history.encryption.disable"):
+                ws.command(command, {}, error="UNSUPPORTED")
+            rid = ws.command("history.recipient.register", {"publicKey": HISTORY_RECIPIENT_PUBLIC_KEY})["rid"]
+            registered = ws.command("history.encryption.get", {})
+            require(registered["myRid"] == rid and registered["myAccess"] == "active", "Fixture recipient not registered")
+            return {"rid": rid, "epoch": registered["epoch"]}
+        check("history-e2e-recipient-register", history_recipient)
+
         def conversation_create():
             conversation = http.request("POST", "/v2/conversations", {"workspace": manifest["workspace"], "provider": "codex", "title": "Simulator Codex fixture"})
             conversation_id = conversation["id"]
@@ -417,9 +459,11 @@ def verify(root, manifest):
             require(http.request("GET", "/v2/conversations/" + cid)["status"] == "waiting_permission", "Permission waiting status")
             http.request("POST", "/v2/conversations/" + cid + "/permissions/" + event["payload"]["permissionId"], {"outcome": "allow_once"})
             resolved = ws.event(cid, "permission.resolved", event["sequence"])
-            require(resolved["payload"]["outcome"] == "allow_once", "Permission decision did not persist")
-            delta = ws.event(cid, "message.delta", event["sequence"])
-            require("permission:accept" in delta["payload"]["delta"], "Fake CLI did not receive approval")
+            require(require_sealed(resolved, cid).get("permissionId") == event["payload"]["permissionId"], "Permission resolution envelope")
+            require_sealed(event, cid)
+            # The decision and the fake CLI's "permission:accept" reply are
+            # ciphertext; RealtimeLiveTests decrypts and checks them.
+            require_sealed(ws.event(cid, "message.delta", event["sequence"]), cid)
             return ws.event(cid, "turn.completed", event["sequence"])["sequence"]
         last = check("REST-prompt-WS-events-permission-roundtrip", permission)
 
@@ -427,8 +471,8 @@ def verify(root, manifest):
             ws.command("conversation.prompt", {"conversationId": cid, "text": "fixture:hold"})
             started = ws.event(cid, "turn.started", last)
             try:
-                delta = ws.event(cid, "message.delta", started["sequence"])
-                require(delta["payload"]["delta"] == "Fixture holding until cancel", "Provider did not acknowledge held turn")
+                # The held turn's "Fixture holding until cancel" delta is ciphertext.
+                require_sealed(ws.event(cid, "message.delta", started["sequence"]), cid)
             finally:
                 http.request("POST", "/v2/conversations/" + cid + "/cancel")
             return ws.event(cid, "turn.cancelled", started["sequence"])["sequence"]
@@ -437,7 +481,7 @@ def verify(root, manifest):
         def replay():
             after, events = 0, []
             for _ in range(100):
-                page = http.request("GET", "/v2/conversations/" + cid + "/events", query={"afterSequence": after, "limit": 3})
+                page = http.request("GET", "/v2/conversations/" + cid + "/events", query={"afterSequence": after, "limit": 3, **HISTORY_QUERY})
                 events.extend(page["events"])
                 if not page["hasMore"]:
                     break
@@ -445,6 +489,16 @@ def verify(root, manifest):
                 after = page["nextSequence"]
             require([e["sequence"] for e in events] == list(range(1, len(events) + 1)), "Replay sequence gap or duplicate")
             require(len({e["eventId"] for e in events}) == len(events), "Duplicate event ids")
+            sealed = [e for e in events if "$enc" in e["payload"]]
+            for event in sealed:
+                require_sealed(event, cid)
+            require(any(e["type"] == "message.created" for e in sealed), "Replay carried no encrypted messages")
+            # Clients that do not declare history v3 are refused, over HTTP and WebSocket.
+            refused = http.request("GET", "/v2/conversations/" + cid + "/events", query={"afterSequence": 0}, status=426)
+            require(refused["code"] == "CLIENT_UPGRADE_REQUIRED", "Undeclared replay: " + json.dumps(refused))
+            legacy = WebSocket(manifest["url"], device_seed, history=False)
+            sockets.append(legacy)
+            legacy.command("conversation.subscribe", {"conversationId": cid, "afterSequence": 0}, error="CLIENT_UPGRADE_REQUIRED")
             reconnect = WebSocket(manifest["url"], device_seed)
             sockets.append(reconnect)
             cursor = max(0, events[-1]["sequence"] - 2)
@@ -452,7 +506,7 @@ def verify(root, manifest):
             actual = [f["payload"]["sequence"] for f in reconnect.inbox if f.get("type") == "conversation.event"]
             require(actual == list(range(cursor + 1, result["nextSequence"] + 1)), "Reconnect did not replay from cursor")
             (root / "conversation-events.json").write_text(json.dumps(events, indent=2) + "\n")
-            return {"eventCount": len(events), "reconnectAfter": cursor}
+            return {"eventCount": len(events), "encryptedEvents": len(sealed), "reconnectAfter": cursor}
         check("REST-pagination-and-WS-reconnect-replay", replay)
 
         def claude():
@@ -463,8 +517,8 @@ def verify(root, manifest):
             ws.command("conversation.prompt", {"conversationId": ccid, "text": "fixture:permission"})
             event = ws.event(ccid, "permission.requested")
             ws.command("conversation.permission.respond", {"conversationId": ccid, "permissionId": event["payload"]["permissionId"], "decision": {"outcome": "allow_once"}})
-            delta = ws.event(ccid, "message.delta", event["sequence"])
-            require("permission:allow" in delta["payload"]["delta"]["text"], "Claude permission response not delivered")
+            # "permission:allow" is in the ciphertext; RealtimeLiveTests decrypts it.
+            require_sealed(ws.event(ccid, "message.delta", event["sequence"]), ccid)
             ws.event(ccid, "turn.completed", event["sequence"])
             return ccid
         check("Claude-stream-json-permission-and-completion", claude)

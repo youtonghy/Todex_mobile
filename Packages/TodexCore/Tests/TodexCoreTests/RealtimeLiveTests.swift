@@ -117,10 +117,18 @@ struct RealtimeLiveTests {
         }
     }
 
+    /// History is always end-to-end encrypted: identifiers (`turnId`,
+    /// `permissionId`, `role`, …) stay in the envelope, the decision and the
+    /// provider's text are decrypted with the fixture device's history key.
     @Test(arguments: ["codex", "claude-code"])
     func actualSwiftPromptPermissionCompletionAndReconnect(_ provider: String) async throws {
         let fixture = try LiveFixture()
         let conversationID = try await withLiveClient(fixture.connection) { client, frames in
+            let keys = try await fixture.historyKeys(HistoryAPI(client: client))
+            let decrypt = { (event: JSONValue) async throws -> JSONValue in
+                #expect(HistoryEncryption.isEncrypted(event["payload"]), "\(event["type"]) was not encrypted")
+                return try await keys.decrypt(event.decoded(ConversationEvent.self), frames: .null).payload
+            }
             let created = try await client.command(
                 type: "conversation.create",
                 payload: [
@@ -158,9 +166,9 @@ struct RealtimeLiveTests {
                 #expect(accepted["accepted"] == true)
                 #expect(accepted["permissionId"] == .string(permissionID))
                 let resolved = try await frames.event(conversationID, "permission.resolved", turnID: turnID)
-                #expect(resolved["payload"]["outcome"] == "allow_once")
-                let delta = try await frames.event(conversationID, "message.delta", turnID: turnID)
-                let text = delta["payload"]["delta"].optionalString ?? delta["payload"]["delta"]["text"].stringValue
+                #expect(try await decrypt(resolved)["outcome"] == "allow_once")
+                let delta = try await decrypt(frames.event(conversationID, "message.delta", turnID: turnID))
+                let text = delta["delta"].optionalString ?? delta["delta"]["text"].stringValue
                 #expect(text.contains(provider == "codex" ? "permission:accept" : "permission:allow"))
                 let completed = try await frames.event(conversationID, "turn.completed", turnID: turnID)
                 #expect(completed["sequence"].intValue > permission["sequence"].intValue)
@@ -211,6 +219,29 @@ struct LiveFixture: Sendable {
         workspace = try #require(manifest["workspace"].optionalString)
         conversationID = try #require(manifest["conversationId"].optionalString)
         dataDirectory = URL(fileURLWithPath: try #require(manifest["dataDir"].optionalString))
+        historySeedPath = manifest["historySeedPath"].optionalString.map(URL.init(fileURLWithPath:))
+    }
+
+    /// `history-seed.txt`: the fixed X-Wing seed whose public key
+    /// backend_integration.py registers for the fixture device.
+    private let historySeedPath: URL?
+
+    func historySeed() throws -> Data {
+        let path = try #require(historySeedPath, "Start a new fixture: this one predates history-seed.txt")
+        return try CryptoEncoding.decode(
+            String(contentsOf: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), count: 32)
+    }
+
+    /// The fixture device's history keys, registered again when a test or
+    /// the simulator app replaced them (registration is idempotent).
+    func historyKeys(_ history: HistoryAPI) async throws -> HistoryDecryptor {
+        let keys = try HistoryDecryptor(deviceSeed: historySeed()) { conversationId, kids, _ in
+            try await history.wraps(conversationId: conversationId, kids: kids)
+        }
+        if try await history.state().myRid != HistoryEncryption.encodeID(keys.deviceRecipientID) {
+            _ = try await history.register(publicKey: keys.devicePublicKey)
+        }
+        return keys
     }
 }
 

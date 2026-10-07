@@ -143,6 +143,14 @@ struct APIClientTests {
         #expect(decoded.archivedAt == "2026-09-10T12:00:00.123456Z")
         #expect(decoded.createdAt == "2026-09-10T11:00:00.123456Z")
         #expect(decoded.lastSequence == 7)
+        #expect(!decoded.isLegacyPlaintext && decoded.legacyPlaintext == nil)
+        // History v3: the backend omits `legacyPlaintext` when false; when set
+        // it survives a local round trip (the cached conversation list).
+        manifest["legacyPlaintext"] = true
+        let legacy = try manifest.decoded(ConversationManifest.self)
+        #expect(legacy.isLegacyPlaintext)
+        #expect(try JSONValue(encoding: legacy).decoded(ConversationManifest.self).isLegacyPlaintext)
+        #expect(try JSONValue(encoding: decoded)["legacyPlaintext"] == .null)
 
         let provider = try TestWire.provider.decoded(ProviderDescriptor.self)
         #expect(provider.profiles == ["local", "custom"])
@@ -361,7 +369,7 @@ struct APIClientTests {
             codex.cloudTask.create codex.cloudTask.list codex.cloudTask.getSummary codex.cloudTask.getDiff codex.cloudTask.getMessages
             codex.cloudTask.getText codex.cloudTask.listSiblingAttempts codex.cloudTask.applyPreflight codex.cloudTask.apply
             agentBrowser.watch agentBrowser.unwatch
-            history.encryption.get history.encryption.enable history.encryption.disable history.recipient.register
+            history.encryption.get history.recipient.register
             history.recipient.revoke history.recovery.set history.grant.request history.grant.list history.grant.dismiss
             history.keys.list history.keys.wraps history.grant.fulfill history.device.restore
             """.split(whereSeparator: \.isWhitespace).map(String.init))

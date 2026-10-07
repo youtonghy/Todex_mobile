@@ -16,6 +16,11 @@ public enum HistoryEncryption {
     /// This device was revoked: every history command but
     /// `history.encryption.get` fails until another device restores it.
     public static let accessRevoked = "HISTORY_ACCESS_REVOKED"
+    /// A write to a `legacyPlaintext` conversation: it is read-only.
+    public static let readOnly = "HISTORY_READ_ONLY"
+    /// A write needs at least one history recipient and there is none yet:
+    /// this device has to register its history key first.
+    public static let keyRequired = "HISTORY_KEY_REQUIRED"
     /// `history.keys.list`, `history.keys.wraps` and `history.grant.fulfill` batch limit.
     public static let batchLimit = 500
 
@@ -263,10 +268,11 @@ public struct HistoryRevokedDevice: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// `history.encryption.get|enable|disable`, `history.recipient.revoke` and
-/// `history.device.restore`.
+/// `history.encryption.get`, `history.recipient.revoke` and
+/// `history.device.restore`. History is always end-to-end encrypted; there
+/// is no mode to switch.
 public struct HistoryEncryptionState: Codable, Sendable, Equatable {
-    /// `off` or `e2e`.
+    /// Always `e2e`.
     public var mode: String
     public var epoch: Int
     public var recipients: [HistoryRecipient]
@@ -277,14 +283,13 @@ public struct HistoryEncryptionState: Codable, Sendable, Equatable {
     /// permanent revocation.
     public var myAccess: String?
     public var revokedDevices: [HistoryRevokedDevice]
-    public var isEnabled: Bool { mode == "e2e" }
     public var activeRecovery: HistoryRecipient? { recipients.first { $0.isRecovery && !$0.isRevoked } }
     /// This device is blocked: it must not register and cannot use history
     /// commands until another device restores it.
     public var isAccessRevoked: Bool { myAccess == "revoked" }
 
     public init(
-        mode: String = "off", epoch: Int = 0, recipients: [HistoryRecipient] = [], myRid: String? = nil,
+        mode: String = "e2e", epoch: Int = 0, recipients: [HistoryRecipient] = [], myRid: String? = nil,
         grants: [HistoryGrantRequest] = [], myAccess: String? = nil, revokedDevices: [HistoryRevokedDevice] = []
     ) {
         self.mode = mode
@@ -449,8 +454,6 @@ public struct HistoryAPI: Sendable {
     }
 
     public func state() async throws -> HistoryEncryptionState { try await state(.historyEncryptionGet) }
-    public func enable() async throws -> HistoryEncryptionState { try await state(.historyEncryptionEnable) }
-    public func disable() async throws -> HistoryEncryptionState { try await state(.historyEncryptionDisable) }
     public func revoke(rid: String) async throws -> HistoryEncryptionState {
         try await state(.historyRecipientRevoke, ["rid": .string(rid)])
     }

@@ -185,6 +185,10 @@ public enum TodexError: Error, LocalizedError, Sendable {
             String(localized: "此后端已开启会话历史端到端加密，当前客户端无法读取，请更新 TodeX 应用。", bundle: .module)
         case .server(HistoryEncryption.accessRevoked, _):
             String(localized: "此设备的历史访问已被吊销，需由其他已授权设备恢复", bundle: .module)
+        case .server(HistoryEncryption.readOnly, _):
+            String(localized: "这是旧版未加密的历史，只能查看、导出、归档或删除", bundle: .module)
+        case .server(HistoryEncryption.keyRequired, _):
+            String(localized: "本设备尚未登记历史密钥，正在重新登记，请稍后重试", bundle: .module)
         case .server(HistoryEncryption.storageLow, _), .server("507", _):
             String(localized: "后端所在电脑的磁盘可用空间不足 1 GiB，暂时无法发送新消息。请清理磁盘后重试。", bundle: .module)
         case .server(_, let message): message

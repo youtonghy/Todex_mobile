@@ -4,41 +4,52 @@ import Testing
 @testable import TodexCore
 
 /// History v3 end to end against the isolated fixture backend
-/// (docs/history-encryption.md §5.3, §5.4, §7). Part of the serialized
-/// `RealtimeLiveTests` suite so no plaintext-mode test overlaps it, and it
-/// switches encryption back off when done so their order does not matter.
-/// Conversations it encrypted stay encrypted.
+/// (docs/history-encryption.md §5.3, §5.4, §7). History is always end-to-end
+/// encrypted: there is no mode to switch, and conversations written before
+/// that (`legacyPlaintext`) are read-only.
 extension RealtimeLiveTests {
     @Test func actualEndToEndEncryptedHistory() async throws {
         let fixture = try LiveFixture()
         let api = APIClient(connection: fixture.connection)
         let wrapsClient = RealtimeClient(connection: fixture.connection)
         try await wrapsClient.connect()
-        let seed = try HistoryCrypto.generateRecipientKey().seedRepresentation
-        // The same wiring as AppSession.historyKeys(): the device's own wraps
-        // use the default (caller) recipient.
-        let keys = try HistoryDecryptor(deviceSeed: seed) { conversationId, kids, _ in
-            try await HistoryAPI(client: wrapsClient).wraps(conversationId: conversationId, kids: kids)
+        // The fixture device's key, registered by backend_integration.py; the
+        // same wiring as AppSession.historyKeys(): the device's own wraps use
+        // the default (caller) recipient.
+        do {
+            let keys = try await fixture.historyKeys(HistoryAPI(client: wrapsClient))
+            try await encryptedHistoryRoundTrip(fixture: fixture, api: api, wrapsClient: wrapsClient, keys: keys)
+        } catch {
+            await wrapsClient.disconnect()
+            throw error
         }
+        await wrapsClient.disconnect()
+    }
+
+    private func encryptedHistoryRoundTrip(
+        fixture: LiveFixture, api: APIClient, wrapsClient: RealtimeClient, keys: HistoryDecryptor
+    ) async throws {
         let token = "e2e-live-" + UUID().uuidString.lowercased()
         let prompt = "Encrypted prompt " + token
         let title = "Encrypted title " + token
         let renamed = "Renamed title " + token
-
         do {
-            let (earlier, conversationID) = try await withLiveClient(fixture.connection) { client, frames in
+            let conversationID = try await withLiveClient(fixture.connection) { client, frames in
                 let history = HistoryAPI(client: client)
-                // An existing plaintext conversation: enabling e2e re-encrypts
-                // it into sealed frames (§8), served as `fr` + `frames`.
-                let earlier = try await history.state().isEnabled ? nil : try await quietPlaintextConversation(fixture, keys)
                 let rid = try await history.register(publicKey: keys.devicePublicKey)
                 #expect(rid == HistoryEncryption.encodeID(keys.deviceRecipientID))
+                // Setting the recovery key is all there is: no switch follows.
                 let recovery = try HistoryCrypto.recipientKey(seed: HistoryRecoveryKey.generateSeed())
                 _ = try await history.setRecovery(publicKey: recovery.publicKey.rawRepresentation)
-                let enabled = try await history.enable()
-                #expect(enabled.isEnabled)
-                #expect(enabled.myRid == rid)
-                #expect(enabled.activeRecovery != nil)
+                let state = try await history.state()
+                #expect(state.mode == "e2e")
+                #expect(state.myRid == rid)
+                #expect(state.activeRecovery != nil)
+                for removed in ["history.encryption.enable", "history.encryption.disable"] {
+                    await expectServerError(["UNSUPPORTED", "INVALID_REQUEST", "400", "501"]) {
+                        _ = try await client.command(type: removed, payload: [:], timeout: 10)
+                    }
+                }
 
                 let turn = try await runTurn(client: client, frames: frames, fixture: fixture, prompt: prompt, title: title)
                 #expect(turn.created["title"].isNull)
@@ -52,7 +63,8 @@ extension RealtimeLiveTests {
                     live.append(try await keys.decrypt(event, frames: frame["frames"]))
                 }
                 try checkPlaintext(live, contains: [prompt, "Fixture Codex: " + prompt], detail: "live")
-                return (earlier, turn.conversationID)
+                #expect(try await api.conversation(id: turn.conversationID).isLegacyPlaintext == false)
+                return turn.conversationID
             }
 
             // Title: stored as `titleEnc` only, decrypted with the conversation's keyring.
@@ -66,22 +78,7 @@ extension RealtimeLiveTests {
             try await checkReplays(
                 fixture: fixture, api: api, keys: keys, conversationID: conversationID,
                 contains: [prompt, "Fixture Codex: " + prompt])
-            if let earlier {
-                let (earlierID, earlier) = earlier
-                try await waitForMigration(fixture: fixture, conversationID: earlierID)
-                let sealed = try await checkReplays(
-                    fixture: fixture, api: api, keys: keys, conversationID: earlierID, contains: [])
-                #expect(sealed.contains { $0.raw.payload[HistoryEncryption.Envelope.field]["fr"] != .null }, "no sealed frames")
-                // Re-encryption keeps every record; sealing may only compact
-                // deltas that a final record supersedes, and dedup hashes become MACs (§4.5).
-                #expect(sealed.map(\.raw.sequence) == earlier.map(\.sequence))
-                for (after, before) in zip(sealed.map(\.plain), earlier) where after.type == before.type {
-                    #expect(withoutDedupKeys(after.payload) == withoutDedupKeys(before.payload), "#\(before.sequence) \(before.type)")
-                }
-                try expectCiphertextJournal(fixture.dataDirectory.appendingPathComponent("conversations/\(earlierID)"))
-            } else {
-                print("No conversation was quiet for 2 minutes in plaintext; skipping the migration check")
-            }
+            try await checkLegacyPlaintextIsReadOnly(fixture: fixture, api: api)
 
             // Retry needs the decrypted prompt, taken the way AppSession takes
             // it: the newest user message of the projected runtime. Prompts run
@@ -240,13 +237,7 @@ extension RealtimeLiveTests {
             let directory = fixture.dataDirectory.appendingPathComponent("conversations/\(conversationID)")
             #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("keyring.json").path))
             try expectCiphertextJournal(directory)
-        } catch {
-            _ = try? await HistoryAPI(client: wrapsClient).disable()
-            await wrapsClient.disconnect()
-            throw error
         }
-        #expect(try await HistoryAPI(client: wrapsClient).disable().isEnabled == false)
-        await wrapsClient.disconnect()
     }
 }
 
@@ -266,16 +257,12 @@ extension RealtimeLiveTests {
         let clientA = RealtimeClient(connection: fixture.connection)
         try await clientA.connect()
         let historyA = HistoryAPI(client: clientA)
-        let wasEnabled = try await historyA.state().isEnabled
-        let seedA = try HistoryCrypto.generateRecipientKey().seedRepresentation
-        let keysA = try HistoryDecryptor(deviceSeed: seedA) { conversationId, kids, _ in
-            try await historyA.wraps(conversationId: conversationId, kids: kids)
-        }
+        let seedA = try fixture.historySeed()
+        let keysA = try await fixture.historyKeys(historyA)
         let token = "push-live-" + UUID().uuidString.lowercased()
         let prompt = "Granted prompt " + token
         do {
-            _ = try await historyA.register(publicKey: keysA.devicePublicKey)
-            if !wasEnabled { #expect(try await historyA.enable().isEnabled) }
+            #expect(try await historyA.state().myRid == HistoryEncryption.encodeID(keysA.deviceRecipientID))
             let conversationID = try await withLiveClient(fixture.connection) { client, frames in
                 try await runTurn(client: client, frames: frames, fixture: fixture, prompt: prompt, title: "Push " + token)
                     .conversationID
@@ -358,11 +345,9 @@ extension RealtimeLiveTests {
             }
         } catch {
             _ = try? await historyA.restoreDevice(deviceBID)
-            if !wasEnabled { _ = try? await historyA.disable() }
             await clientA.disconnect()
             throw error
         }
-        if !wasEnabled { #expect(try await historyA.disable().isEnabled == false) }
         await clientA.disconnect()
     }
 }
@@ -443,43 +428,6 @@ private func checkReplays(
     return full
 }
 
-/// The full plaintext replay of a conversation the background migration will
-/// pick up right after e2e is enabled: idle and unchanged for over 2 minutes
-/// (`MIGRATION_QUIET`). Nil when there is none, e.g. on a fixture seeded
-/// moments ago.
-private func quietPlaintextConversation(_ fixture: LiveFixture, _ keys: HistoryDecryptor) async throws
-    -> (id: String, events: [ConversationEvent])?
-{
-    let http = HTTPClient(connection: fixture.connection)
-    let api = APIClient(connection: fixture.connection)
-    let quietSince = Date().addingTimeInterval(-150)
-    let dates = ISO8601DateFormatter()
-    dates.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    for manifest in try await http.request(path: "/v2/conversations")["conversations"].arrayValue
-    where manifest["historyEncryptedAt"].isNull && manifest["lastSequence"].intValue > 0
-        && !["running", "waiting_permission"].contains(manifest["status"].stringValue)
-    {
-        guard let updated = dates.date(from: manifest["updatedAt"].stringValue), updated < quietSince else { continue }
-        let id = manifest["id"].stringValue
-        let replay = try await restReplay(api: api, keys: keys, conversationID: id, detail: "full")
-        guard !replay.contains(where: { HistoryEncryption.isEncrypted($0.raw.payload) }) else { continue }
-        return (id, replay.map(\.plain))
-    }
-    return nil
-}
-
-/// A payload without the dedup fields that migration turns into MACs.
-private func withoutDedupKeys(_ payload: JSONValue) -> JSONValue {
-    var fields = payload.objectValue
-    fields["requestFingerprint"] = nil
-    fields["textMac"] = nil
-    if case .object(var control)? = fields["control"] {
-        control["textMac"] = nil
-        fields["control"] = .object(control)
-    }
-    return .object(fields)
-}
-
 /// Journal lines carry ciphertext (`x`, never `c`) and the last request has no prompt text.
 private func expectCiphertextJournal(_ directory: URL) throws {
     for name in try FileManager.default.contentsOfDirectory(atPath: directory.path)
@@ -499,15 +447,32 @@ private func expectCiphertextJournal(_ directory: URL) throws {
     }
 }
 
-/// Polls the manifest until the background migration stamps `historyEncryptedAt`.
-private func waitForMigration(fixture: LiveFixture, conversationID: String) async throws {
-    let http = HTTPClient(connection: fixture.connection)
-    let deadline = ContinuousClock.now.advanced(by: .seconds(60))
-    while ContinuousClock.now < deadline {
-        if try await !http.request(path: "/v2/conversations/\(conversationID)")["historyEncryptedAt"].isNull { return }
-        try await Task.sleep(for: .milliseconds(100))
+/// Conversations written before history was always encrypted are listed with
+/// `legacyPlaintext` and stay plaintext: reads and export work, every write is
+/// refused with `HISTORY_READ_ONLY` (409). A fresh fixture has none, so this
+/// only runs against one that carries such a conversation.
+private func checkLegacyPlaintextIsReadOnly(fixture: LiveFixture, api: APIClient) async throws {
+    guard let legacy = try await api.conversations().first(where: \.isLegacyPlaintext) else {
+        print("No legacyPlaintext conversation on this fixture; skipping the read-only check")
+        return
     }
-    Issue.record("Conversation \(conversationID) was not re-encrypted within 60 s")
+    let page = try await api.events(conversationId: legacy.id, after: 0, limit: 50, detail: "full")
+    #expect(!page["events"].arrayValue.contains { HistoryEncryption.isEncrypted($0["payload"]) })
+    let readOnly: Set<String> = [HistoryEncryption.readOnly, "409"]
+    try await withLiveClient(fixture.connection) { client, _ in
+        let target: JSONValue = ["conversationId": .string(legacy.id)]
+        var prompt = target
+        prompt["text"] = "must not be written"
+        await expectServerError(readOnly) {
+            _ = try await client.command(type: "conversation.prompt", payload: prompt, timeout: 10)
+        }
+        await expectServerError(readOnly) {
+            _ = try await client.command(type: "conversation.fork", payload: target, timeout: 10)
+        }
+    }
+    await expectServerError(readOnly) {
+        _ = try await api.updateConversation(id: legacy.id, patch: ["title": "must not be written"])
+    }
 }
 
 /// Every event decrypted, and the plaintext contains each of `contains`.

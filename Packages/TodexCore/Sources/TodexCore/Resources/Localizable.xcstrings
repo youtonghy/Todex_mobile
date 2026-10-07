@@ -3165,6 +3165,34 @@
         }
       }
     },
+    "本设备尚未登记历史密钥，正在重新登记，请稍后重试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device hasn't registered its history key yet. Registering it again; try again shortly."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスの履歴キーはまだ登録されていません。再登録しています。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기기의 기록 키가 아직 등록되지 않았습니다. 다시 등록하는 중이니 잠시 후 다시 시도하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本设备尚未登记历史密钥，正在重新登记，请稍后重试"
+          }
+        }
+      }
+    },
     "此后端已开启会话历史端到端加密，当前客户端无法读取，请更新 TodeX 应用。": {
       "localizations": {
         "en": {
@@ -4197,6 +4225,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "请输入有效的 HTTP 或 HTTPS 后端地址"
+          }
+        }
+      }
+    },
+    "这是旧版未加密的历史，只能查看、导出、归档或删除": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This is legacy unencrypted history. You can only view, export, archive, or delete it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これは暗号化されていない旧形式の履歴です。表示、書き出し、アーカイブ、削除のみ可能です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "암호화되지 않은 이전 형식의 기록입니다. 보기, 내보내기, 보관, 삭제만 할 수 있습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这是旧版未加密的历史，只能查看、导出、归档或删除"
           }
         }
       }

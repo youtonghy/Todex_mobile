@@ -242,7 +242,7 @@ struct HistoryWireTests {
         let api = HistoryAPI { type, payload in
             sent.withLock { $0.append((type, payload)) }
             switch type {
-            case "history.encryption.get", "history.encryption.enable":
+            case "history.encryption.get":
                 return [
                     "mode": "e2e", "epoch": 3, "myRid": "r1",
                     "recipients": [["rid": "r1", "kind": "device", "deviceId": "dev_1", "publicKey": "pk", "addedAt": "t", "revokedAt": nil]],
@@ -257,11 +257,10 @@ struct HistoryWireTests {
             }
         }
         let state = try await api.state()
-        #expect(state.isEnabled && state.epoch == 3 && state.myRid == "r1")
+        #expect(state.mode == "e2e" && state.epoch == 3 && state.myRid == "r1")
         #expect(state.recipients.first?.deviceId == "dev_1" && state.recipients.first?.isRevoked == false)
         #expect(state.grants.first?.isPending == true)
         #expect(state.grants.first?.recipient?.publicKey == "pk2")
-        _ = try await api.enable()
         let publicKey = Data(repeating: 7, count: 1216)
         #expect(try await api.register(publicKey: publicKey) == "r9")
         #expect(try await api.requestGrant() == "grt_9")
@@ -272,17 +271,17 @@ struct HistoryWireTests {
         #expect(wraps.isEmpty)
         let log = sent.withLock { $0 }  // snapshot
         #expect(log.map(\.0) == [
-            "history.encryption.get", "history.encryption.enable", "history.recipient.register", "history.grant.request",
+            "history.encryption.get", "history.recipient.register", "history.grant.request",
             "history.grant.list", "history.grant.dismiss", "history.keys.list", "history.keys.wraps",
         ])
-        #expect(log[2].1 == ["publicKey": .string(CryptoEncoding.encode(publicKey))])
-        #expect(log[5].1 == ["grantId": "grt_1"])
-        #expect(log[6].1 == ["conversationId": "c", "cursor": "x", "limit": 500])
-        #expect(log[7].1 == ["conversationId": "c", "kids": ["AAAAAAAAAAAAAAAAAAAAAA"], "rid": "AQEBAQEBAQEBAQEBAQEBAQ"])
+        #expect(log[1].1 == ["publicKey": .string(CryptoEncoding.encode(publicKey))])
+        #expect(log[4].1 == ["grantId": "grt_1"])
+        #expect(log[5].1 == ["conversationId": "c", "cursor": "x", "limit": 500])
+        #expect(log[6].1 == ["conversationId": "c", "kids": ["AAAAAAAAAAAAAAAAAAAAAA"], "rid": "AQEBAQEBAQEBAQEBAQEBAQ"])
         await #expect(throws: TodexError.self) {
             try await api.wraps(conversationId: "c", kids: Array(repeating: Data(count: 16), count: 501))
         }
-        // An older backend's empty reply is reported, not decoded as "off".
+        // An older backend's empty reply is reported, not decoded as a state.
         let empty = HistoryAPI { _, _ in [:] }
         await #expect(throws: TodexError.self) { try await empty.state() }
     }
@@ -294,7 +293,13 @@ struct HistoryWireTests {
         #expect(storage.localizedDescription != "raw")
         #expect(TodexError.server(code: "507", message: "raw").localizedDescription == storage.localizedDescription)
         #expect(TodexError.server(code: "OTHER", message: "raw").localizedDescription == "raw")
+        for code in [HistoryEncryption.readOnly, HistoryEncryption.keyRequired] {
+            #expect(TodexError.server(code: code, message: "raw").localizedDescription != "raw")
+        }
         #expect(ProtocolCatalog.descriptor(type: "history.grant.fulfill")?.support == .conditional)
+        // History is always end-to-end encrypted: there is no switch to send.
+        #expect(ProtocolCatalog.descriptor(type: "history.encryption.enable") == nil)
+        #expect(ProtocolCatalog.descriptor(type: "history.encryption.disable") == nil)
     }
 
     @Test func manifestCarriesTheEncryptedTitle() throws {
