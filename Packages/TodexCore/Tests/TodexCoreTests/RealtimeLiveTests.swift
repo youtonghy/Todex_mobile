@@ -220,7 +220,11 @@ struct LiveFixture: Sendable {
         conversationID = try #require(manifest["conversationId"].optionalString)
         dataDirectory = URL(fileURLWithPath: try #require(manifest["dataDir"].optionalString))
         historySeedPath = manifest["historySeedPath"].optionalString.map(URL.init(fileURLWithPath:))
+        legacyConversationID = manifest["legacyConversationId"].optionalString
     }
+
+    /// A read-only `legacyPlaintext` conversation (`backend_fixture.py encrypt`).
+    let legacyConversationID: String?
 
     /// `history-seed.txt`: the fixed X-Wing seed whose public key
     /// backend_integration.py registers for the fixture device.

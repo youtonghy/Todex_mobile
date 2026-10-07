@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import uuid
 
 # The backend keeps every conversation end-to-end encrypted (history v3) and
 # refuses writes until a history recipient exists (HISTORY_KEY_REQUIRED).
@@ -230,15 +231,56 @@ def x25519_public(secret):
     return (x2 * pow(z2, p - 2, p) % p).to_bytes(32, "little")
 
 
+def seed_legacy_conversation(root, manifest):
+    """Writes one conversation from before history was always encrypted.
+
+    Only a stopped daemon may be changed underneath. The plaintext title and
+    journal (`c` lines, docs/history-encryption.md §4.2) make the startup scan
+    mark it `legacyPlaintext`, which is read-only; removing the scan marker
+    makes the next start classify it. Idempotent.
+    """
+    if manifest.get("legacyConversationId"):
+        return
+    conversation_id = str(uuid.uuid4())
+    directory = Path(manifest["dataDir"]) / "conversations" / conversation_id
+    directory.mkdir(parents=True)
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    micros = int(time.time() * 1_000_000)
+    prompt, answer = "Legacy plaintext prompt", "Legacy plaintext answer"
+    text = lambda value: [{"type": "text", "text": value}]
+    records = [
+        ("conversation.created", {"provider": "codex", "workspace": manifest["workspace"]}),
+        ("message.created", {"turnId": "turn_legacy", "role": "user", "text": prompt, "content": text(prompt)}),
+        ("message.completed", {"turnId": "turn_legacy", "role": "assistant", "text": answer,
+                               "message": {"role": "assistant", "content": text(answer)}}),
+        ("turn.completed", {"turnId": "turn_legacy", "status": "completed"}),
+    ]
+    lines = [json.dumps({"s": index, "i": "evt_" + uuid.uuid4().hex, "t": micros + index, "y": kind, "p": "codex", "c": payload})
+             for index, (kind, payload) in enumerate(records, 1)]
+    (directory / "events.jsonl").write_text("\n".join(lines) + "\n")
+    record = {
+        "schemaVersion": 2, "id": conversation_id, "provider": "codex", "ownerId": "local",
+        "workspace": manifest["workspace"], "workspaceId": manifest.get("workspaceId"),
+        "title": "Legacy plaintext fixture", "status": "idle", "lastSequence": len(records),
+        "createdAt": now, "updatedAt": now, "storageVersion": 3,
+    }
+    (directory / "manifest.json").write_text(json.dumps({k: v for k, v in record.items() if v is not None}, indent=2) + "\n")
+    (Path(manifest["dataDir"]) / "legacy-plaintext-scan.json").unlink(missing_ok=True)
+    manifest["legacyConversationId"] = conversation_id
+
+
 def encrypt(root, protocol):
     """Restarts the fixture with transport encryption and pins its key for clients.
 
     Run backend_integration.py first: its verifier speaks plaintext WebSocket,
     which the backend refuses once it requires encryption (loopback included).
+    While the daemon is stopped, a legacy plaintext conversation is seeded for
+    the read-only checks.
     """
     root, manifest = read_fixture(root)
     subprocess.run([manifest["backendBinary"], "daemon", "stop", "--data-dir", manifest["dataDir"]],
                    cwd=root, env=environment(root), capture_output=True, text=True, check=True, timeout=20)
+    seed_legacy_conversation(root, manifest)
     config_path = Path(manifest["configPath"])
     lines = [('pairing_encryption = ' + json.dumps(protocol)) if line.startswith("pairing_encryption") else line
              for line in config_path.read_text().split("\n")]

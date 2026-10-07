@@ -45,11 +45,6 @@ extension RealtimeLiveTests {
                 #expect(state.mode == "e2e")
                 #expect(state.myRid == rid)
                 #expect(state.activeRecovery != nil)
-                for removed in ["history.encryption.enable", "history.encryption.disable"] {
-                    await expectServerError(["UNSUPPORTED", "INVALID_REQUEST", "400", "501"]) {
-                        _ = try await client.command(type: removed, payload: [:], timeout: 10)
-                    }
-                }
 
                 let turn = try await runTurn(client: client, frames: frames, fixture: fixture, prompt: prompt, title: title)
                 #expect(turn.created["title"].isNull)
@@ -448,31 +443,41 @@ private func expectCiphertextJournal(_ directory: URL) throws {
 }
 
 /// Conversations written before history was always encrypted are listed with
-/// `legacyPlaintext` and stay plaintext: reads and export work, every write is
-/// refused with `HISTORY_READ_ONLY` (409). A fresh fixture has none, so this
-/// only runs against one that carries such a conversation.
+/// `legacyPlaintext` and stay plaintext: reads, archive and unarchive work,
+/// every write is refused with `HISTORY_READ_ONLY` (409). `backend_fixture.py
+/// encrypt` seeds one (`legacyConversationId`); older fixtures skip this.
 private func checkLegacyPlaintextIsReadOnly(fixture: LiveFixture, api: APIClient) async throws {
-    guard let legacy = try await api.conversations().first(where: \.isLegacyPlaintext) else {
-        print("No legacyPlaintext conversation on this fixture; skipping the read-only check")
+    guard let legacyID = fixture.legacyConversationID else {
+        print("This fixture has no legacy plaintext conversation; skipping the read-only check")
         return
     }
-    let page = try await api.events(conversationId: legacy.id, after: 0, limit: 50, detail: "full")
-    #expect(!page["events"].arrayValue.contains { HistoryEncryption.isEncrypted($0["payload"]) })
+    let legacy = try #require(try await api.conversations().first { $0.id == legacyID })
+    #expect(legacy.isLegacyPlaintext)
+    #expect(try await api.conversation(id: legacyID).isLegacyPlaintext)
+    let page = try await api.events(conversationId: legacyID, after: 0, limit: 50, detail: "full")
+    let events = page["events"].arrayValue
+    #expect(!events.isEmpty && !events.contains { HistoryEncryption.isEncrypted($0["payload"]) })
+    #expect(String(describing: page).contains("Legacy plaintext prompt"))
     let readOnly: Set<String> = [HistoryEncryption.readOnly, "409"]
     try await withLiveClient(fixture.connection) { client, _ in
-        let target: JSONValue = ["conversationId": .string(legacy.id)]
+        let target: JSONValue = ["conversationId": .string(legacyID)]
         var prompt = target
         prompt["text"] = "must not be written"
-        await expectServerError(readOnly) {
-            _ = try await client.command(type: "conversation.prompt", payload: prompt, timeout: 10)
-        }
-        await expectServerError(readOnly) {
-            _ = try await client.command(type: "conversation.fork", payload: target, timeout: 10)
+        var queued = prompt
+        queued["itemId"] = .string(UUID().uuidString)
+        for (type, payload) in [
+            ("conversation.prompt", prompt), ("conversation.queue.add", queued), ("conversation.fork", target),
+            ("conversation.compact", target),
+        ] {
+            await expectServerError(readOnly) { _ = try await client.command(type: type, payload: payload, timeout: 10) }
         }
     }
     await expectServerError(readOnly) {
-        _ = try await api.updateConversation(id: legacy.id, patch: ["title": "must not be written"])
+        _ = try await api.updateConversation(id: legacyID, patch: ["title": "must not be written"])
     }
+    // Archive state is not history: it still toggles.
+    #expect(try await api.updateConversation(id: legacyID, patch: ["archived": true]).archivedAt != nil)
+    #expect(try await api.updateConversation(id: legacyID, patch: ["archived": false]).archivedAt == nil)
 }
 
 /// Every event decrypted, and the plaintext contains each of `contains`.

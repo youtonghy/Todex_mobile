@@ -434,8 +434,12 @@ def verify(root, manifest):
                 # A fresh fixture has no recipient yet: writes are refused until one registers.
                 refused = http.request("POST", "/v2/conversations", {"workspace": manifest["workspace"], "provider": "codex"}, status=409)
                 require(refused["code"] == "HISTORY_KEY_REQUIRED", "Write without a history recipient: " + json.dumps(refused))
+            # The switch is gone: the backend no longer parses these commands
+            # and answers with an id-less protocol error.
             for command in ("history.encryption.enable", "history.encryption.disable"):
-                ws.command(command, {}, error="UNSUPPORTED")
+                ws.send(command, {})
+                refused = ws.wait(lambda f: f.get("type") == "error" and "`" + command + "`" in f["payload"].get("message", ""))
+                require(refused["payload"]["code"] == "INVALID_REQUEST", "Removed command: " + json.dumps(refused)[:300])
             rid = ws.command("history.recipient.register", {"publicKey": HISTORY_RECIPIENT_PUBLIC_KEY})["rid"]
             registered = ws.command("history.encryption.get", {})
             require(registered["myRid"] == rid and registered["myAccess"] == "active", "Fixture recipient not registered")
