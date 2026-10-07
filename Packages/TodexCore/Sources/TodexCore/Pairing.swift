@@ -209,7 +209,12 @@ public actor DevicePairingSession {
         } catch {
             // The reveal may have reached the backend; withdraw it so no
             // orphaned code waits for approval. Unrevealed requests expire.
-            Task { try? await session.cancel() }
+            Task {
+                do { try await session.cancel() } catch {
+                    // Best effort: the request still expires on the backend.
+                    DebugLog.record("pairing.cancel.failed", ["error": String(describing: error)], level: .warn)
+                }
+            }
             throw error
         }
         return session

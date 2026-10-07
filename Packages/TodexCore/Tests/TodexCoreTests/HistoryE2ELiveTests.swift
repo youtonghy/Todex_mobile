@@ -550,9 +550,12 @@ private struct PreHistoryTransport: SecureTransport {
     let base: BackendSecureTransport
     var mode: SecureTransportMode { base.mode }
     func request(
-        method: HTTPMethod, path: String, query: [String: String], headers: [String: String], body: Data?
+        method: HTTPMethod, path: String, query: [String: String], headers: [String: String], body: Data?,
+        timeout: TimeInterval, maximumBytes: Int
     ) async throws -> SecureTransportResponse {
-        try await base.request(method: method, path: path, query: query, headers: headers, body: body)
+        try await base.request(
+            method: method, path: path, query: query, headers: headers, body: body, timeout: timeout,
+            maximumBytes: maximumBytes)
     }
     func openWebSocket(path: String, query: [String: String]) async throws -> any SecureWebSocket {
         try await base.openWebSocket(path: path, query: query.filter { $0.key != "historyEncryption" })

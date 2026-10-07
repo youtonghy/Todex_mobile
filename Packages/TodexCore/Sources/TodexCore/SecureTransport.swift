@@ -94,10 +94,14 @@ extension BackendConnection {
         if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
         if host.hasSuffix(".") { host.removeLast() }
         if ["localhost", "::1", "0:0:0:0:0:0:0:1"].contains(host) { return true }
+        // Canonical dotted-quad decimal only. A leading zero is not loopback
+        // here: the system resolver reads `127.0.0.010` as octal and sends
+        // `127.0.0.08` to DNS as a host name (Darwin's inet_pton accepts both).
         let parts = host.split(separator: ".", omittingEmptySubsequences: false)
         if parts.count == 4, parts[0] == "127" {
             return parts.allSatisfy { part in
-                !part.isEmpty && part.allSatisfy(\.isASCII) && part.allSatisfy(\.isNumber) && (Int(part) ?? 256) <= 255
+                (1...3).contains(part.utf8.count) && part.utf8.allSatisfy { (48...57).contains($0) }
+                    && (part == "0" || part.first != "0") && (Int(part) ?? 256) <= 255
             }
         }
         if host.hasPrefix("::ffff:") {
@@ -136,11 +140,26 @@ public protocol SecureTransport: Sendable {
     var mode: SecureTransportMode { get }
     /// `path` is the API path (`/v2/...`, already segment-escaped where
     /// needed), `query` raw key/values. Device-auth signs the inner request.
+    /// `timeout` bounds the whole exchange; reading stops as soon as the
+    /// (inner) body exceeds `maximumBytes`.
     func request(
-        method: HTTPMethod, path: String, query: [String: String], headers: [String: String], body: Data?
+        method: HTTPMethod, path: String, query: [String: String], headers: [String: String], body: Data?,
+        timeout: TimeInterval, maximumBytes: Int
     ) async throws -> SecureTransportResponse
     /// Opens a WebSocket; under v2 returns after the server hello.
     func openWebSocket(path: String, query: [String: String]) async throws -> any SecureWebSocket
+}
+
+extension SecureTransport {
+    /// A request with `HTTPClient`'s default timeout and body limit.
+    public func request(
+        method: HTTPMethod, path: String, query: [String: String] = [:], headers: [String: String] = [:],
+        body: Data? = nil
+    ) async throws -> SecureTransportResponse {
+        try await request(
+            method: method, path: path, query: query, headers: headers, body: body,
+            timeout: HTTPClient.defaultTimeout, maximumBytes: HTTPClient.defaultMaximumBytes)
+    }
 }
 
 /// Default transport for a backend profile, over URLSession.
@@ -167,10 +186,12 @@ public final class BackendSecureTransport: SecureTransport {
     }
 
     public func request(
-        method: HTTPMethod, path: String, query: [String: String] = [:], headers: [String: String] = [:],
-        body: Data? = nil
+        method: HTTPMethod, path: String, query: [String: String], headers: [String: String], body: Data?,
+        timeout: TimeInterval, maximumBytes: Int
     ) async throws -> SecureTransportResponse {
-        let result = try await http.response(method, path: path, query: query, rawBody: body, headers: headers)
+        let result = try await http.response(
+            method, path: path, query: query, rawBody: body, headers: headers, timeout: timeout,
+            maximumBytes: maximumBytes)
         return SecureTransportResponse(status: result.statusCode, headers: result.headers, body: result.data)
     }
 

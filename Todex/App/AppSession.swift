@@ -140,6 +140,14 @@ extension SessionSocket {
     private var reconnectAttempt = 0
     private var foreground = true
     private var wantsConnection = false
+    /// The user disconnected; recovering a credential does not reconnect.
+    private var disconnectedByUser = false
+    /// Profiles whose Keychain secret could not be read (a locked device at
+    /// launch). Saves never write these back; they are re-read once protected
+    /// data becomes available.
+    private var unreadableCredentials: Set<String> = []
+    private var credentialReadError: String?
+    private var protectedDataObserver: (any NSObjectProtocol)?
     // Periodic /health probe (desktop parity): latency for the status line and a
     // reachability hint that never overrides the authoritative socket state.
     private(set) var healthLatencyMs: Int?
@@ -230,6 +238,7 @@ extension SessionSocket {
         saveCredential = credentialWriter
         var startupError: Error?
         var keychainError: Error?
+        var unreadable: Set<String> = []
         if let initial {
             connections = initial
         } else {
@@ -240,9 +249,10 @@ extension SessionSocket {
                 do {
                     connections[index].deviceSecret = try CredentialStore.deviceSecret(for: connections[index].id)
                 } catch {
-                    // The profile stays unsigned for this launch; surface why
-                    // instead of looking unpaired.
+                    // The profile stays unsigned until the secret can be read;
+                    // surface why instead of looking unpaired.
                     keychainError = keychainError ?? error
+                    unreadable.insert(connections[index].id)
                 }
             }
         }
@@ -271,7 +281,59 @@ extension SessionSocket {
         stateNamespace = LocalStore.namespace(connections.first { $0.id == selectedID })
         if let startupError { reportStorageError(startupError, namespace: stateNamespace, version: 0) }
         loadState()
-        if let keychainError { operationError = keychainError.localizedDescription }
+        unreadableCredentials = unreadable
+        if let keychainError {
+            operationError = keychainError.localizedDescription
+            credentialReadError = operationError
+            DebugLog.record(
+                "credentials.read.failed", ["count": "\(unreadable.count)", "error": String(describing: keychainError)],
+                level: .warn)
+        }
+        #if canImport(UIKit)
+            if !unreadable.isEmpty {
+                protectedDataObserver = NotificationCenter.default.addObserver(
+                    forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.recoverCredentials() }
+                }
+            }
+        #endif
+    }
+
+    /// Re-reads the secrets that were unreadable at launch, restores signing
+    /// and reconnects the selected backend when its secret came back.
+    private func recoverCredentials() {
+        var recovered: Set<String> = []
+        for id in unreadableCredentials.sorted() {
+            do {
+                let secret = try CredentialStore.deviceSecret(for: id)
+                unreadableCredentials.remove(id)
+                if let index = connections.firstIndex(where: { $0.id == id }) {
+                    connections[index].deviceSecret = secret
+                    recovered.insert(id)
+                }
+            } catch {
+                DebugLog.record("credentials.recover.failed", ["error": String(describing: error)], level: .warn)
+            }
+        }
+        if unreadableCredentials.isEmpty {
+            if let protectedDataObserver { NotificationCenter.default.removeObserver(protectedDataObserver) }
+            protectedDataObserver = nil
+            if operationError != nil, operationError == credentialReadError { operationError = nil }
+            credentialReadError = nil
+        }
+        guard !recovered.isEmpty else { return }
+        DebugLog.record("credentials.recovered", ["count": "\(recovered.count)"], level: .info)
+        if let connection, recovered.contains(connection.id) {
+            if !disconnectedByUser {
+                // connect() also moves to the namespace of the signed profile.
+                Task { [weak self] in await self?.connect(connection) }
+            } else if stateNamespace != LocalStore.namespace(connection) {
+                persist()
+                switchState(to: LocalStore.namespace(connection))
+            }
+        }
+        changed(immediate: true)
     }
 
     func observe(_ callback: @escaping () -> Void) -> UUID {
@@ -348,6 +410,8 @@ extension SessionSocket {
         for value in values where !value.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             _ = try value.normalizedURL()
         }
+        let plan = DeviceCredentialPlan(saving: values, current: connections, unreadable: unreadableCredentials)
+        let values = plan.connections
         let nextID = values.contains(where: { $0.id == selected }) ? selected : values.first?.id
         let next = values.first { $0.id == nextID }
         let changedTransport = !Self.sameTransport(connection, next)
@@ -357,11 +421,10 @@ extension SessionSocket {
             // discard the whole connection list. The environment fixture is a
             // launch-time convenience and never enters the on-disk catalog.
             try store.save(values.filter { $0.id != fixtureConnectionID }, key: "connections")
-            for value in values { try saveCredential(value.deviceSecret, value.id) }
-            for old in removed {
-                try saveCredential("", old.id)
-                try historySeeds.save(nil, old.id)
-            }
+            // Unreadable secrets are skipped, never deleted.
+            for write in plan.writes { try saveCredential(write.secret, write.id) }
+            unreadableCredentials = plan.unreadable
+            for old in removed { try historySeeds.save(nil, old.id) }
         } catch {
             reportStorageError(error, namespace: stateNamespace, version: saveVersion)
             throw error
@@ -380,7 +443,10 @@ extension SessionSocket {
     }
 
     func connect(_ requested: BackendConnection? = nil) async {
-        guard let next = requested ?? connection else { return }
+        guard var next = requested ?? connection else { return }
+        // A caller's stale copy (Settings) must not drop the secret in memory.
+        next = DeviceCredentialPlan.keepingSecret(next, of: connections.first { $0.id == next.id })
+        disconnectedByUser = false
         if let task = connectTask, Self.sameTransport(connectingConfiguration, next) {
             await task.value
             return
@@ -568,6 +634,7 @@ extension SessionSocket {
     func disconnect() {
         DebugLog.record("connection.disconnect", level: .info)
         wantsConnection = false
+        disconnectedByUser = true
         invalidateTransport()
         connectionStatus = String(localized: "已断开")
         persist()

@@ -83,6 +83,72 @@ public struct BackendConnection: Identifiable, Codable, Sendable, Equatable {
     }
 }
 
+/// How saving the backend catalog treats device secrets, which live in the
+/// Keychain apart from it. Writing an empty secret deletes the item, so a
+/// secret that could not be read at launch (a locked device answers
+/// `errSecInteractionNotAllowed`) must never be written back as "". Secrets go
+/// away only with their profile, or when the profile's address changes (a
+/// different backend); an empty secret from a stale copy of an unchanged
+/// profile keeps the current one.
+public struct DeviceCredentialPlan: Sendable, Equatable {
+    public struct Write: Sendable, Equatable {
+        public let id: String
+        /// Empty deletes the Keychain item.
+        public let secret: String
+        public init(id: String, secret: String) {
+            self.id = id
+            self.secret = secret
+        }
+    }
+
+    /// The catalog to keep in memory, kept secrets carried over.
+    public let connections: [BackendConnection]
+    /// Keychain writes in order.
+    public let writes: [Write]
+    /// Profiles whose stored secret is still unknown (nothing written).
+    public let unreadable: Set<String>
+
+    public init(saving values: [BackendConnection], current: [BackendConnection], unreadable: Set<String>) {
+        var connections: [BackendConnection] = []
+        var writes: [Write] = []
+        var stillUnreadable: Set<String> = []
+        for value in values {
+            let existing = current.first { $0.id == value.id }
+            let kept = Self.keepingSecret(value, of: existing)
+            connections.append(kept)
+            if kept.deviceSecret.isEmpty, unreadable.contains(kept.id), Self.sameAddress(kept, existing) {
+                stillUnreadable.insert(kept.id)
+                continue
+            }
+            writes.append(Write(id: kept.id, secret: kept.deviceSecret))
+        }
+        for old in current where !values.contains(where: { $0.id == old.id }) {
+            writes.append(Write(id: old.id, secret: ""))
+        }
+        self.connections = connections
+        self.writes = writes
+        self.unreadable = stillUnreadable
+    }
+
+    /// `value` with `existing`'s secret when `value` carries none and still
+    /// points at the same backend.
+    public static func keepingSecret(_ value: BackendConnection, of existing: BackendConnection?) -> BackendConnection {
+        guard value.deviceSecret.isEmpty, let existing, sameAddress(value, existing) else { return value }
+        var kept = value
+        kept.deviceSecret = existing.deviceSecret
+        return kept
+    }
+
+    private static func sameAddress(_ lhs: BackendConnection, _ rhs: BackendConnection?) -> Bool {
+        guard let rhs, lhs.id == rhs.id else { return false }
+        func address(_ connection: BackendConnection) -> String {
+            (try? connection.normalizedURL().absoluteString)
+                ?? connection.serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return address(lhs) == address(rhs)
+    }
+}
+
 /// TodexCore's string catalog; tests resolve expected text through it so they
 /// hold under any process language.
 enum CoreLocalization {
@@ -98,6 +164,7 @@ enum CoreMessage {
     static var invalidAddress: String { String(localized: "后端地址无效", bundle: .module) }
     static var handshakeFailed: String { String(localized: "后端握手验证失败", bundle: .module) }
     static var invalidPolicy: String { String(localized: "后端加密要求无效", bundle: .module) }
+    static var responseTooLarge: String { String(localized: "后端响应过大", bundle: .module) }
     static var addressMessages: [String] { [enterValidAddress, rootAddressOnly, invalidAddress] }
     static var handshakeMessages: [String] { [handshakeFailed, invalidPolicy] }
 }

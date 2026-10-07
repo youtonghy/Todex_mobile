@@ -28,10 +28,7 @@ public final class APIClient: Sendable {
     /// through the same transport as every other call (sealed when pinned).
     public func health() async throws -> JSONValue {
         let result = try await http.response(path: "/health", headers: ["accept": "text/plain"], authenticated: false)
-        guard (200..<300).contains(result.statusCode) else {
-            _ = try result.json()
-            throw TodexError.server(code: String(result.statusCode), message: "HTTP \(result.statusCode)")
-        }
+        guard (200..<300).contains(result.statusCode) else { throw result.apiError() }
         guard let text = String(data: result.data, encoding: .utf8) else {
             throw TodexError.invalid(String(localized: "健康检查未返回有效文本", bundle: .module))
         }

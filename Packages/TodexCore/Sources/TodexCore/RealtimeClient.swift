@@ -54,6 +54,8 @@ public actor RealtimeClient {
 
     /// One slot per live browser view the backend allows on a connection.
     static let browserFrameBuffer = 8
+    static let policyTimeout: TimeInterval = 10
+    static let policyMaximumBytes = 2048
 
     public func connect() async throws {
         guard !eventQueue.isFinished else { throw TodexError.invalid(String(localized: "事件流已结束，请创建新的连接", bundle: .module)) }
@@ -61,9 +63,16 @@ public actor RealtimeClient {
         let revision = generation
         do {
             try Task.checkCancellation()
-            let answer = try await transport.request(
-                method: .get, path: "/v2/transport-policy", query: [:], headers: [:], body: nil)
-            guard answer.body.count <= 2048 else { throw TodexError.invalid(CoreMessage.invalidPolicy) }
+            // A policy answer is a few dozen bytes: a larger one is not a
+            // policy, and reading stops at the limit.
+            let answer: SecureTransportResponse
+            do {
+                answer = try await transport.request(
+                    method: .get, path: "/v2/transport-policy", query: [:], headers: [:], body: nil,
+                    timeout: Self.policyTimeout, maximumBytes: Self.policyMaximumBytes)
+            } catch TodexError.invalid(let message) where message == CoreMessage.responseTooLarge {
+                throw TodexError.invalid(CoreMessage.invalidPolicy)
+            }
             try Self.validatePolicy(
                 HTTPResult(statusCode: answer.status, data: answer.body, headers: answer.headers),
                 connection: connection)

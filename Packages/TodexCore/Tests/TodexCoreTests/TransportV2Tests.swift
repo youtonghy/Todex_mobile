@@ -292,6 +292,15 @@ struct TransportV2Tests {
         for remote in ["http://128.0.0.1", "http://127.0.0.1.example.com", "http://[::2]", "http://[::ffff:c0a8:1]", "not a url"] {
             #expect(mode(remote) == .refused, "\(remote)")
         }
+        // Only canonical dotted quads: the resolver sends `127.0.0.08` to DNS
+        // and reads `127.0.0.010` as octal.
+        for host in ["127.0.0.08", "127.0.0.010", "127.00.0.1", "0127.0.0.1", "127.1", "127.0.0.256", "127.0.0.+1", "::ffff:127.0.0.08"] {
+            #expect(!BackendConnection.isLoopbackHost(host), "\(host)")
+        }
+        for host in ["127.0.0.0", "127.0.10.100", "127.255.255.255", "[::ffff:127.0.0.1]", "127.0.0.1."] {
+            #expect(BackendConnection.isLoopbackHost(host), "\(host)")
+        }
+        #expect(mode("http://127.0.0.08:7345") == .refused)
         let pinned = BackendConnection(serverURL: "https://lan.example", encryption: .x25519, publicKey: key)
         #expect(throws: Never.self) { try SecureTransportError.checkPolicy(pinned, requiredProtocol: "x25519") }
         #expect(throws: Never.self) { try SecureTransportError.checkPolicy(pinned, requiredProtocol: "none") }
@@ -390,6 +399,49 @@ struct TransportV2Tests {
         // Inner 404 is authenticated and reported as such.
         let missing = try await transport.request(method: .get, path: "/v2/missing")
         #expect(missing.status == 404)
+    }
+
+    @Test func oversizedSealedBodyFailsBeforeSendingWithoutUnknownOutcome() async throws {
+        let server = try FakeServerKeys(protocolVector("x25519"))
+        let fixture = NetworkHTTPFixture { _ in .json(["ok": true]) }
+        defer { fixture.close() }
+        let transport = server.transport(fixture)
+        let body = Data(count: TransportV2.maxRestBodyBytes + 1)
+        for method in [HTTPMethod.post, .put] {
+            do {
+                _ = try await transport.request(method: method, path: "/v2/upload", body: body)
+                Issue.record("expected a size error")
+            } catch TodexError.invalid(let message) {
+                // Never "re-pair" (the backend's TRANSPORT_CRYPTO_FAILED) and never
+                // an unknown outcome: nothing was sent.
+                let size = body.count
+                let limit = TransportV2.maxRestBodyBytes
+                #expect(
+                    message
+                        == String(
+                            localized: "请求内容过大（\(size) 字节，上限 \(limit) 字节），未发送", bundle: CoreLocalization.bundle))
+            }
+        }
+        #expect(fixture.requests.isEmpty)
+    }
+
+    @Test func sealedResponseLimitIsTheCallersAndStopsWhileReading() async throws {
+        let server = try FakeServerKeys(protocolVector("x25519"))
+        let fixture = NetworkHTTPFixture { request in
+            let (_, down) = try server.openRequest(request)
+            return try server.reply(
+                TransportInnerResponse(status: 200, body: Data(repeating: 0x20, count: 4096)), cipher: down)
+        }
+        defer { fixture.close() }
+        let transport = server.transport(fixture)
+        do {
+            _ = try await transport.request(
+                method: .get, path: "/v2/transport-policy", query: [:], headers: [:], body: nil, timeout: 10,
+                maximumBytes: 2048)
+            Issue.record("expected a size error")
+        } catch TodexError.invalid(let message) { #expect(message == CoreMessage.responseTooLarge) }
+        let whole = try await transport.request(method: .get, path: "/v2/transport-policy")
+        #expect(whole.body.count == 4096)
     }
 
     @Test func unsealedOrTamperedTunnelResponsesFail() async throws {

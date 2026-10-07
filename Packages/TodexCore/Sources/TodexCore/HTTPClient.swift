@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 public enum HTTPMethod: String, Sendable {
     case get = "GET"
@@ -101,6 +102,10 @@ public final class HTTPClient: Sendable {
         return url
     }
 
+    /// Defaults for one request: the whole exchange, and the (inner) body read.
+    public static let defaultTimeout: TimeInterval = 30
+    public static let defaultMaximumBytes = 20 * 1024 * 1024
+
     public static func segment(_ value: String) -> String {
         value.utf8.map { isUnreserved($0) ? String(UnicodeScalar($0)) : escape($0) }.joined()
     }
@@ -129,7 +134,7 @@ public final class HTTPClient: Sendable {
     func response(
         _ method: HTTPMethod = .get, path: String, query: [String: String] = [:], body: JSONValue? = nil,
         rawBody: Data? = nil, headers extraHeaders: [String: String] = [:], authenticated: Bool = true,
-        timeout: TimeInterval = 30, maximumBytes: Int = 20 * 1024 * 1024
+        timeout: TimeInterval = HTTPClient.defaultTimeout, maximumBytes: Int = HTTPClient.defaultMaximumBytes
     ) async throws -> HTTPResult {
         try Task.checkCancellation()
         guard timeout.isFinite, timeout > 0, timeout <= 3600, maximumBytes > 0, body == nil || rawBody == nil else {
@@ -160,16 +165,33 @@ public final class HTTPClient: Sendable {
             }
         }
         var request: URLRequest
-        var sealing: SealingInput?
+        // `k_down` for the answer to a sealed request, handed to the network task.
+        var responseKey: ResponseCipherSlot?
         if case .v2(let encryption) = mode {
             request = URLRequest(
                 url: try url(path: TransportV2.sealedPath), cachePolicy: .reloadIgnoringLocalCacheData,
                 timeoutInterval: timeout)
             request.httpMethod = HTTPMethod.post.rawValue
-            sealing = SealingInput(
-                inner: TransportInnerRequest(
-                    method: method.rawValue, path: encodedPath, query: encodedQuery, headers: headers, body: bodyData),
-                encryption: encryption, serverPublicKey: try pinnedServerKey())
+            // Sealed before anything reaches URLSession: a failure here proves
+            // the request was never sent, so it is a plain error, not an
+            // unknown outcome.
+            let sealed: TransportSealedRequest
+            do {
+                sealed = try TransportRestTunnel.seal(
+                    TransportInnerRequest(
+                        method: method.rawValue, path: encodedPath, query: encodedQuery, headers: headers,
+                        body: bodyData),
+                    encryption: encryption, serverPublicKey: try pinnedServerKey(),
+                    maxBodyBytes: TransportV2.maxRestBodyBytes)
+            } catch let error as TransportPayloadTooLargeError {
+                // The backend would answer TRANSPORT_CRYPTO_FAILED, which reads as
+                // "re-pair"; the real problem is the size.
+                throw TodexError.invalid(
+                    String(localized: "请求内容过大（\(error.size) 字节，上限 \(error.limit) 字节），未发送", bundle: .module))
+            }
+            request.httpBody = sealed.body
+            for (name, value) in sealed.headers { request.setValue(value, forHTTPHeaderField: name) }
+            responseKey = ResponseCipherSlot(sealed.responseCipher)
         } else {
             request = URLRequest(url: requestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
             request.httpMethod = method.rawValue
@@ -178,14 +200,15 @@ public final class HTTPClient: Sendable {
         }
         request.httpShouldHandleCookies = false
         let preparedRequest = request
-        let sealingInput = sealing
+        let sealedResponseKey = responseKey
         let outcome: Outcome
         do {
             outcome = try await withThrowingTaskGroup(of: Outcome.self) { group in
                 group.addTask { [session] in
-                    if let sealingInput {
+                    if let sealedResponseKey {
                         return try await Self.exchangeSealed(
-                            session: session, request: preparedRequest, input: sealingInput, maximumBytes: maximumBytes)
+                            session: session, request: preparedRequest, responseKey: sealedResponseKey,
+                            maximumBytes: maximumBytes)
                     }
                     // Read incrementally so oversized/chunked responses do not
                     // need to be buffered in full before enforcing the limit.
@@ -220,8 +243,7 @@ public final class HTTPClient: Sendable {
             // authenticated. Errors (400 TRANSPORT_CRYPTO_FAILED, 426, ...)
             // surface as plain API errors; a "success" is a crypto failure.
             guard !(200..<300).contains(result.statusCode) else { throw TransportCryptoError("unsealed success response") }
-            do { _ = try result.json(method: method) } catch { throw SecureTransportError.outerRejection(error) }
-            throw TodexError.server(code: String(result.statusCode), message: "HTTP \(result.statusCode)")
+            throw SecureTransportError.outerRejection(result.apiError())
         }
     }
 
@@ -247,10 +269,13 @@ public final class HTTPClient: Sendable {
         }
     }
 
-    private struct SealingInput: Sendable {
-        let inner: TransportInnerRequest
-        let encryption: EncryptionProtocol
-        let serverPublicKey: Data
+    /// Moves the response cipher of a sealed request into the network task
+    /// (single use); a cipher never taken is wiped with the slot.
+    private final class ResponseCipherSlot: Sendable {
+        private let cipher: Mutex<TransportRecordCipher?>
+        init(_ cipher: sending TransportRecordCipher) { self.cipher = Mutex(cipher) }
+        func take() -> TransportRecordCipher? { cipher.withLock { $0.take() } }
+        deinit { cipher.withLock { $0?.dispose() } }
     }
 
     private enum Outcome: Sendable {
@@ -259,20 +284,16 @@ public final class HTTPClient: Sendable {
         case unsealed(HTTPResult)
     }
 
-    /// Seals, sends and stream-opens one tunnelled request. Ciphers live and
-    /// die inside this task; the inner body limit applies to the plaintext.
+    /// Sends one already sealed request and stream-opens the answer. The
+    /// response cipher dies inside this task; the inner body limit applies to
+    /// the plaintext and is enforced while reading.
     private static func exchangeSealed(
-        session: URLSession, request: URLRequest, input: SealingInput, maximumBytes: Int
+        session: URLSession, request: URLRequest, responseKey: ResponseCipherSlot, maximumBytes: Int
     ) async throws -> Outcome {
-        // The key was validated by `pinnedServerKey()`.
-        let sealed = try TransportRestTunnel.seal(
-            input.inner, encryption: input.encryption, serverPublicKey: input.serverPublicKey)
-        let decoder = TransportSealedResponseDecoder(cipher: sealed.responseCipher)
+        guard let cipher = responseKey.take() else { throw TransportCryptoError("response key already used") }
+        let decoder = TransportSealedResponseDecoder(cipher: cipher)
         defer { decoder.dispose() }
-        var outer = request
-        outer.httpBody = sealed.body
-        for (name, value) in sealed.headers { outer.setValue(value, forHTTPHeaderField: name) }
-        let (bytes, response) = try await session.bytes(for: outer, delegate: NoRedirectDelegate())
+        let (bytes, response) = try await session.bytes(for: request, delegate: NoRedirectDelegate())
         defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse else { throw TodexError.invalid(String(localized: "后端响应无效", bundle: .module)) }
         let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").split(separator: ";").first
@@ -290,14 +311,14 @@ public final class HTTPClient: Sendable {
         var body = Data()
         func drain() throws {
             for part in try decoder.push(chunk) {
-                guard body.count + part.count <= maximumBytes else { throw TodexError.invalid(String(localized: "后端响应过大", bundle: .module)) }
+                guard body.count + part.count <= maximumBytes else { throw TodexError.invalid(CoreMessage.responseTooLarge) }
                 body += part
             }
             chunk.removeAll(keepingCapacity: true)
         }
         for try await byte in bytes {
             received += 1
-            guard received <= outerLimit else { throw TodexError.invalid(String(localized: "后端响应过大", bundle: .module)) }
+            guard received <= outerLimit else { throw TodexError.invalid(CoreMessage.responseTooLarge) }
             chunk.append(byte)
             if chunk.count >= 16 * 1024 { try drain() }
         }
@@ -309,10 +330,10 @@ public final class HTTPClient: Sendable {
     }
 
     private static func read(_ bytes: URLSession.AsyncBytes, response: HTTPURLResponse, limit: Int) async throws -> Data {
-        guard response.expectedContentLength <= limit else { throw TodexError.invalid(String(localized: "后端响应过大", bundle: .module)) }
+        guard response.expectedContentLength <= limit else { throw TodexError.invalid(CoreMessage.responseTooLarge) }
         var data = Data()
         for try await byte in bytes {
-            guard data.count < limit else { throw TodexError.invalid(String(localized: "后端响应过大", bundle: .module)) }
+            guard data.count < limit else { throw TodexError.invalid(CoreMessage.responseTooLarge) }
             data.append(byte)
         }
         return data
@@ -345,18 +366,23 @@ struct HTTPResult: Sendable {
     var headers: [String: String] = [:]
 
     func json(method: HTTPMethod = .get) throws -> JSONValue {
+        guard (200..<300).contains(statusCode) else { throw apiError() }
         let value = data.isEmpty ? JSONValue.null : (try? JSONDecoder().decode(JSONValue.self, from: data))
-        guard (200..<300).contains(statusCode) else {
-            let code = value?["code"].optionalString ?? value?["error"]["code"].optionalString ?? String(statusCode)
-            let message =
-                value?["message"].optionalString ?? value?["error"]["message"].optionalString ?? value?["error"]
-                .optionalString ?? "HTTP \(statusCode)"
-            throw TodexError.server(code: code, message: message)
-        }
         guard String(data: data, encoding: .utf8) != nil, let value else {
             if method != .get { throw TodexError.unknownOutcome(String(localized: "后端返回的确认不是有效 JSON", bundle: .module)) }
             throw TodexError.invalid(String(localized: "后端未返回有效 JSON", bundle: .module))
         }
         return value
+    }
+
+    /// The API error for a non-2xx answer: the envelope's code and message
+    /// (top-level or under `error`), else the bare status.
+    func apiError() -> TodexError {
+        let value = data.isEmpty ? nil : try? JSONDecoder().decode(JSONValue.self, from: data)
+        let code = value?["code"].optionalString ?? value?["error"]["code"].optionalString ?? String(statusCode)
+        let message =
+            value?["message"].optionalString ?? value?["error"]["message"].optionalString ?? value?["error"]
+            .optionalString ?? "HTTP \(statusCode)"
+        return TodexError.server(code: code, message: message)
     }
 }

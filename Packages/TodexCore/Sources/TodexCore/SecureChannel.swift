@@ -27,6 +27,10 @@ public enum TransportV2 {
     /// The backend's WebSocket frame limit; the plaintext limit is this minus
     /// `wsFrameOverhead` (Clarification 8).
     public static let maxWebSocketFrameBytes = 8 * 1024 * 1024
+    /// The backend's inner body limit for `POST /v2/sealed`; its outer limit
+    /// is the record stream of this body plus a full head. A larger body is
+    /// refused as `TRANSPORT_CRYPTO_FAILED`, so clients reject it before sealing.
+    public static let maxRestBodyBytes = 32 * 1024 * 1024
     public static let sealedContentType = "application/vnd.todex.sealed"
     public static let sealedPath = "/v2/sealed"
     public static let wsCloseCode = 4400

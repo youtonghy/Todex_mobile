@@ -4061,6 +4061,34 @@
         }
       }
     },
+    "请求内容过大（%lld 字节，上限 %lld 字节），未发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request too large (%lld bytes, limit %lld bytes); not sent"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リクエストが大きすぎます（%lld バイト、上限 %lld バイト）。送信されませんでした"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청이 너무 큽니다(%lld바이트, 한도 %lld바이트). 전송되지 않았습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请求内容过大（%lld 字节，上限 %lld 字节），未发送"
+          }
+        }
+      }
+    },
     "请确认后端已启动、地址正确且网络可达。": {
       "localizations": {
         "en": {

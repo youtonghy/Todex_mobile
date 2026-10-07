@@ -360,6 +360,25 @@ struct RealtimeClientTests {
         #expect(socket.sent.isEmpty)
     }
 
+    @Test func oversizedPolicyIsInvalidAndStopsBeforeSocketCreation() async throws {
+        let fixture = NetworkHTTPFixture { _ in
+            NetworkHTTPReply(
+                status: 200, data: Data(#"{"requiredProtocol":"none","pad":"\#(String(repeating: "x", count: 4096))"}"#.utf8),
+                headers: ["Content-Type": "application/json"])
+        }
+        defer { fixture.close() }
+        let client = RealtimeClient(
+            connection: fixture.client().connection,
+            transport: ScriptedTransport(fixture.client()) {
+                Issue.record("Should not create a socket")
+                return ScriptedRealtimeSocket()
+            })
+        do {
+            try await client.connect()
+            Issue.record("Expected policy error")
+        } catch TodexError.invalid(let message) { #expect(message == CoreMessage.invalidPolicy) }
+    }
+
     @Test func socketHandshakeFailureKeepsHTTPStatusButUpgradeErrorsKeepTransportCause() throws {
         let underlying = URLError(.badServerResponse)
         let url = try #require(URL(string: "http://fixture.invalid/v2/ws"))
@@ -411,9 +430,12 @@ private struct ScriptedTransport: SecureTransport {
     }
     var mode: SecureTransportMode { http.transportMode }
     func request(
-        method: HTTPMethod, path: String, query: [String: String], headers: [String: String], body: Data?
+        method: HTTPMethod, path: String, query: [String: String], headers: [String: String], body: Data?,
+        timeout: TimeInterval, maximumBytes: Int
     ) async throws -> SecureTransportResponse {
-        let result = try await http.response(method, path: path, query: query, rawBody: body, headers: headers)
+        let result = try await http.response(
+            method, path: path, query: query, rawBody: body, headers: headers, timeout: timeout,
+            maximumBytes: maximumBytes)
         return SecureTransportResponse(status: result.statusCode, headers: result.headers, body: result.data)
     }
     func openWebSocket(path: String, query: [String: String]) async throws -> any SecureWebSocket {
