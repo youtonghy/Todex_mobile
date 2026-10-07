@@ -33,7 +33,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | HTTP | 路径 | APIClient 方法 | 状态 / 语义 | 本地测试 |
 | --- | --- | --- | --- | --- |
 | GET | `/health` | `health()` | 已封装；公开；text/plain | `endpointWire(health)` |
-| GET | `/v2/version` | `version()` | 已封装；公开 | `endpointWire(version)` |
+| GET | `/v2/version` | `version()` | 已封装；已配对时签名（数据目录与工作区根路径仅返回给已认证请求），未配对回退为不签名 | `endpointWire(version)`、`versionIsSignedWhenEnrolledAndFallsBackToUnsignedWhenNot` |
 | GET | `/v2/transport-policy` | `transportPolicy()` | 已封装；公开 | `endpointWire(transportPolicy)` |
 | POST | `/v2/device-pairing/create` | `createDevicePairing(clientPublicKey:deviceName:)` | 已封装；公开；不代替本机配对批准 | `endpointWire(createDevicePairing)` |
 | POST | `/v2/device-pairing/poll` | `pollDevicePairing(requestId:proof:)` | 已封装；公开；传入 poll proof | `endpointWire(pollDevicePairing)` |

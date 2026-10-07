@@ -90,8 +90,12 @@ public final class APIClient: Sendable {
         return value
     }
 
+    /// Signed when the device is enrolled: the backend only returns `data_dir`
+    /// and the workspace roots to authenticated callers. An unpaired device
+    /// (no usable seed) falls back to an unsigned request inside HTTPClient
+    /// and simply gets the version without the path fields.
     public func version() async throws -> JSONValue {
-        try await http.request(path: "/v2/version", authenticated: false)
+        try await http.request(path: "/v2/version", authenticated: true)
     }
 
     public func transportPolicy() async throws -> JSONValue {

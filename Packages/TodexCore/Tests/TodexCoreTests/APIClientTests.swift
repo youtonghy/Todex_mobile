@@ -37,6 +37,22 @@ struct APIClientTests {
         #expect(calls.withLock { $0 } == 1)
     }
 
+    /// The backend only reveals `data_dir`/workspace roots to signed callers;
+    /// an unpaired device must still reach /v2/version, just unsigned.
+    @Test
+    func versionIsSignedWhenEnrolledAndFallsBackToUnsignedWhenNot() async throws {
+        let signed = Mutex<[String?]>([])
+        for secret in ["FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU", "", "bad-seed"] {
+            let fixture = APIFixture(deviceSecret: secret) { request in
+                signed.withLock { $0.append(request.value(forHTTPHeaderField: "x-todex-device-id")) }
+                return try .json(["version": "1.0.0"])
+            }
+            defer { fixture.close() }
+            #expect(try await fixture.api.version()["version"] == "1.0.0")
+        }
+        #expect(signed.withLock { $0 } == ["dev_1-HghL4hOwHlBoUq", nil, nil])
+    }
+
     @Test
     func agentDesktopModelsAcceptLegacyDaemonsAndDecodeDataURLs() throws {
         // Daemons where the browser and Computer Use still ran on desktops omit both statuses.
@@ -528,7 +544,7 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
         .init(name: "health", method: "GET", path: "/health", authenticated: false, response: "ok") {
             try await $0.health()
         },
-        .init(name: "version", method: "GET", path: "/v2/version", authenticated: false) { try await $0.version() },
+        .init(name: "version", method: "GET", path: "/v2/version") { try await $0.version() },
         .init(name: "transportPolicy", method: "GET", path: "/v2/transport-policy", authenticated: false) {
             try await $0.transportPolicy()
         },
@@ -908,7 +924,9 @@ private struct APIFixture {
     let session: URLSession
     let api: APIClient
 
-    init(handler: @escaping APIURLProtocol.Handler) {
+    init(
+        deviceSecret: String = "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU", handler: @escaping APIURLProtocol.Handler
+    ) {
         let host = "api-\(UUID().uuidString.lowercased()).invalid"
         self.host = host
         APIURLProtocol.handlers.withLock { $0[host] = handler }
@@ -918,7 +936,7 @@ private struct APIFixture {
         config.urlCache = nil
         session = URLSession(configuration: config)
         api = APIClient(
-            connection: BackendConnection(serverURL: "https://\(host)/v2/", deviceSecret: "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU"), session: session)
+            connection: BackendConnection(serverURL: "https://\(host)/v2/", deviceSecret: deviceSecret), session: session)
     }
 
     func close() {
