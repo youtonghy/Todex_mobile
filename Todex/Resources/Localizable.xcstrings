@@ -1569,6 +1569,34 @@
         }
       }
     },
+    "%@，正在重试…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. Retrying…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@。再試行しています…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. 다시 시도하는 중…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@，正在重试…"
+          }
+        }
+      }
+    },
     "%@：%@": {
       "localizations": {
         "en": {

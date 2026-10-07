@@ -237,13 +237,33 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                 fingerprint =
                     session.transport.encryption == .none
                     ? String(localized: "无（本机明文）") : session.transport.fingerprint
-                status = String(localized: "等待后端批准，请核对随机码。")
+                let waitingStatus = String(localized: "等待后端批准，请核对随机码。")
+                status = waitingStatus
                 let expiry = session.expiresAt
                 startExpiryClock(expiresAt: expiry, generation: current)
                 render()
+                let pollInterval = Duration.milliseconds(session.pollIntervalMilliseconds)
+                var pollDelay = pollInterval
                 while !Task.isCancelled {
-                    try await Task.sleep(for: .milliseconds(session.pollIntervalMilliseconds))
-                    let result = try await session.poll()
+                    try await Task.sleep(for: pollDelay)
+                    let result: DevicePairingStatus
+                    do {
+                        result = try await session.poll()
+                    } catch let error as DevicePairingRetryableError
+                        where Date().timeIntervalSince1970 * 1_000 < expiry
+                    {
+                        // 429, 5xx, network or timeout: back off and keep
+                        // polling until the request expires.
+                        try Task.checkCancellation()
+                        guard generation == current, connection == source else {
+                            try? await session.cancel()
+                            return
+                        }
+                        pollDelay = DevicePairingSession.nextPollDelay(after: pollDelay, error: error)
+                        status = String(localized: "\(error.localizedDescription)，正在重试…")
+                        render()
+                        continue
+                    }
                     try Task.checkCancellation()
                     guard generation == current, connection == source else {
                         try? await session.cancel()
@@ -253,8 +273,14 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                         finishDevice(String(localized: "申请已过期，请重新申请。"), cancel: true)
                         return
                     }
+                    pollDelay = pollInterval
                     switch result {
-                    case .pending: continue
+                    case .pending:
+                        if status != waitingStatus {
+                            status = waitingStatus
+                            render()
+                        }
+                        continue
                     case .approved(let transport):
                         // One write pins the device key and the verified
                         // transport; only then connect.
