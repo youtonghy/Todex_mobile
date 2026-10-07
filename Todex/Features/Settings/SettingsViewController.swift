@@ -115,8 +115,8 @@ final class SettingsViewController: SettingsListController {
                     detail: DeviceIdentity(secretKeyBase64URL: connection.deviceSecret)?.deviceID ?? String(localized: "未验证"),
                     symbol: "iphone.gen3", id: "settings.backend.device"),
                 field("Tenant", value: connection.tenantId, key: "tenantId", connection: connection),
-                // Read-only: the protocol and key are pinned only by importing
-                // the backend's pairing link or QR (transport v2 client rules).
+                // Read-only: the protocol and key are pinned only by an approved
+                // device verification that bound them (transport v2 client rules).
                 SettingsRow(
                     title: String(localized: "传输加密"), detail: Self.transportDetail(connection), symbol: "lock",
                     id: "settings.backend.encryption"
@@ -125,7 +125,7 @@ final class SettingsViewController: SettingsListController {
                 },
             ]
             rows.append(
-                SettingsRow(title: String(localized: "配对与设备验证"), detail: String(localized: "JSON、二维码图片、相机扫码与分片二维码"), symbol: "qrcode", id: "settings.pairing")
+                SettingsRow(title: String(localized: "配对与设备验证"), detail: String(localized: "扫码读取地址，设备验证后保存加密公钥"), symbol: "qrcode", id: "settings.pairing")
                 { [weak self] in
                     self?.openPairing(connection)
                 })
@@ -202,7 +202,7 @@ final class SettingsViewController: SettingsListController {
                     }
                 })
             sections.append(
-                SettingsSection(title: String(localized: "当前后端"), footer: String(localized: "Token 由主程序通过 Keychain 保存。传输加密启用时，连接还需要对应的公钥。"), rows: rows))
+                SettingsSection(title: String(localized: "当前后端"), footer: String(localized: "设备密钥由 Keychain 保存。传输加密公钥只由设备验证确认，不能手动填写；未经验证的公钥不会被使用，需要重新配对。"), rows: rows))
         }
         let appearance = UserDefaults.standard.string(forKey: "appearance") ?? "system"
         let sharing = UserDefaults.standard.string(forKey: "workbenchSharing") ?? "conversation"
@@ -355,10 +355,8 @@ final class SettingsViewController: SettingsListController {
                 case "name": $0.name = trimmed
                 case "tenantId": $0.tenantId = trimmed.isEmpty ? "local" : trimmed
                 default:
-                    $0.serverURL = trimmed
-                    if (try? BackendConnection.normalize(trimmed)) != (try? BackendConnection.normalize(connection.serverURL)) {
-                        $0.deviceSecret = ""
-                    }
+                    // Another backend: drop the device key and pinned transport.
+                    $0.setServerURL(trimmed)
                 }
             }
         }
@@ -368,9 +366,10 @@ final class SettingsViewController: SettingsListController {
         guard var connection = connections.first(where: { $0.id == id }) else { return }
         do {
             connection.serverURL = try connection.normalizedURL().absoluteString
-            // A remote backend without a pinned key would be refused anyway;
-            // say so before saving and point at pairing.
-            if SecureTransportMode.resolve(connection) == .refused { throw SecureTransportError.encryptionRequired }
+            // A profile the transport rules refuse (remote without a key, or a
+            // key no device verification confirmed) would fail anyway; say so
+            // before saving and point at re-pairing.
+            if SecureTransportMode.resolve(connection) == .refused { throw SecureTransportError.refusal(connection) }
             update(id) { $0 = connection }
             connectionNotice = String(localized: "已提交连接请求；连接状态将在工作区显示。")
             render()
@@ -397,9 +396,15 @@ final class SettingsViewController: SettingsListController {
 
     private static func transportDetail(_ connection: BackendConnection) -> String {
         switch SecureTransportMode.resolve(connection) {
-        case .v2(let encryption): String(localized: "已加密（\(encryption.rawValue)）")
-        case .plaintext: String(localized: "未加密（仅限本机后端）")
-        case .refused: String(localized: "需要加密配对，点按导入配对信息")
+        case .v2(let encryption):
+            let fingerprint =
+                PairingTransport.fingerprint(encryption: encryption, publicKey: connection.publicKey)
+                ?? String(localized: "指纹不可用")
+            return String(localized: "已验证 · \(encryption.rawValue) · \(fingerprint)")
+        case .plaintext: return String(localized: "未加密（仅限本机后端）")
+        case .refused:
+            return connection.hasPinnedTransport
+                ? String(localized: "公钥未经设备验证，点按重新配对") : String(localized: "需要加密配对，点按重新配对")
         }
     }
 

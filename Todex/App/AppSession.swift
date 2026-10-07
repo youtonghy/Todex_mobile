@@ -268,10 +268,13 @@ extension SessionSocket {
                 let fixture = BackendConnection(
                     id: "simulator-fixture", name: String(localized: "测试后端"), serverURL: url,
                     deviceSecret: environment["TODEX_TEST_DEVICE_SECRET"] ?? "",
-                    // A fixture started with transport encryption pins its key
-                    // here, so UI tests run over transport v2 like a paired device.
+                    // DEBUG-only test path: a fixture started with transport
+                    // encryption pins its key here and marks it verified, so UI
+                    // tests run over transport v2 like a device that paired.
+                    // Release builds pin keys only through device verification.
                     encryption: environment["TODEX_TEST_ENCRYPTION"].flatMap(EncryptionProtocol.init) ?? .none,
-                    publicKey: environment["TODEX_TEST_PUBLIC_KEY"] ?? "")
+                    publicKey: environment["TODEX_TEST_PUBLIC_KEY"] ?? "",
+                    transportVerified: !(environment["TODEX_TEST_PUBLIC_KEY"] ?? "").isEmpty)
                 connections.removeAll { $0.id == fixture.id }
                 connections.append(fixture)
                 selectedID = fixture.id
@@ -744,6 +747,7 @@ extension SessionSocket {
             (try? rhs.normalizedURL().absoluteString) ?? rhs.serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
         return lhs.id == rhs.id && lhsURL == rhsURL
             && lhs.deviceSecret == rhs.deviceSecret && lhs.encryption == rhs.encryption && lhs.publicKey == rhs.publicKey
+            && lhs.transportVerified == rhs.transportVerified
     }
 
     func refresh() async throws {

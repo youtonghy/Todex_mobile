@@ -10,7 +10,6 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
     private var connection: BackendConnection
     private let onApply: @MainActor (BackendConnection) throws -> Void
     private let onApproved: @MainActor () -> Void
-    private var importer = PairingImporter()
     private var session: DevicePairingSession?
     private var deviceTask: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
@@ -19,8 +18,9 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
     private var waiting = false
     private var readingPhotos = false
     private var verificationCode: String?
+    private var fingerprint: String?
     private var remainingSeconds = 0
-    private var status = String(localized: "导入后端提供的配对信息，或申请设备验证。")
+    private var status = String(localized: "扫描后端的配对二维码，或直接开始设备验证。")
     private var failure: String?
 
     init(
@@ -63,44 +63,21 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                 SettingsSection(
                     title: String(localized: "操作失败"), rows: [SettingsRow(title: failure, id: "pairing.error", color: .systemRed)]))
         }
-        var importRows: [SettingsRow] = [
+        let importRows: [SettingsRow] = [
             SettingsRow(
-                title: String(localized: "粘贴配对 JSON"), symbol: "curlybraces", id: "pairing.json", enabled: !waiting && !readingPhotos
-            ) { [weak self] in self?.editJSON() },
-            SettingsRow(
-                title: String(localized: "从剪贴板导入"), symbol: "doc.on.clipboard", id: "pairing.clipboard",
-                enabled: !waiting && !readingPhotos
-            ) { [weak self] in
-                guard let self else { return }
-                do {
-                    guard let raw = UIPasteboard.general.string,
-                        !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    else { throw TodexError.invalid(String(localized: "剪贴板中没有配对文本")) }
-                    _ = try ingest(raw)
-                } catch {
-                    failure = error.localizedDescription
-                    render()
-                }
-            },
-            SettingsRow(
-                title: readingPhotos ? String(localized: "正在识别二维码图片…") : String(localized: "从照片选择二维码"), detail: String(localized: "支持多张图片及分片二维码"), symbol: "photo",
+                title: readingPhotos ? String(localized: "正在识别二维码图片…") : String(localized: "从照片选择二维码"),
+                detail: String(localized: "只读取后端地址"), symbol: "photo",
                 id: "pairing.photos", enabled: !waiting && !readingPhotos, activity: readingPhotos
             ) { [weak self] in self?.choosePhotos() },
             SettingsRow(
-                title: String(localized: "相机扫码"), detail: String(localized: "连续扫描同一批次的全部分片"), symbol: "qrcode.viewfinder", id: "pairing.camera",
-                enabled: !waiting && !readingPhotos
+                title: String(localized: "相机扫码"), detail: String(localized: "只读取后端地址"), symbol: "qrcode.viewfinder",
+                id: "pairing.camera", enabled: !waiting && !readingPhotos
             ) { [weak self] in self?.scan() },
         ]
-        if importer.totalCount > 0 {
-            importRows.append(
-                SettingsRow(
-                    title: String(localized: "分片进度 \(importer.receivedCount)/\(importer.totalCount)"), detail: String(localized: "点按清空本批次后重新导入"),
-                    id: "pairing.fragments.reset", enabled: !readingPhotos
-                ) { [weak self] in
-                    self?.resetFragments()
-                })
-        }
-        sections.append(SettingsSection(title: String(localized: "导入配对"), footer: String(localized: "分片可按任意顺序扫描；收齐同一批次后才会保存配对信息。"), rows: importRows))
+        sections.append(
+            SettingsSection(
+                title: String(localized: "扫描配对二维码"),
+                footer: String(localized: "二维码只填写后端地址，随后自动开始设备验证；加密公钥只由设备验证确认。"), rows: importRows))
         var deviceRows: [SettingsRow] = []
         if let verificationCode {
             deviceRows.append(
@@ -108,9 +85,18 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                     title: verificationCode, detail: String(localized: "在后端核对同一个随机码后批准此设备。剩余 \(remainingSeconds) 秒。"),
                     symbol: "checkmark.shield", id: "pairing.verificationCode"))
         }
+        if let fingerprint {
+            deviceRows.append(
+                SettingsRow(
+                    title: fingerprint, detail: String(localized: "后端公钥指纹，应与后端设备面板显示的一致。"), symbol: "key",
+                    id: "pairing.fingerprint"))
+        }
+        let pinned = connection.hasPinnedTransport
         deviceRows.append(
             SettingsRow(
-                title: waiting ? String(localized: "等待后端批准…") : String(localized: "申请设备验证"), symbol: "iphone.gen3", id: "pairing.device.begin",
+                title: waiting
+                    ? String(localized: "等待后端批准…") : pinned ? String(localized: "重新配对") : String(localized: "申请设备验证"),
+                symbol: "iphone.gen3", id: "pairing.device.begin",
                 enabled: !waiting && !readingPhotos, activity: waiting
             ) { [weak self] in self?.beginDevice() })
         if waiting {
@@ -120,47 +106,26 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                 })
         }
         sections.append(
-            SettingsSection(title: String(localized: "设备验证"), footer: String(localized: "批准后此后端即信任本机设备密钥；传输加密公钥仍需从配对信息导入。"), rows: deviceRows))
+            SettingsSection(
+                title: String(localized: "设备验证"),
+                footer: String(localized: "批准后此后端信任本机设备密钥，本机同时保存经验证的传输加密公钥。同一后端重新配对会沿用本机设备密钥。"),
+                rows: deviceRows))
         redraw()
     }
 
-    @discardableResult
-    private func ingest(_ raw: String) throws -> Bool {
+    /// Imports a pairing link: fills the address only, then verifies the
+    /// device, which is what pins the transport key.
+    private func ingest(_ raw: String) throws {
         guard !waiting else { throw TodexError.invalid(String(localized: "请先取消正在进行的设备验证")) }
-        let updated = try importer.ingest(raw.trimmingCharacters(in: .whitespacesAndNewlines), current: connection)
-        if let updated {
+        let updated = try PairingImporter.ingest(raw.trimmingCharacters(in: .whitespacesAndNewlines), current: connection)
+        if updated != connection {
             try onApply(updated)
             connection = updated
-            status = String(localized: "配对信息已导入并保存。")
-        } else {
-            status = String(localized: "已收到分片 \(importer.receivedCount)/\(importer.totalCount)，请继续导入本批次剩余分片。")
         }
+        status = String(localized: "已读取后端地址，正在开始设备验证。")
         failure = nil
         render()
-        // A fresh import with no enrolled device flows straight into
-        // verification: scan -> verify -> connect needs no extra taps.
-        if updated != nil, DeviceIdentity(secretKeyBase64URL: connection.deviceSecret) == nil {
-            beginDevice()
-        }
-        return updated != nil
-    }
-
-    private func resetFragments() {
-        importer = PairingImporter()
-        failure = nil
-        status = String(localized: "已清空配对分片。")
-        render()
-    }
-
-    private func editJSON() {
-        let editor = SettingsTextController(
-            title: String(localized: "配对 JSON"), text: "", detail: String(localized: "粘贴后端 TUI 提供的完整 JSON，或本批次的一个二维码分片。"), editable: true, actionTitle: String(localized: "导入")
-        ) { [weak self] text in
-            guard let self else { throw CancellationError() }
-            _ = try ingest(text)
-            navigationController?.popViewController(animated: true)
-        }
-        navigationController?.pushViewController(editor, animated: true)
+        beginDevice()
     }
 
     private func choosePhotos() {
@@ -182,6 +147,9 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
         photoTask = Task { [weak self] in
             do {
                 let reader = PairingImageReader()
+                // One selection imports one pairing: the first pairing QR
+                // wins; other codes are skipped, reported only if none fits.
+                var skipped: (any Error)?
                 for result in results {
                     try Task.checkCancellation()
                     let data = try await Self.imageData(result.itemProvider)
@@ -189,15 +157,17 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                     try Task.checkCancellation()
                     guard let self else { return }
                     for frame in frames {
-                        // One selection imports one pairing. Do not overwrite it with another QR in the image.
-                        if try ingest(frame) {
-                            readingPhotos = false
-                            photoTask = nil
-                            render()
-                            return
+                        do { _ = try PairingImporter.ingest(frame, current: connection) } catch {
+                            skipped = error
+                            continue
                         }
+                        readingPhotos = false
+                        photoTask = nil
+                        try ingest(frame)
+                        return
                     }
                 }
+                if let skipped { throw skipped }
             } catch {
                 if !Task.isCancelled { self?.failure = error.localizedDescription }
             }
@@ -227,10 +197,8 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
     private func scan() {
         let scanner = PairingQRScannerViewController { [weak self] raw in
             guard let self else { throw CancellationError() }
-            let complete = try ingest(raw)
-            return (status, complete, importer.receivedCount, importer.totalCount)
-        } onReset: { [weak self] in
-            self?.resetFragments()
+            try ingest(raw)
+            return status
         }
         present(UINavigationController(rootViewController: scanner), animated: true)
     }
@@ -242,35 +210,33 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
             render()
             return
         }
-        var source = connection
-        if DeviceIdentity(secretKeyBase64URL: source.deviceSecret) == nil {
-            do {
-                source.deviceSecret = DeviceIdentity().secretKeyBase64URL
-                try onApply(source)
-                connection = source
-            } catch {
-                failure = error.localizedDescription
-                render()
-                return
-            }
-        }
+        let source = connection
+        // Re-pairing the same backend keeps the device key, so its device ID
+        // and history-key recipient stay the same; the address change that
+        // makes it another backend has already cleared it. The key is saved
+        // only with the approval, together with the transport it pins.
+        let device = DeviceIdentity(secretKeyBase64URL: source.deviceSecret) ?? DeviceIdentity()
         generation += 1
         let current = generation
         waiting = true
         failure = nil
         verificationCode = nil
+        fingerprint = nil
         status = String(localized: "正在向后端申请设备验证…")
         render()
         deviceTask = Task { [weak self] in
             do {
                 let session = try await DevicePairingSession.begin(
-                    connection: source, deviceName: "TodeX iOS", device: DeviceIdentity(secretKeyBase64URL: source.deviceSecret)!)
+                    connection: source, deviceName: "TodeX iOS", device: device)
                 guard let self, !Task.isCancelled, generation == current, connection == source else {
                     try? await session.cancel()
                     return
                 }
                 self.session = session
                 verificationCode = session.verificationCode
+                fingerprint =
+                    session.transport.encryption == .none
+                    ? String(localized: "无（本机明文）") : session.transport.fingerprint
                 status = String(localized: "等待后端批准，请核对随机码。")
                 let expiry = session.expiresAt
                 startExpiryClock(expiresAt: expiry, generation: current)
@@ -289,9 +255,19 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
                     }
                     switch result {
                     case .pending: continue
-                    case .approved:
-                        // The device key was already persisted before the
-                        // request; approval only activates it on the backend.
+                    case .approved(let transport):
+                        // One write pins the device key and the verified
+                        // transport; only then connect.
+                        var approved = source
+                        approved.pin(transport, deviceSecret: device.secretKeyBase64URL)
+                        do {
+                            try onApply(approved)
+                        } catch {
+                            failure = error.localizedDescription
+                            finishDevice(String(localized: "设备已批准，但无法保存配对结果，请重新配对。"), cancel: false)
+                            return
+                        }
+                        connection = approved
                         finishDevice(String(localized: "设备已批准，正在连接…"), cancel: false)
                         onApproved()
                         return
@@ -333,6 +309,7 @@ final class PairingViewController: SettingsListController, PHPickerViewControlle
         session = nil
         waiting = false
         verificationCode = nil
+        fingerprint = nil
         generation += 1
         deviceTask?.cancel()
         deviceTask = nil

@@ -3081,34 +3081,6 @@
         }
       }
     },
-    "JSON、二维码图片、相机扫码与分片二维码": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "JSON, QR code images, camera scanning, and multi-part QR codes"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "JSON、QR コード画像、カメラスキャン、分割 QR コード"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "JSON, QR 코드 이미지, 카메라 스캔 및 분할 QR 코드"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "JSON、二维码图片、相机扫码与分片二维码"
-          }
-        }
-      }
-    },
     "Legacy Diff 不可用": {
       "localizations": {
         "en": {
@@ -3861,34 +3833,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Squash 合并"
-          }
-        }
-      }
-    },
-    "Token 由主程序通过 Keychain 保存。传输加密启用时，连接还需要对应的公钥。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The token is stored by the app in the Keychain. When transport encryption is enabled, connecting also requires the matching public key."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Token はアプリ本体がキーチェーンに保存します。転送暗号化が有効な場合、接続には対応する公開鍵も必要です。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Token은 앱이 키체인에 저장합니다. 전송 암호화가 활성화되어 있으면 연결에 해당 공개 키도 필요합니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Token 由主程序通过 Keychain 保存。传输加密启用时，连接还需要对应的公钥。"
           }
         }
       }
@@ -5069,6 +5013,34 @@
         }
       }
     },
+    "二维码只填写后端地址，随后自动开始设备验证；加密公钥只由设备验证确认。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The QR code only fills in the backend address, then device verification starts. The encryption key is confirmed only by device verification."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QR コードはバックエンドのアドレスだけを入力し、続けてデバイス認証を開始します。暗号化公開鍵はデバイス認証でのみ確認されます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QR 코드는 백엔드 주소만 채우고 이어서 기기 인증을 시작합니다. 암호화 공개 키는 기기 인증으로만 확인됩니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "二维码只填写后端地址，随后自动开始设备验证；加密公钥只由设备验证确认。"
+          }
+        }
+      }
+    },
     "交给 Agent 核对：%@": {
       "localizations": {
         "en": {
@@ -5373,34 +5345,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "从其他设备导出的 JSON 文件"
-          }
-        }
-      }
-    },
-    "从剪贴板导入": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Import from clipboard"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "クリップボードからインポート"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "클립보드에서 가져오기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "从剪贴板导入"
           }
         }
       }
@@ -7057,6 +7001,34 @@
         }
       }
     },
+    "公钥未经设备验证，点按重新配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key not verified by device verification. Tap to pair again"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "公開鍵はデバイス認証で確認されていません。タップして再ペアリング"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "공개 키가 기기 인증으로 확인되지 않았습니다. 탭하여 다시 페어링"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "公钥未经设备验证，点按重新配对"
+          }
+        }
+      }
+    },
     "共享范围": {
       "localizations": {
         "en": {
@@ -7977,62 +7949,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "分支（%lld）"
-          }
-        }
-      }
-    },
-    "分片可按任意顺序扫描；收齐同一批次后才会保存配对信息。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Parts can be scanned in any order; pairing info is saved only after every part of the same batch is collected."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "分割コードは任意の順序でスキャンできます。同じバッチをすべて読み取った後にペアリング情報が保存されます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "분할 코드는 어떤 순서로든 스캔할 수 있으며, 같은 묶음을 모두 모은 후에 페어링 정보가 저장됩니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "分片可按任意顺序扫描；收齐同一批次后才会保存配对信息。"
-          }
-        }
-      }
-    },
-    "分片进度 %lld/%lld": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Parts scanned %lld/%lld"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "分割コードの進捗 %lld/%lld"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "분할 코드 진행률 %lld/%lld"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "分片进度 %lld/%lld"
           }
         }
       }
@@ -9185,34 +9101,6 @@
         }
       }
     },
-    "剪贴板中没有配对文本": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No pairing text on the clipboard"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "クリップボードにペアリングテキストがありません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "클립보드에 페어링 텍스트가 없습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "剪贴板中没有配对文本"
-          }
-        }
-      }
-    },
     "加入队列": {
       "localizations": {
         "en": {
@@ -10333,6 +10221,34 @@
         }
       }
     },
+    "只读取后端地址": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reads the backend address only"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドのアドレスのみ読み取ります"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드 주소만 읽습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只读取后端地址"
+          }
+        }
+      }
+    },
     "可升级": {
       "localizations": {
         "en": {
@@ -11253,6 +11169,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "后端不存在运行中的此 PTY · 可启动新进程"
+          }
+        }
+      }
+    },
+    "后端公钥指纹，应与后端设备面板显示的一致。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Backend key fingerprint. It should match the one in the backend's device panel."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドの公開鍵フィンガープリント。バックエンドのデバイスパネルの表示と一致する必要があります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드 공개 키 지문입니다. 백엔드 기기 패널에 표시된 값과 같아야 합니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端公钥指纹，应与后端设备面板显示的一致。"
           }
         }
       }
@@ -14505,34 +14449,6 @@
         }
       }
     },
-    "导入后端提供的配对信息，或申请设备验证。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Import the pairing info provided by the backend, or request device verification."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "バックエンドが提供するペアリング情報をインポートするか、デバイス認証を申請してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "백엔드가 제공한 페어링 정보를 가져오거나 기기 인증을 신청하세요."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "导入后端提供的配对信息，或申请设备验证。"
-          }
-        }
-      }
-    },
     "导入完成": {
       "localizations": {
         "en": {
@@ -14641,34 +14557,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "导入恢复密钥"
-          }
-        }
-      }
-    },
-    "导入配对": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Import pairing"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリングをインポート"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 가져오기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "导入配对"
           }
         }
       }
@@ -14813,30 +14701,30 @@
         }
       }
     },
-    "将二维码放在画面中；分片二维码可连续扫描。": {
+    "将二维码放在画面中。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Place the QR code in the frame; multi-part QR codes can be scanned one after another."
+            "value": "Place the QR code in the frame."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "QR コードを枠内に収めてください。分割 QR コードは続けてスキャンできます。"
+            "value": "QR コードを画面内に入れてください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "QR 코드를 화면 안에 맞추세요. 분할 QR 코드는 연속으로 스캔할 수 있습니다."
+            "value": "QR 코드를 화면 안에 놓으세요."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "将二维码放在画面中；分片二维码可连续扫描。"
+            "value": "将二维码放在画面中。"
           }
         }
       }
@@ -16773,34 +16661,6 @@
         }
       }
     },
-    "已加密（%@）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Encrypted (%@)"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化済み（%@）"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화됨(%@)"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已加密（%@）"
-          }
-        }
-      }
-    },
     "已加载线程": {
       "localizations": {
         "en": {
@@ -17725,62 +17585,6 @@
         }
       }
     },
-    "已收到 %lld/%lld 分片": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Received %lld/%lld parts"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld/%lld パートを受信しました"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld/%lld 조각을 받았습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已收到 %lld/%lld 分片"
-          }
-        }
-      }
-    },
-    "已收到分片 %lld/%lld，请继续导入本批次剩余分片。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Received part %lld/%lld; continue importing the remaining parts of this batch."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "パート %lld/%lld を受信しました。このバッチの残りのパートを引き続きインポートしてください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "조각 %lld/%lld을(를) 받았습니다. 이 배치의 나머지 조각을 계속 가져오세요."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已收到分片 %lld/%lld，请继续导入本批次剩余分片。"
-          }
-        }
-      }
-    },
     "已断开": {
       "localizations": {
         "en": {
@@ -18001,62 +17805,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "已添加引用到对话"
-          }
-        }
-      }
-    },
-    "已清空分片，请扫描同一批次二维码。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Parts cleared; scan QR codes from the same batch."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "パートをクリアしました。同じバッチの QR コードをスキャンしてください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "조각을 비웠습니다. 같은 배치의 QR 코드를 스캔하세요."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已清空分片，请扫描同一批次二维码。"
-          }
-        }
-      }
-    },
-    "已清空配对分片。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing parts cleared."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリングのパートをクリアしました。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 조각을 비웠습니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已清空配对分片。"
           }
         }
       }
@@ -18397,6 +18145,34 @@
         }
       }
     },
+    "已读取后端地址，正在开始设备验证。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Backend address read. Starting device verification."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドのアドレスを読み取りました。デバイス認証を開始しています。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드 주소를 읽었습니다. 기기 인증을 시작합니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已读取后端地址，正在开始设备验证。"
+          }
+        }
+      }
+    },
     "已读取恢复密钥": {
       "localizations": {
         "en": {
@@ -18701,6 +18477,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "已附加到本地会话"
+          }
+        }
+      }
+    },
+    "已验证 · %@ · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verified · %@ · %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "確認済み · %@ · %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "확인됨 · %@ · %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已验证 · %@ · %@"
           }
         }
       }
@@ -21533,30 +21337,30 @@
         }
       }
     },
-    "扫描完成": {
+    "扫描后端的配对二维码，或直接开始设备验证。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Scan complete"
+            "value": "Scan the backend's pairing QR code, or start device verification directly."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "スキャン完了"
+            "value": "バックエンドのペアリング QR コードをスキャンするか、直接デバイス認証を開始してください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "스캔 완료"
+            "value": "백엔드의 페어링 QR 코드를 스캔하거나 바로 기기 인증을 시작하세요."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "扫描完成"
+            "value": "扫描后端的配对二维码，或直接开始设备验证。"
           }
         }
       }
@@ -21617,6 +21421,34 @@
         }
       }
     },
+    "扫码读取地址，设备验证后保存加密公钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan for the address; the encryption key is saved after device verification"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スキャンでアドレスを読み取り、デバイス認証後に暗号化公開鍵を保存"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "스캔으로 주소를 읽고 기기 인증 후 암호화 공개 키를 저장"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "扫码读取地址，设备验证后保存加密公钥"
+          }
+        }
+      }
+    },
     "批准": {
       "localizations": {
         "en": {
@@ -21645,30 +21477,30 @@
         }
       }
     },
-    "批准后此后端即信任本机设备密钥；传输加密公钥仍需从配对信息导入。": {
+    "批准后此后端信任本机设备密钥，本机同时保存经验证的传输加密公钥。同一后端重新配对会沿用本机设备密钥。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Once approved, this backend trusts this device's key; the transport encryption public key must still be imported from the pairing info."
+            "value": "Once approved, this backend trusts this device's key and this device saves the verified transport key. Pairing the same backend again keeps this device's key."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "承認すると、このバックエンドはこのデバイスの鍵を信頼します。通信暗号化の公開鍵は引き続きペアリング情報からインポートする必要があります。"
+            "value": "承認されると、このバックエンドはこのデバイスの鍵を信頼し、このデバイスは確認済みの転送暗号化公開鍵を保存します。同じバックエンドに再ペアリングしてもデバイス鍵は変わりません。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "승인하면 이 백엔드가 이 기기의 키를 신뢰합니다. 전송 암호화 공개 키는 여전히 페어링 정보에서 가져와야 합니다."
+            "value": "승인되면 이 백엔드가 이 기기의 키를 신뢰하고, 이 기기는 확인된 전송 암호화 공개 키를 저장합니다. 같은 백엔드에 다시 페어링해도 기기 키는 유지됩니다."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "批准后此后端即信任本机设备密钥；传输加密公钥仍需从配对信息导入。"
+            "value": "批准后此后端信任本机设备密钥，本机同时保存经验证的传输加密公钥。同一后端重新配对会沿用本机设备密钥。"
           }
         }
       }
@@ -22005,6 +21837,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "持续拒绝"
+          }
+        }
+      }
+    },
+    "指纹不可用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fingerprint unavailable"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フィンガープリントを利用できません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지문을 사용할 수 없음"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "指纹不可用"
           }
         }
       }
@@ -23293,34 +23153,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "操作未完成"
-          }
-        }
-      }
-    },
-    "支持多张图片及分片二维码": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Supports multiple images and split QR codes"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "複数の画像と分割 QR コードに対応"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "여러 이미지 및 분할 QR 코드 지원"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "支持多张图片及分片二维码"
           }
         }
       }
@@ -24861,6 +24693,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "无法预览此图片。"
+          }
+        }
+      }
+    },
+    "无（本机明文）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None (local plaintext)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "なし（ローカル平文）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "없음(로컬 평문)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无（本机明文）"
           }
         }
       }
@@ -32285,34 +32145,6 @@
         }
       }
     },
-    "点按清空本批次后重新导入": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tap to clear this batch and import again"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "タップしてこのバッチをクリアし、再度読み込む"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "탭하여 이번 배치를 지우고 다시 가져오기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "点按清空本批次后重新导入"
-          }
-        }
-      }
-    },
     "点按重试": {
       "localizations": {
         "en": {
@@ -34749,34 +34581,6 @@
         }
       }
     },
-    "粘贴后端 TUI 提供的完整 JSON，或本批次的一个二维码分片。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Paste the full JSON from the backend TUI, or one QR code chunk from this batch."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "バックエンド TUI が提供する完全な JSON、またはこのバッチの QR コードフラグメントを 1 つ貼り付けてください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "백엔드 TUI가 제공한 전체 JSON 또는 이번 배치의 QR 코드 조각 하나를 붙여넣으세요."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "粘贴后端 TUI 提供的完整 JSON，或本批次的一个二维码分片。"
-          }
-        }
-      }
-    },
     "粘贴的图片.jpg": {
       "localizations": {
         "en": {
@@ -34829,34 +34633,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "粘贴的文本"
-          }
-        }
-      }
-    },
-    "粘贴配对 JSON": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Paste pairing JSON"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリング JSON を貼り付け"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 JSON 붙여넣기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "粘贴配对 JSON"
           }
         }
       }
@@ -37433,6 +37209,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "设为当前"
+          }
+        }
+      }
+    },
+    "设备密钥由 Keychain 保存。传输加密公钥只由设备验证确认，不能手动填写；未经验证的公钥不会被使用，需要重新配对。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The device key is stored in the Keychain. The transport encryption key is confirmed only by device verification and cannot be entered by hand; an unverified key is never used and requires pairing again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイス鍵はキーチェーンに保存されます。転送暗号化の公開鍵はデバイス認証でのみ確認され、手動では入力できません。確認されていない公開鍵は使用されず、再ペアリングが必要です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기기 키는 키체인에 저장됩니다. 전송 암호화 공개 키는 기기 인증으로만 확인되며 직접 입력할 수 없습니다. 확인되지 않은 공개 키는 사용되지 않으며 다시 페어링해야 합니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备密钥由 Keychain 保存。传输加密公钥只由设备验证确认，不能手动填写；未经验证的公钥不会被使用，需要重新配对。"
+          }
+        }
+      }
+    },
+    "设备已批准，但无法保存配对结果，请重新配对。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The device was approved, but the pairing could not be saved. Pair again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイスは承認されましたが、ペアリング結果を保存できませんでした。再ペアリングしてください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기기가 승인되었지만 페어링 결과를 저장할 수 없습니다. 다시 페어링하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备已批准，但无法保存配对结果，请重新配对。"
           }
         }
       }
@@ -41469,34 +41301,6 @@
         }
       }
     },
-    "连续扫描同一批次的全部分片": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan all chunks of the same batch in a row"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "同じバッチのすべてのフラグメントを続けてスキャン"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "같은 배치의 모든 조각을 연속으로 스캔"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连续扫描同一批次的全部分片"
-          }
-        }
-      }
-    },
     "退出检查": {
       "localizations": {
         "en": {
@@ -41945,34 +41749,6 @@
         }
       }
     },
-    "配对 JSON": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing JSON"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリング JSON"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 JSON"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "配对 JSON"
-          }
-        }
-      }
-    },
     "配对与设备验证": {
       "localizations": {
         "en": {
@@ -41997,34 +41773,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "配对与设备验证"
-          }
-        }
-      }
-    },
-    "配对信息已导入并保存。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing info imported and saved."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ペアリング情報を読み込んで保存しました。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "페어링 정보를 가져와 저장했습니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "配对信息已导入并保存。"
           }
         }
       }
@@ -42365,6 +42113,34 @@
         }
       }
     },
+    "重新配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pair Again"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再ペアリング"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다시 페어링"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新配对"
+          }
+        }
+      }
+    },
     "重新附加本地会话事件": {
       "localizations": {
         "en": {
@@ -42417,34 +42193,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "重置"
-          }
-        }
-      }
-    },
-    "重置分片": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reset chunks"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "フラグメントをリセット"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "조각 초기화"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "重置分片"
           }
         }
       }
@@ -42897,30 +42645,30 @@
         }
       }
     },
-    "需要加密配对，点按导入配对信息": {
+    "需要加密配对，点按重新配对": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Encrypted pairing required. Tap to import pairing info."
+            "value": "Encrypted pairing required. Tap to pair again"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "暗号化ペアリングが必要です。タップしてペアリング情報を読み込みます。"
+            "value": "暗号化ペアリングが必要です。タップして再ペアリング"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "암호화 페어링이 필요합니다. 탭하여 페어링 정보를 가져오세요."
+            "value": "암호화 페어링이 필요합니다. 탭하여 다시 페어링"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "需要加密配对，点按导入配对信息"
+            "value": "需要加密配对，点按重新配对"
           }
         }
       }

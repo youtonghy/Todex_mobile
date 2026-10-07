@@ -355,12 +355,11 @@ final class HistoryEncryptionViewController: SettingsListController {
     }
 
     private func scanRecovery() {
-        let scanner = PairingQRScannerViewController(
-            onScan: { [weak self] text in
-                let seed = try HistoryRecoveryKey.seed(qrString: text)
-                self?.perform { try await self?.importRecovery(seed) }
-                return (String(localized: "已读取恢复密钥"), true, 1, 1)
-            }, onReset: {})
+        let scanner = PairingQRScannerViewController { [weak self] text in
+            let seed = try HistoryRecoveryKey.seed(qrString: text)
+            self?.perform { try await self?.importRecovery(seed) }
+            return String(localized: "已读取恢复密钥")
+        }
         scanner.title = String(localized: "扫描恢复二维码")
         present(UINavigationController(rootViewController: scanner), animated: true)
     }

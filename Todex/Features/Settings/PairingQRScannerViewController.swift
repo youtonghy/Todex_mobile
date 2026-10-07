@@ -4,11 +4,10 @@ import UIKit
 
 @MainActor
 final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
-    private let onScan: @MainActor (String) throws -> (message: String, complete: Bool, received: Int, total: Int)
-    private let onReset: @MainActor () -> Void
+    /// Imports one pairing link and returns the status to announce; a throw
+    /// keeps scanning.
+    private let onScan: @MainActor (String) throws -> String
     private let message = UILabel()
-    private let progressLabel = UILabel()
-    private let progressBar = UIProgressView(progressViewStyle: .bar)
     private let highlight = CAShapeLayer()
     private let checkmark = UIImageView(
         image: UIImage(systemName: "checkmark.circle.fill")?
@@ -27,18 +26,14 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
         }
     }
 
-    init(
-        onScan: @escaping @MainActor (String) throws -> (message: String, complete: Bool, received: Int, total: Int),
-        onReset: @escaping @MainActor () -> Void
-    ) {
+    init(onScan: @escaping @MainActor (String) throws -> String) {
         self.onScan = onScan
-        self.onReset = onReset
         super.init(nibName: nil, bundle: nil)
         title = String(localized: "扫描配对二维码")
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("Use init(onScan:onReset:)") }
+    required init?(coder: NSCoder) { fatalError("Use init(onScan:)") }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -62,16 +57,6 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
         navigationItem.leftBarButtonItem?.accessibilityIdentifier = "pairing.scanner.close"
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            title: String(localized: "重置分片"),
-            primaryAction: UIAction { [weak self] _ in
-                guard let self else { return }
-                seen.removeAll()
-                onReset()
-                showProgress(received: 0, total: 0)
-                message.text = String(localized: "已清空分片，请扫描同一批次二维码。")
-            })
-        navigationItem.rightBarButtonItem?.accessibilityIdentifier = "pairing.scanner.reset"
         message.text = String(localized: "正在准备相机…")
         message.numberOfLines = 0
         message.font = .preferredFont(forTextStyle: .body)
@@ -85,17 +70,7 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
         }
         settings.accessibilityIdentifier = "pairing.scanner.permissions"
-        progressLabel.font = .preferredFont(forTextStyle: .subheadline)
-        progressLabel.textColor = .white
-        progressLabel.textAlignment = .center
-        progressLabel.accessibilityIdentifier = "pairing.scanner.progress"
-        progressBar.isHidden = true
-        progressLabel.isHidden = true
-        progressBar.accessibilityIdentifier = "pairing.scanner.progressBar"
-        let progressRow = UIStackView(arrangedSubviews: [progressBar, progressLabel])
-        progressRow.axis = .vertical
-        progressRow.spacing = 6
-        let controls = UIStackView(arrangedSubviews: [message, progressRow, retry, settings])
+        let controls = UIStackView(arrangedSubviews: [message, retry, settings])
         controls.axis = .vertical
         controls.spacing = 12
         controls.isLayoutMarginsRelativeArrangement = true
@@ -181,7 +156,7 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
                 guard let self, visible, cameraGeneration == current else { return }
                 try await capture.start(delegate: self)
                 guard !Task.isCancelled, visible, cameraGeneration == current else { return }
-                message.text = String(localized: "将二维码放在画面中；分片二维码可连续扫描。")
+                message.text = String(localized: "将二维码放在画面中。")
                 message.textColor = .white
                 view.setNeedsLayout()
             } catch {
@@ -236,36 +211,22 @@ final class PairingQRScannerViewController: UIViewController, AVCaptureMetadataO
             seen.insert(raw)
             do {
                 let feedback = try onScan(raw)
-                message.text = feedback.message
+                message.text = feedback
                 message.textColor = .white
-                showProgress(received: feedback.received, total: feedback.total)
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                UIAccessibility.post(notification: .announcement, argument: feedback.message)
-                if feedback.complete {
-                    finished = true
-                    capture.stop()
-                    checkmark.isHidden = false
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
-                    UIAccessibility.post(notification: .announcement, argument: String(localized: "扫描完成"))
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-                        self?.dismiss(animated: true)
-                    }
-                    return
+                finished = true
+                capture.stop()
+                checkmark.isHidden = false
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                UIAccessibility.post(notification: .announcement, argument: feedback)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                    self?.dismiss(animated: true)
                 }
+                return
             } catch {
                 message.text = error.localizedDescription
                 UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
             }
         }
-    }
-
-    private func showProgress(received: Int, total: Int) {
-        let visible = total > 1
-        progressBar.isHidden = !visible
-        progressLabel.isHidden = !visible
-        guard visible else { return }
-        progressBar.progress = Float(received) / Float(total)
-        progressLabel.text = String(localized: "已收到 \(received)/\(total) 分片")
     }
 
     /// Dimmed overlay with a transparent center square and corner brackets,
