@@ -338,7 +338,8 @@ def verify(root, manifest):
                             time.sleep(0.1)
         version = check("health-version-policy", lambda: (
             require(http.request("GET", "/health", signed=False) == "ok", "Health wire"),
-            http.request("GET", "/v2/version", signed=False),
+            # data_dir is only returned to signed (enrolled) callers.
+            http.request("GET", "/v2/version"),
             require(http.request("GET", "/v2/transport-policy", signed=False)["requiredProtocol"] == "none", "Transport policy")
         )[1])
         require(version["data_dir"] == manifest["dataDir"], "Unexpected backend data directory")

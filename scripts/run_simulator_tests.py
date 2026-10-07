@@ -26,6 +26,11 @@ def main():
     if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port != fixture["port"]:
         raise ValueError("UI tests require the owned local fixture, not a real backend")
     device = (root / "device.txt").read_text().strip()
+    # `backend_fixture.py encrypt` pins the fixture's transport key; the app
+    # then talks transport v2 to it like a paired device.
+    environment = dict(TODEX_TEST_PORT=str(fixture["port"]), TODEX_TEST_DEVICE_SECRET=device)
+    if fixture.get("encryption", "none") != "none":
+        environment.update(TODEX_TEST_ENCRYPTION=fixture["encryption"], TODEX_TEST_PUBLIC_KEY=fixture["publicKey"])
     derived = Path(args.derived_data).resolve()
     repository = Path(__file__).resolve().parents[1]
     env = dict(os.environ)
@@ -48,7 +53,7 @@ def main():
             if value.get("IsUITestBundle") is True:
                 # TestingEnvironmentVariables is reserved for test-loader paths;
                 # Xcode path-normalizes values there (http:// becomes http:/).
-                value.setdefault("EnvironmentVariables", {}).update(TODEX_TEST_PORT=str(fixture["port"]), TODEX_TEST_DEVICE_SECRET=device)
+                value.setdefault("EnvironmentVariables", {}).update(environment)
                 configured += 1
             for child in value.values():
                 visit(child)

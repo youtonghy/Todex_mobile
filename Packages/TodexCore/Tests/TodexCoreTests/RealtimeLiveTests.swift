@@ -17,7 +17,8 @@ struct RealtimeLiveTests {
         let fixture = try LiveFixture()
         let http = HTTPClient(connection: fixture.connection)
         let policy = try await http.request(path: "/v2/transport-policy", authenticated: false)
-        #expect(policy["requiredProtocol"] == "none")
+        #expect(policy["requiredProtocol"] == .string(fixture.connection.encryption.rawValue))
+        #expect(policy["transportVersion"] == 2)
 
         for invalidSecret in ["", "not-a-valid-device-seed"] {
             var connection = fixture.connection
@@ -47,6 +48,48 @@ struct RealtimeLiveTests {
                 client: client, frames: frames, conversationID: fixture.conversationID, after: cursor)
             #expect(!events.isEmpty)
         }
+    }
+
+    /// Device pairing v3 against the real backend: commit, reveal, the code
+    /// the operator sees, local approval (the TUI's decision file), then the
+    /// new device connects over the fixture's transport (v2 when pinned).
+    @Test func actualPairingV3EnrollsADeviceThatThenConnects() async throws {
+        let fixture = try LiveFixture()
+        let device = DeviceIdentity()
+        var connection = fixture.connection
+        connection.deviceSecret = device.secretKeyBase64URL
+        let session = try await DevicePairingSession.begin(
+            connection: connection, deviceName: "Swift live pairing", device: device)
+        let directory = fixture.dataDirectory.appendingPathComponent("device-pairing")
+        // The code is published only after the reveal; find the request by it.
+        var requestID: String?
+        for name in try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        where name.hasPrefix("request-") && name.hasSuffix(".json") {
+            let summary = try JSONDecoder().decode(
+                JSONValue.self, from: Data(contentsOf: directory.appendingPathComponent(name)))
+            if summary["verificationCode"] == .string(session.verificationCode) {
+                requestID = summary["requestId"].optionalString
+            }
+        }
+        let id = try #require(requestID, "the backend does not list the revealed verification code")
+        #expect(try await session.poll() == .pending)
+        let temporary = directory.appendingPathComponent(".swift-live-\(UUID().uuidString).tmp")
+        try #require(
+            FileManager.default.createFile(
+                atPath: temporary.path, contents: Data(#"{"requestId":"\#(id)","approved":true}"#.utf8),
+                attributes: [.posixPermissions: 0o600]))
+        try FileManager.default.moveItem(at: temporary, to: directory.appendingPathComponent("decision-\(id).json"))
+        var status = DevicePairingStatus.pending
+        for _ in 0..<20 where status == .pending {
+            try await Task.sleep(for: .milliseconds(session.pollIntervalMilliseconds))
+            status = try await session.poll()
+        }
+        #expect(status == .approved)
+        let pong = try await withLiveClient(connection) { client, _ in
+            try await client.command(type: "server.ping", payload: [:], timeout: 5)
+        }
+        #expect(pong == ["pong": true])
+        _ = try await APIClient(connection: connection).workspaces()
     }
 
     /// Read-only against the fixture: settings, profiles, and a browser watch
@@ -159,7 +202,12 @@ struct LiveFixture: Sendable {
             contentsOf: url.deletingLastPathComponent().appendingPathComponent("device.txt"), encoding: .utf8
         ).trimmingCharacters(in: .whitespacesAndNewlines)
         try #require(!deviceSecret.isEmpty, "Fixture device secret is empty")
-        connection = BackendConnection(name: "Isolated live test", serverURL: serverURL, deviceSecret: deviceSecret)
+        // `backend_fixture.py encrypt` pins the transport key: the live tests
+        // then run over transport v2 (sealed REST, tv=2 WebSocket).
+        connection = BackendConnection(
+            name: "Isolated live test", serverURL: serverURL, deviceSecret: deviceSecret,
+            encryption: manifest["encryption"].optionalString.flatMap(EncryptionProtocol.init) ?? .none,
+            publicKey: manifest["publicKey"].optionalString ?? "")
         workspace = try #require(manifest["workspace"].optionalString)
         conversationID = try #require(manifest["conversationId"].optionalString)
         dataDirectory = URL(fileURLWithPath: try #require(manifest["dataDir"].optionalString))

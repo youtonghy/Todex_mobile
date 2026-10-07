@@ -29,30 +29,30 @@
         }
       }
     },
-    "%@。请在设置中核对“传输加密”与“加密公钥”，或重新导入后端配对信息。": {
+    "%@。请在“配对与设备验证”中扫描后端提供的配对二维码。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@. Check \"Transport encryption\" and \"Encryption public key\" in Settings, or re-import the backend pairing info."
+            "value": "%@. Scan the pairing QR code shown by the backend in “Pairing & Device Verification”."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@。設定で「転送暗号化」と「暗号化公開鍵」を確認するか、バックエンドのペアリング情報を再インポートしてください。"
+            "value": "%@。「ペアリングとデバイス認証」でバックエンドが表示するペアリング QR コードをスキャンしてください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@. 설정에서 \"전송 암호화\"와 \"암호화 공개 키\"를 확인하거나 백엔드 페어링 정보를 다시 가져오세요."
+            "value": "%@. “페어링 및 기기 인증”에서 백엔드가 표시하는 페어링 QR 코드를 스캔하세요."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@。请在设置中核对“传输加密”与“加密公钥”，或重新导入后端配对信息。"
+            "value": "%@。请在“配对与设备验证”中扫描后端提供的配对二维码。"
           }
         }
       }
@@ -305,34 +305,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "HTTPS 证书或 TLS 握手失败"
-          }
-        }
-      }
-    },
-    "ML-KEM-768 公钥长度无效": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid ML-KEM-768 public key length"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ML-KEM-768 公開鍵の長さが無効です"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ML-KEM-768 공개 키 길이가 잘못되었습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ML-KEM-768 公钥长度无效"
           }
         }
       }
@@ -865,146 +837,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "加密失败"
-          }
-        }
-      }
-    },
-    "加密帧 nonce 方向或格式无效": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid encrypted frame nonce direction or format"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化フレームの nonce の方向または形式が無効です"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화 프레임 nonce의 방향 또는 형식이 잘못되었습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "加密帧 nonce 方向或格式无效"
-          }
-        }
-      }
-    },
-    "加密帧不是有效 UTF-8": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Encrypted frame is not valid UTF-8"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化フレームが有効な UTF-8 ではありません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화 프레임이 유효한 UTF-8이 아닙니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "加密帧不是有效 UTF-8"
-          }
-        }
-      }
-    },
-    "加密帧类型或协议不匹配": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Encrypted frame type or protocol mismatch"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化フレームの種類またはプロトコルが一致しません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화 프레임 유형 또는 프로토콜이 일치하지 않습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "加密帧类型或协议不匹配"
-          }
-        }
-      }
-    },
-    "加密帧计数已耗尽，请重新连接": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Encrypted frame counter exhausted; reconnect"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化フレームのカウンターが上限に達しました。再接続してください"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화 프레임 카운터가 소진되었습니다. 다시 연결하세요"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "加密帧计数已耗尽，请重新连接"
-          }
-        }
-      }
-    },
-    "加密帧重复或乱序": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Encrypted frame duplicated or out of order"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化フレームが重複しているか、順序が正しくありません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화 프레임이 중복되었거나 순서가 잘못되었습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "加密帧重复或乱序"
           }
         }
       }
@@ -1793,6 +1625,34 @@
         }
       }
     },
+    "后端拒绝了加密连接，请重新扫码配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backend rejected the encrypted connection. Scan the QR code again to re-pair."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドが暗号化接続を拒否しました。QR コードを再度スキャンしてペアリングし直してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드가 암호화 연결을 거부했습니다. QR 코드를 다시 스캔하여 다시 페어링하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端拒绝了加密连接，请重新扫码配对"
+          }
+        }
+      }
+    },
     "后端拒绝了实时连接。请确认后端版本与应用一致，并检查反向代理是否支持 WebSocket。": {
       "localizations": {
         "en": {
@@ -2157,30 +2017,30 @@
         }
       }
     },
-    "后端要求 %@ 加密，请导入对应公钥": {
+    "后端要求加密连接，请扫码进行加密配对": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The backend requires %@ encryption; import the matching public key"
+            "value": "The backend requires an encrypted connection. Scan the QR code to pair with encryption."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "バックエンドは %@ 暗号化を要求しています。対応する公開鍵をインポートしてください"
+            "value": "バックエンドは暗号化接続を必要としています。QR コードをスキャンして暗号化ペアリングを行ってください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "백엔드가 %@ 암호화를 요구합니다. 해당 공개 키를 가져오세요"
+            "value": "백엔드에 암호화 연결이 필요합니다. QR 코드를 스캔하여 암호화 페어링을 진행하세요."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "后端要求 %@ 加密，请导入对应公钥"
+            "value": "后端要求加密连接，请扫码进行加密配对"
           }
         }
       }
@@ -2489,34 +2349,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "导入文件过大"
-          }
-        }
-      }
-    },
-    "尚未导入加密公钥，请先完成密钥传输验证": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Encryption public key not imported; complete key transfer verification first"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化の公開鍵がまだインポートされていません。先に鍵転送の検証を完了してください"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화 공개 키를 아직 가져오지 않았습니다. 먼저 키 전송 검증을 완료하세요"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未导入加密公钥，请先完成密钥传输验证"
           }
         }
       }
@@ -3133,34 +2965,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "服务器暂时不可用"
-          }
-        }
-      }
-    },
-    "未启用加密时不应创建加密会话": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "An encrypted session should not be created when encryption is disabled"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化が無効な場合は暗号化セッションを作成できません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화가 비활성화된 상태에서는 암호화 세션을 만들 수 없습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未启用加密时不应创建加密会话"
           }
         }
       }

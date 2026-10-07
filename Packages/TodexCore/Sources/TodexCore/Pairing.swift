@@ -82,6 +82,9 @@ public struct PairingImporter: Sendable {
         result.serverURL = server.absoluteString
         result.encryption = selected
         result.publicKey = key
+        // Transport v2 client rules: a remote backend is only reachable with
+        // a pinned key; saving a keyless remote pairing would never connect.
+        if SecureTransportMode.resolve(result) == .refused { throw SecureTransportError.encryptionRequired }
         let sameBackend = (try? current.normalizedURL()) == server
         // Pairing links carry transport keys only. The device key is enrolled
         // through device verification and never travels in a QR.
@@ -125,8 +128,9 @@ public enum DevicePairingStatus: Sendable, Equatable {
     case approved
 }
 
-/// The verification code authenticates this enrollment's ephemeral transcript.
-/// It does not verify or replace the separately imported transport public key.
+/// The verification code authenticates this enrollment's ephemeral transcript
+/// (device pairing v3). It does not verify or replace the separately imported
+/// transport public key.
 public actor DevicePairingSession {
     public nonisolated let verificationCode: String
     /// Unix milliseconds, matching the backend and desktop contract.
@@ -138,28 +142,36 @@ public actor DevicePairingSession {
     private var material: PairingMaterial?
     private var polling = false
 
+    /// Device pairing v3: commit to an ephemeral key and nonce, learn the
+    /// server's key, then reveal. The code is fixed only after the reveal, so
+    /// a man in the middle cannot grind its key against the 40-bit code.
     public static func begin(connection: BackendConnection, deviceName: String, device: DeviceIdentity) async throws -> DevicePairingSession {
         _ = try connection.normalizedURL()
-        let client = HTTPClient(connection: connection)
+        // Pairing is reachable directly on every listener and never goes
+        // through the transport tunnel: a remote profile may only just have
+        // imported its key, and pairing protects itself.
+        let client = HTTPClient.pairingBootstrap(connection: connection)
         return try await begin(
             deviceName: deviceName, device: device, privateKey: .init(),
+            clientNonce: TransportBytes.random(DevicePairingV3.nonceLength),
             post: { action, body in
                 try await PairingBootstrap.post(client: client, action: action, body: body)
             })
     }
 
-    // Injectable endpoint and clock keep state/race tests independent of a live
-    // backend; production always uses the unauthenticated HTTPClient above.
+    // Injectable endpoint, key, nonce and clock keep state/race tests
+    // independent of a live backend; production uses the bootstrap client above.
     static func begin(
-        deviceName: String, device: DeviceIdentity, privateKey: Curve25519.KeyAgreement.PrivateKey, post: @escaping PairingPost,
-        now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1000 }
+        deviceName: String, device: DeviceIdentity, privateKey: Curve25519.KeyAgreement.PrivateKey, clientNonce: Data,
+        post: @escaping PairingPost, now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1000 }
     ) async throws -> DevicePairingSession {
         try Task.checkCancellation()
         let publicKey = privateKey.publicKey.rawRepresentation
+        let commitment = try DevicePairingV3.commitment(clientPublic: publicKey, clientNonce: clientNonce)
         let response = try await post(
             "create",
             [
-                "clientPublicKey": .string(CryptoEncoding.encode(publicKey)),
+                "clientCommitment": .string(CryptoEncoding.encode(commitment)),
                 "deviceName": .string(sanitizedDeviceName(deviceName)),
                 "devicePublicKey": .string(device.publicKeyBase64URL),
             ])
@@ -178,10 +190,29 @@ public actor DevicePairingSession {
         }
         let serverKey = try CryptoEncoding.decode(encodedServerKey, count: 32)
         let material = try PairingMaterial(
-            requestID: id, privateKey: privateKey, serverPublicKey: serverKey, device: device)
-        return Self(
+            v3RequestID: id, privateKey: privateKey, serverPublicKey: serverKey, device: device,
+            clientNonce: clientNonce)
+        let session = Self(
             requestID: id, expiresAt: expires, pollIntervalMilliseconds: Int(interval), material: material, post: post,
             now: now)
+        do {
+            let revealed = try await post(
+                "reveal",
+                [
+                    "requestId": .string(id), "clientPublicKey": .string(CryptoEncoding.encode(publicKey)),
+                    "clientNonce": .string(CryptoEncoding.encode(clientNonce)),
+                ])
+            try Task.checkCancellation()
+            guard revealed["status"].optionalString == "pending" else {
+                throw TodexError.invalid(String(localized: "设备验证响应状态无效", bundle: .module))
+            }
+        } catch {
+            // The reveal may have reached the backend; withdraw it so no
+            // orphaned code waits for approval. Unrevealed requests expire.
+            Task { try? await session.cancel() }
+            throw error
+        }
+        return session
     }
 
     private init(
@@ -267,7 +298,7 @@ enum PairingBootstrap {
     static func post(client: HTTPClient, action: String, body: JSONValue, timeout: Duration = .seconds(10)) async throws
         -> JSONValue
     {
-        guard ["create", "poll", "cancel"].contains(action) else { throw TodexError.invalid(String(localized: "设备验证操作无效", bundle: .module)) }
+        guard ["create", "reveal", "poll", "cancel"].contains(action) else { throw TodexError.invalid(String(localized: "设备验证操作无效", bundle: .module)) }
         return try await withThrowingTaskGroup(of: JSONValue.self) { group in
             group.addTask {
                 let result: JSONValue
@@ -321,23 +352,6 @@ struct PairingMaterial: Sendable {
     let cancelProof: SymmetricKey
     let verificationCode: String
     let deviceID: String
-
-    init(requestID: String, privateKey: Curve25519.KeyAgreement.PrivateKey, serverPublicKey: Data, device: DeviceIdentity) throws {
-        let shared = try CryptoEncoding.sharedSecret(privateKey: privateKey, publicKey: serverPublicKey)
-        // v2 binds the enrolled device key into the verification code and the
-        // wrap key, so a MITM cannot substitute its own device identity.
-        let transcript =
-            Data("todex.device-pairing.v2/transcript\0\(requestID)\0".utf8) + privateKey.publicKey.rawRepresentation
-            + serverPublicKey + Data([0]) + device.publicKey
-        let salt = Data(SHA256.hash(data: transcript))
-        self.transcript = transcript
-        deviceID = device.deviceID
-        wrapKey = CryptoEncoding.derive(ikm: shared, salt: salt, info: "todex.device-pairing.v2/wrap-key")
-        pollProof = CryptoEncoding.derive(ikm: shared, salt: salt, info: "todex.device-pairing.v2/poll-proof")
-        cancelProof = CryptoEncoding.derive(ikm: shared, salt: salt, info: "todex.device-pairing.v2/cancel-proof")
-        let hex = salt.prefix(5).map { String(format: "%02X", $0) }.joined()
-        verificationCode = "\(hex.prefix(5))-\(hex.suffix(5))"
-    }
 
     /// Device pairing v3 (commit, then reveal): the transcript also binds the
     /// client's 32-byte nonce, whose commitment the server saw before it chose

@@ -549,18 +549,6 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
             try await $0.transportPolicy()
         },
         .init(
-            name: "createDevicePairing", method: "POST", path: "/v2/device-pairing/create",
-            body: ["clientPublicKey": "key_123", "deviceName": "iPhone"], authenticated: false
-        ) { try await $0.createDevicePairing(clientPublicKey: "key_123", deviceName: "iPhone") },
-        .init(
-            name: "pollDevicePairing", method: "POST", path: "/v2/device-pairing/poll",
-            body: ["requestId": "r", "proof": "poll-proof"], authenticated: false
-        ) { try await $0.pollDevicePairing(requestId: "r", proof: "poll-proof") },
-        .init(
-            name: "cancelDevicePairing", method: "POST", path: "/v2/device-pairing/cancel",
-            body: ["requestId": "r", "proof": "cancel-proof"], authenticated: false
-        ) { try await $0.cancelDevicePairing(requestId: "r", proof: "cancel-proof") },
-        .init(
             name: "workspaces", method: "GET", path: "/v2/workspaces",
             response: ["workspaces": .array([TestWire.workspace]), "updatedAt": 123],
             expectedResult: .array([TestWire.workspace])
@@ -927,7 +915,7 @@ private struct APIFixture {
     init(
         deviceSecret: String = "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU", handler: @escaping APIURLProtocol.Handler
     ) {
-        let host = "api-\(UUID().uuidString.lowercased()).invalid"
+        let host = uniqueLoopbackHost()
         self.host = host
         APIURLProtocol.handlers.withLock { $0[host] = handler }
         let config = URLSessionConfiguration.ephemeral

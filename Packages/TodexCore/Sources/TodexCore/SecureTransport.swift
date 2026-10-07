@@ -40,16 +40,44 @@ public enum SecureTransportError {
         .configuration(String(localized: "后端的加密方式已变更，请重新配对", bundle: .module))
     }
 
-    /// Checks a `/v2/transport-policy` answer against the profile. Only a
-    /// conflicting concrete protocol is an error; the answer never downgrades
-    /// a pinned profile to plaintext.
+    /// The backend refused the transport itself: it could not open a request
+    /// sealed to the pinned key (`TRANSPORT_CRYPTO_FAILED`), or it wants a
+    /// newer transport (`426 PROTOCOL_UPGRADE_REQUIRED`). Retrying with the
+    /// same profile cannot succeed.
+    public static var transportRejected: TodexError {
+        .configuration(String(localized: "后端拒绝了加密连接，请重新扫码配对", bundle: .module))
+    }
+
+    /// Maps an unauthenticated outer rejection (Clarification 10) to the
+    /// re-pair error; any other API error passes through unchanged.
+    static func outerRejection(_ error: any Error) -> any Error {
+        guard case TodexError.server(let code, _) = error,
+            ["426", "PROTOCOL_UPGRADE_REQUIRED", "TRANSPORT_CRYPTO_FAILED"].contains(code.uppercased())
+        else { return error }
+        return transportRejected
+    }
+
+    /// Checks a `/v2/transport-policy` answer against the profile. The answer
+    /// never downgrades a pinned profile to plaintext; a different required
+    /// protocol asks for re-pairing, and an unpinned profile facing a backend
+    /// that requires encryption asks for encrypted pairing.
     public static func checkPolicy(_ connection: BackendConnection, requiredProtocol: String?) throws {
         let mode = SecureTransportMode.resolve(connection)
         try mode.requireAllowed()
-        guard case .v2(let pinned) = mode, let requiredProtocol,
-            let required = EncryptionProtocol(rawValue: requiredProtocol), required != .none
+        guard let requiredProtocol, let required = EncryptionProtocol(rawValue: requiredProtocol), required != .none
         else { return }
-        if required != pinned { throw repairRequired }
+        switch mode {
+        case .v2(let pinned): if required != pinned { throw repairRequired }
+        // The backend refuses a plaintext WebSocket whenever it requires
+        // encryption, loopback included; say so instead of a bare 403.
+        case .plaintext: throw pairingRequired
+        case .refused: return
+        }
+    }
+
+    /// An unpinned (loopback) profile whose backend requires encryption.
+    public static var pairingRequired: TodexError {
+        .configuration(String(localized: "后端要求加密连接，请扫码进行加密配对", bundle: .module))
     }
 }
 
@@ -133,7 +161,7 @@ public final class BackendSecureTransport: SecureTransport {
     ) {
         self.connection = connection
         mode = .resolve(connection)
-        http = HTTPClient(connection: connection, session: session, transportV2: true)
+        http = HTTPClient(connection: connection, session: session)
         self.makeSocket = makeSocket
         self.helloTimeout = helloTimeout
     }

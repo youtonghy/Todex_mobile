@@ -257,7 +257,11 @@ extension SessionSocket {
             if initial == nil, let url = fixtureURL {
                 let fixture = BackendConnection(
                     id: "simulator-fixture", name: String(localized: "测试后端"), serverURL: url,
-                    deviceSecret: environment["TODEX_TEST_DEVICE_SECRET"] ?? "")
+                    deviceSecret: environment["TODEX_TEST_DEVICE_SECRET"] ?? "",
+                    // A fixture started with transport encryption pins its key
+                    // here, so UI tests run over transport v2 like a paired device.
+                    encryption: environment["TODEX_TEST_ENCRYPTION"].flatMap(EncryptionProtocol.init) ?? .none,
+                    publicKey: environment["TODEX_TEST_PUBLIC_KEY"] ?? "")
                 connections.removeAll { $0.id == fixture.id }
                 connections.append(fixture)
                 selectedID = fixture.id

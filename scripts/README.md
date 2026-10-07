@@ -11,6 +11,8 @@ From the mobile repository:
 ```sh
 python3 -B scripts/backend_fixture.py start
 python3 -B scripts/backend_integration.py --fixture /private/tmp/todex-mobile-fixture-EXAMPLE
+# Optional, after the verifier: restart with transport encryption and pin its key
+python3 -B scripts/backend_fixture.py encrypt --fixture /private/tmp/todex-mobile-fixture-EXAMPLE --encryption x25519
 python3 -B scripts/backend_fixture.py status --fixture /private/tmp/todex-mobile-fixture-EXAMPLE
 python3 -B scripts/backend_fixture.py stop --fixture /private/tmp/todex-mobile-fixture-EXAMPLE
 ```
@@ -26,13 +28,13 @@ The server stays running after verification. `stop` targets only the daemon reco
 | `fixture.json` | HTTP/WS URL, PID, executable hash, temporary HOME/config/workspace paths, and IDs created during verification |
 | `device.txt` | Base64url Ed25519 seed of the fixture device pre-enrolled in `data/devices.json`; owner-readable |
 | `device-b.txt` | Seed of a second pre-enrolled device (`dev_tgAwbPp2cj_ew5Xl`) for multi-device history tests (grant push, revoke, restore); owner-readable |
-| `simulator-connection.json` | `serverURL`, `deviceSecret`, `encryption: none`, and `publicKey` for integration harnesses; not a promised app import format |
+| `simulator-connection.json` | `serverURL`, `deviceSecret`, `encryption` (`none` until `encrypt`), and `publicKey` for integration harnesses; not a promised app import format |
 | `integration-report.json` | Pass/fail per check and observed HTTP status codes |
 | `conversation-events.json` | Persisted Codex events returned by actual paginated REST replay |
 | `logs/backend.log` | Rust daemon log |
 | `logs/provider-wire.jsonl` | Synthetic backend-to-fake-CLI frames, including actual approval and interrupt responses |
 
-Use the HTTP URL from `fixture.json`; requests are signed with the device seed from `device.txt`. An iOS simulator on this Mac can reach the loopback listener. A physical device cannot use this loopback URL. Keep `encryption` set to `none` for this fixture. The app's actual connection UI and Swift runtime have not been driven by the Python verifier.
+Use the HTTP URL from `fixture.json`; requests are signed with the device seed from `device.txt`. An iOS simulator on this Mac can reach the loopback listener. A physical device cannot use this loopback URL. `encrypt` stops the daemon, sets `pairing_encryption` (`x25519` or `ml-kem-768`) on the same data directory, restarts it on a new port, and records `encryption`/`publicKey` in `fixture.json` and `simulator-connection.json`. Afterwards the Swift live tests (`TODEX_LIVE_FIXTURE`) and `run_simulator_tests.py` pin that key and talk transport v2 (sealed REST, `tv=2` WebSocket). The Python verifier speaks plaintext WebSocket, which the backend refuses once it requires encryption (loopback included), so run it before `encrypt`. The app's actual connection UI and Swift runtime have not been driven by the Python verifier.
 
 ## What is verified
 

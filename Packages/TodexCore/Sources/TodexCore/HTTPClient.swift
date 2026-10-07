@@ -21,17 +21,31 @@ private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendab
 public final class HTTPClient: Sendable {
     public let connection: BackendConnection
     private let session: URLSession
+    private let bootstrap: Bool
     /// Transport v2 "Client rules": with a pinned key every request goes
-    /// through `POST /v2/sealed`; a remote profile without one is refused.
-    /// Off keeps the legacy direct requests until the app switches over.
-    public let transportV2: Bool
+    /// through `POST /v2/sealed` (loopback included); a remote profile
+    /// without one is refused before touching the network; only an unpinned
+    /// loopback profile talks plaintext.
     public var transportMode: SecureTransportMode {
-        transportV2 ? .resolve(connection) : .plaintext
+        bootstrap ? .plaintext : .resolve(connection)
     }
 
-    public init(connection: BackendConnection, session: URLSession? = nil, transportV2: Bool = false) {
+    public convenience init(connection: BackendConnection, session: URLSession? = nil) {
+        self.init(connection: connection, session: session, bootstrap: false)
+    }
+
+    /// Device pairing runs before the device is enrolled and, for a remote
+    /// backend, straight after importing the key: the backend serves
+    /// `/v2/device-pairing/*` directly to every peer, and pairing v3 protects
+    /// itself (commit/reveal, verification code, transcript-bound wrap). This
+    /// client reaches only those routes, unsigned and never through the tunnel.
+    static func pairingBootstrap(connection: BackendConnection, session: URLSession? = nil) -> HTTPClient {
+        HTTPClient(connection: connection, session: session, bootstrap: true)
+    }
+
+    private init(connection: BackendConnection, session: URLSession?, bootstrap: Bool) {
         self.connection = connection
-        self.transportV2 = transportV2
+        self.bootstrap = bootstrap
         if let session {
             self.session = session
         } else {
@@ -109,9 +123,8 @@ public final class HTTPClient: Sendable {
         return try result.json(method: method)
     }
 
-    /// Keeps the actual HTTP status for transport policy discovery: only HTTP
-    /// 404 permits the older-backend fallback, never a body claiming NOT_FOUND.
-    /// Under transport v2 the status, headers and body are the authenticated
+    /// Keeps the actual HTTP status, headers and bytes for callers that need
+    /// more than JSON. Under transport v2 the status, headers and body are the authenticated
     /// inner response; the outer `/v2/sealed` exchange stays invisible.
     func response(
         _ method: HTTPMethod = .get, path: String, query: [String: String] = [:], body: JSONValue? = nil,
@@ -124,6 +137,11 @@ public final class HTTPClient: Sendable {
         }
         let mode = transportMode
         try mode.requireAllowed()
+        if bootstrap {
+            guard path.hasPrefix("/v2/device-pairing/"), !authenticated else {
+                throw TodexError.invalid(String(localized: "接口路径无效", bundle: .module))
+            }
+        }
         let requestURL = try url(path: path, query: query)
         let components = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)
         let encodedPath = components?.percentEncodedPath ?? "/"
@@ -202,7 +220,7 @@ public final class HTTPClient: Sendable {
             // authenticated. Errors (400 TRANSPORT_CRYPTO_FAILED, 426, ...)
             // surface as plain API errors; a "success" is a crypto failure.
             guard !(200..<300).contains(result.statusCode) else { throw TransportCryptoError("unsealed success response") }
-            _ = try result.json(method: method)
+            do { _ = try result.json(method: method) } catch { throw SecureTransportError.outerRejection(error) }
             throw TodexError.server(code: String(result.statusCode), message: "HTTP \(result.statusCode)")
         }
     }

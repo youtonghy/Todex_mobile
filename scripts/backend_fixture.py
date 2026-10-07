@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Start/status/stop a real Rust backend with entirely temporary state and fake CLIs."""
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -124,7 +125,13 @@ def start(binary):
         "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     (root / "fixture.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    command = [str(binary), "daemon-run", "--host", "127.0.0.1", "--port", "0", "--data-dir", str(root / "data"), "--workspace-root", str(root / "workspaces")]
+    return launch(root, manifest)
+
+
+def launch(root, manifest):
+    """Runs the daemon on the fixture's data directory and records where it listens."""
+    env = environment(root)
+    command = [manifest["backendBinary"], "daemon-run", "--host", "127.0.0.1", "--port", "0", "--data-dir", manifest["dataDir"], "--workspace-root", manifest["workspaceRoot"]]
     with (root / "logs/backend.log").open("ab") as log:
         child = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.DEVNULL,
                                  stdout=log, stderr=log, start_new_session=True)
@@ -151,10 +158,64 @@ def start(binary):
         raise
     manifest["webSocketURL"] = manifest["url"].replace("http:", "ws:") + "/v2/ws"
     (root / "fixture.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    connection = {"name": "TodeX isolated fixture", "serverURL": manifest["url"], "deviceSecret": device_seed, "encryption": "none", "publicKey": ""}
+    device_seed = (root / "device.txt").read_text().strip()
+    connection = {"name": "TodeX isolated fixture", "serverURL": manifest["url"], "deviceSecret": device_seed,
+                  "encryption": manifest.get("encryption", "none"), "publicKey": manifest.get("publicKey", "")}
     (root / "simulator-connection.json").write_text(json.dumps(connection, indent=2) + "\n")
     (root / "simulator-connection.json").chmod(0o600)
     return manifest
+
+
+def b64url(data):
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def b64url_decode(text):
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def x25519_public(secret):
+    """RFC 7748 X25519(secret, 9): the backend stores only the secret."""
+    p, a24 = 2**255 - 19, 121665
+    k = bytearray(secret)
+    k[0] &= 248
+    k[31] &= 127
+    k[31] |= 64
+    k = int.from_bytes(k, "little")
+    x2, z2, x3, z3, swap = 1, 0, 9, 1, 0
+    for t in reversed(range(255)):
+        bit = (k >> t) & 1
+        if swap ^ bit:
+            x2, x3, z2, z3 = x3, x2, z3, z2
+        swap = bit
+        a, b, c, d = x2 + z2, x2 - z2, x3 + z3, x3 - z3
+        aa, bb, da, cb = a * a, b * b, d * a, c * b
+        e = aa - bb
+        x3, z3 = (da + cb) ** 2 % p, 9 * (da - cb) ** 2 % p
+        x2, z2 = aa * bb % p, e * (aa + a24 * e) % p
+    if swap:
+        x2, z2 = x3, z3
+    return (x2 * pow(z2, p - 2, p) % p).to_bytes(32, "little")
+
+
+def encrypt(root, protocol):
+    """Restarts the fixture with transport encryption and pins its key for clients.
+
+    Run backend_integration.py first: its verifier speaks plaintext WebSocket,
+    which the backend refuses once it requires encryption (loopback included).
+    """
+    root, manifest = read_fixture(root)
+    subprocess.run([manifest["backendBinary"], "daemon", "stop", "--data-dir", manifest["dataDir"]],
+                   cwd=root, env=environment(root), capture_output=True, text=True, check=True, timeout=20)
+    config_path = Path(manifest["configPath"])
+    lines = [('pairing_encryption = ' + json.dumps(protocol)) if line.startswith("pairing_encryption") else line
+             for line in config_path.read_text().split("\n")]
+    config_path.write_text("\n".join(lines))
+    # The data directory keeps its pairing keys across restarts.
+    keys = json.loads((root / "data/pairing_keys.json").read_text())
+    public = keys["mlKemPublic"] if protocol == "ml-kem-768" else b64url(x25519_public(b64url_decode(keys["x25519Secret"])))
+    manifest.update(encryption=protocol, publicKey=public)
+    return launch(root, manifest)
 
 
 def main():
@@ -164,9 +225,14 @@ def main():
     starter.add_argument("--backend-binary", type=Path, default=Path(__file__).resolve().parents[2] / "TodeX_backend/target/debug/todex-agentd")
     for name in ("status", "stop"):
         sub.add_parser(name).add_argument("--fixture", required=True)
+    encryptor = sub.add_parser("encrypt", help="Restart with pairing_encryption set and pin its public key")
+    encryptor.add_argument("--fixture", required=True)
+    encryptor.add_argument("--encryption", choices=("x25519", "ml-kem-768"), default="x25519")
     args = parser.parse_args()
     if args.action == "start":
         result = start(args.backend_binary)
+    elif args.action == "encrypt":
+        result = encrypt(args.fixture, args.encryption)
     else:
         root, result = read_fixture(args.fixture)
         process = subprocess.run([result["backendBinary"], "daemon", args.action, "--data-dir", result["dataDir"]],

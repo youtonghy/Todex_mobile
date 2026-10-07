@@ -115,23 +115,15 @@ final class SettingsViewController: SettingsListController {
                     detail: DeviceIdentity(secretKeyBase64URL: connection.deviceSecret)?.deviceID ?? String(localized: "未验证"),
                     symbol: "iphone.gen3", id: "settings.backend.device"),
                 field("Tenant", value: connection.tenantId, key: "tenantId", connection: connection),
-                SettingsRow(title: String(localized: "传输加密"), detail: connection.encryption.rawValue, id: "settings.backend.encryption") {
-                    [weak self] in
-                    self?.choose(
-                        title: String(localized: "传输加密"), choices: EncryptionProtocol.allCases.map { ($0.rawValue, $0.rawValue) },
-                        selected: connection.encryption.rawValue
-                    ) { [weak self] value in
-                        guard let encryption = EncryptionProtocol(rawValue: value) else { return }
-                        self?.update(connection.id) { $0.encryption = encryption }
-                    }
+                // Read-only: the protocol and key are pinned only by importing
+                // the backend's pairing link or QR (transport v2 client rules).
+                SettingsRow(
+                    title: String(localized: "传输加密"), detail: Self.transportDetail(connection), symbol: "lock",
+                    id: "settings.backend.encryption"
+                ) { [weak self] in
+                    self?.openPairing(connection)
                 },
             ]
-            if connection.encryption != .none {
-                rows.append(
-                    field(
-                        String(localized: "加密公钥"), value: connection.publicKey.isEmpty ? String(localized: "未设置") : String(localized: "已设置 · 点按编辑"), key: "publicKey",
-                        connection: connection))
-            }
             rows.append(
                 SettingsRow(title: String(localized: "配对与设备验证"), detail: String(localized: "JSON、二维码图片、相机扫码与分片二维码"), symbol: "qrcode", id: "settings.pairing")
                 { [weak self] in
@@ -340,16 +332,6 @@ final class SettingsViewController: SettingsListController {
     }
 
     private func edit(_ connection: BackendConnection, field: String) {
-        if field == "publicKey" {
-            let editor = SettingsTextController(
-                title: String(localized: "加密公钥"), text: connection.publicKey, editable: true, actionTitle: String(localized: "保存")
-            ) { [weak self] text in
-                self?.update(connection.id) { $0.publicKey = text.trimmingCharacters(in: .whitespacesAndNewlines) }
-                self?.navigationController?.popViewController(animated: true)
-            }
-            navigationController?.pushViewController(editor, animated: true)
-            return
-        }
         let value =
             switch field {
             case "name": connection.name
@@ -385,11 +367,9 @@ final class SettingsViewController: SettingsListController {
         guard var connection = connections.first(where: { $0.id == id }) else { return }
         do {
             connection.serverURL = try connection.normalizedURL().absoluteString
-            if connection.encryption != .none
-                && connection.publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                throw TodexError.invalid(String(localized: "请填写加密公钥，或导入后端配对信息"))
-            }
+            // A remote backend without a pinned key would be refused anyway;
+            // say so before saving and point at pairing.
+            if SecureTransportMode.resolve(connection) == .refused { throw SecureTransportError.encryptionRequired }
             update(id) { $0 = connection }
             connectionNotice = String(localized: "已提交连接请求；连接状态将在工作区显示。")
             render()
@@ -413,6 +393,14 @@ final class SettingsViewController: SettingsListController {
     }
 
     private static let colors = LabelPalette.colors
+
+    private static func transportDetail(_ connection: BackendConnection) -> String {
+        switch SecureTransportMode.resolve(connection) {
+        case .v2(let encryption): String(localized: "已加密（\(encryption.rawValue)）")
+        case .plaintext: String(localized: "未加密（仅限本机后端）")
+        case .refused: String(localized: "需要加密配对，点按导入配对信息")
+        }
+    }
 
     private static func labelColor(_ color: String) -> UIColor { UIColor(labelHex: color) ?? Theme.accent }
 }

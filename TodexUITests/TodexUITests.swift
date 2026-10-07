@@ -6,7 +6,7 @@ nonisolated final class TodexUITests: XCTestCase {
     @MainActor private func application() -> XCUIApplication {
         let app = XCUIApplication()
         XCUIDevice.shared.orientation = .portrait
-        for key in ["TODEX_TEST_PORT", "TODEX_TEST_DEVICE_SECRET"] {
+        for key in ["TODEX_TEST_PORT", "TODEX_TEST_DEVICE_SECRET", "TODEX_TEST_ENCRYPTION", "TODEX_TEST_PUBLIC_KEY"] {
             if let value = ProcessInfo.processInfo.environment[key] { app.launchEnvironment[key] = value }
         }
         app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
@@ -35,6 +35,36 @@ nonisolated final class TodexUITests: XCTestCase {
         let row = app.cells.containing(.staticText, identifier: "新后端").firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), "添加的后端在重启后丢失")
         row.tap()
+        app.cells["settings.backend.delete"].tap()
+        app.alerts.buttons["继续"].tap()
+        app.buttons["settings.done"].tap()
+    }
+    /// Transport v2 client rules in the UI: a remote backend without a pinned
+    /// key shows that it needs encrypted pairing and refuses to connect.
+    @MainActor func testRemoteBackendWithoutPairingIsRefused() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["TodeX"].waitForExistence(timeout: 10))
+        app.buttons["连接与设置"].tap()
+        let add = app.cells["settings.backend.add"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        let field = app.alerts.textFields["settings.backend.serverURL.input"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.typeText("http://192.0.2.10:7345")
+        app.alerts.buttons["保存"].tap()
+        let encryption = app.cells["settings.backend.encryption"]
+        XCTAssertTrue(encryption.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            encryption.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "需要加密配对")).firstMatch.exists,
+            "远程未配对后端没有提示需要加密配对")
+        app.cells["settings.backend.connect"].tap()
+        let refusal = app.alerts.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "远程后端必须使用加密连接"))
+            .firstMatch
+        XCTAssertTrue(refusal.waitForExistence(timeout: 5), "远程未配对后端没有被拒绝连接")
+        app.alerts.buttons["好"].tap()
         app.cells["settings.backend.delete"].tap()
         app.alerts.buttons["继续"].tap()
         app.buttons["settings.done"].tap()

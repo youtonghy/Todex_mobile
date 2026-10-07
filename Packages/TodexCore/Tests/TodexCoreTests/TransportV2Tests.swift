@@ -304,16 +304,23 @@ struct TransportV2Tests {
     @Test func refusedProfileNeverTouchesTheNetwork() async throws {
         let fixture = NetworkHTTPFixture { _ in .json(["ok": true]) }
         defer { fixture.close() }
-        let connection = fixture.client().connection
+        let connection = BackendConnection(serverURL: "https://lan.example:7345")
         let transport = BackendSecureTransport(
             connection: connection, session: fixture.session, makeSocket: { _ in FakeV2Server.unreachable() })
         #expect(transport.mode == .refused)
         await #expect(throws: TodexError.self) { _ = try await transport.request(method: .get, path: "/v2/version") }
         await #expect(throws: TodexError.self) { _ = try await transport.openWebSocket() }
+        // Every REST entry point follows the same rules; none falls back to plaintext.
+        await #expect(throws: TodexError.self) {
+            _ = try await HTTPClient(connection: connection, session: fixture.session).request(path: "/v2/version")
+        }
+        await #expect(throws: TodexError.self) {
+            _ = try await APIClient(connection: connection, session: fixture.session).health()
+        }
         #expect(fixture.requests.isEmpty)
-        // Legacy clients (transportV2 off) are unchanged until the app switches.
+        // An unpinned loopback profile stays plaintext.
         _ = try await fixture.client().request(path: "/v2/version")
-        #expect(fixture.requests.count == 1)
+        #expect(fixture.requests.count == 1 && fixture.requests[0].url?.path == "/v2/version")
     }
 
     @Test func unusablePinnedKeyIsAConfigurationErrorBeforeSending() async throws {
@@ -407,8 +414,9 @@ struct TransportV2Tests {
         do {
             _ = try await transport.request(method: .get, path: "/v2/version")
             Issue.record("expected an API error")
-        } catch TodexError.server(let code, let message) {
-            #expect(code == "TRANSPORT_CRYPTO_FAILED" && message == "transport crypto failure")
+        } catch TodexError.configuration(let message) {
+            // The backend could not open a request sealed to the pinned key: re-pair.
+            #expect(message == SecureTransportError.transportRejected.localizedDescription)
         }
         behavior.withLock { $0 = "plain200" }
         await #expect(throws: TransportCryptoError.self) { _ = try await transport.request(method: .get, path: "/v2/version") }
@@ -447,9 +455,7 @@ struct TransportV2Tests {
                 socket.withLock { $0 = fake }
                 return fake
             })
-        let client = RealtimeClient(
-            connection: connection, http: HTTPClient(connection: connection, session: fixture.session, transportV2: true),
-            makeSocket: { _ in fatalError("legacy socket must not be used") }, transport: transport)
+        let client = RealtimeClient(connection: connection, transport: transport)
         var events = client.events.makeAsyncIterator()
         try await client.connect()
         // Every frame (including ping results) is also emitted; skip to the one of interest.
@@ -464,6 +470,19 @@ struct TransportV2Tests {
         #expect(fake.deviceID == "dev_1-HghL4hOwHlBoUq")
         _ = try await client.command(type: "server.ping", payload: [:])
         #expect(fake.receivedTypes == ["server.ping", "server.ping"])
+        // Concurrent commands reach the wire in counter order: the fake server
+        // opens each frame with the next expected counter or fails.
+        try await withThrowingTaskGroup(of: JSONValue.self) { group in
+            for index in 0..<30 {
+                group.addTask {
+                    try await client.command(type: "conversation.create", payload: ["index": .number(Double(index))])
+                }
+            }
+            var results: Set<JSONValue> = []
+            for try await result in group { results.insert(result["index"]) }
+            #expect(results.count == 30)
+        }
+        #expect(fake.receivedTypes.count == 32)
         #expect(fake.textFramesAfterHello == 0)
         try fake.push(["type": "conversation.event", "payload": ["text": "你好 ✓"]])
         #expect(await next("conversation.event") == ["type": "conversation.event", "payload": ["text": "你好 ✓"]])
@@ -719,9 +738,11 @@ private final class FakeV2Server: RawWebSocket {
             let value = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
             state.withLock { $0.receivedTypes.append(value["type"].stringValue) }
             completion(nil)
-            if value["type"] == "server.ping" {
-                try push(["id": value["id"], "type": "server.result", "payload": ["pong": true]])
-            }
+            // Pings answer pong; anything else echoes its payload as the result.
+            try push([
+                "id": value["id"], "type": "server.result",
+                "payload": value["type"] == "server.ping" ? ["pong": true] : value["payload"],
+            ])
         } catch { completion(error) }
     }
 

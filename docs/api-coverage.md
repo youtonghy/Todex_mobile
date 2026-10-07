@@ -6,13 +6,15 @@
 - WS 分派及 wire：[websocket.rs](../../TodeX_backend/src/server/websocket.rs)、[protocol.rs](../../TodeX_backend/src/server/protocol.rs)。
 - 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。共享客户端 [v2.ts](../../TodeX_protocol/src/v2.ts) 仅作交叉参考。
 
-**67/67 个普通 HTTP method + path 已封装，72/72 个 WS 可识别命令已编目（含 2026-10-06 补充的 13 个 `history.*` 命令）。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 67 个普通 HTTP 接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
+**67/67 个普通 HTTP method + path 已封装，72/72 个 WS 可识别命令已编目（含 2026-10-06 补充的 13 个 `history.*` 命令）。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 67 个普通 HTTP 接口；`POST /v2/device-pairing/reveal`（配对 v3）与传输隧道 `POST /v2/sealed` 也不计入。
+
+**传输 v2（2026-10-07 起）**：`HTTPClient` 不再有开关，按配置推导：已固定协议与公钥时，所有 REST（含 `/health`、本机回环）都经 `POST /v2/sealed` 封装，WebSocket 用 `tv=2`；未固定公钥的远程后端在发出任何请求前即被拒绝并提示加密配对；仅未固定公钥的本机回环后端走明文。配对路由由独立的 bootstrap 客户端直连（不签名、不走隧道）。旧的 `todex.crypto.v1` 帧与配对 v2 已删除，APIClient 也不再封装 v2 配对接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
 ## 验证范围
 
 [APIClientTests.swift](../Packages/TodexCore/Tests/TodexCoreTests/APIClientTests.swift) 最近于 2026-09-28 在 Swift 6.4、macOS 上以 `swift test --package-path Packages/TodexCore` 通过：18 个 Swift Testing 测试函数，其中 `endpointWire` 包含 67 个参数用例，`httpErrors` 包含 4 个参数用例，其余 16 个函数分别验证模型、默认值、分页、错误、协议、CLI 安装字段、供应商导出文件与 Agent 桌面工具模型（2026-10-06 起）。依赖使用本机已缓存的 swift-sodium 0.11.0；包副本的 Package.swift 与工作区原文件一致。
 
-这里的通过是 **URLProtocol 拦截 URLSession 实际构造请求后的本地契约测试**：逐项检查 HTTP method、编码后的 path、按后端规则解码的 query、设备签名头（x-todex-device-id/auth-ts/auth-nonce/auth-sig）、Accept/Content-Type、JSON body、返回值。fixture 使用独立的 .invalid 主机和 session；所有请求都被拦截。上述 URLProtocol 阶段没有启动或访问真实 backend，也没有调用真实 provider、Git、PTY、MCP、配对批准、升级或云任务。该阶段 WS 只验证编码、解码与源码支持状态；后续真实协议集成结果见文末。表中“已封装”不代表真实服务实测通过。
+这里的通过是 **URLProtocol 拦截 URLSession 实际构造请求后的本地契约测试**：逐项检查 HTTP method、编码后的 path、按后端规则解码的 query、设备签名头（x-todex-device-id/auth-ts/auth-nonce/auth-sig）、Accept/Content-Type、JSON body、返回值。fixture 使用独立的 127.0.0.0/8 主机（未固定公钥的本机配置按传输 v2 规则走明文）和 session；所有请求都被拦截。上述 URLProtocol 阶段没有启动或访问真实 backend，也没有调用真实 provider、Git、PTY、MCP、配对批准、升级或云任务。该阶段 WS 只验证编码、解码与源码支持状态；后续真实协议集成结果见文末。表中“已封装”不代表真实服务实测通过。
 
 复现命令（在允许产生构建文件的包副本中执行）：
 
@@ -35,9 +37,10 @@ swift test --package-path /path/to/TodexCore-copy \
 | GET | `/health` | `health()` | 已封装；公开；text/plain | `endpointWire(health)` |
 | GET | `/v2/version` | `version()` | 已封装；已配对时签名（数据目录与工作区根路径仅返回给已认证请求），未配对回退为不签名 | `endpointWire(version)`、`versionIsSignedWhenEnrolledAndFallsBackToUnsignedWhenNot` |
 | GET | `/v2/transport-policy` | `transportPolicy()` | 已封装；公开 | `endpointWire(transportPolicy)` |
-| POST | `/v2/device-pairing/create` | `createDevicePairing(clientPublicKey:deviceName:)` | 已封装；公开；不代替本机配对批准 | `endpointWire(createDevicePairing)` |
-| POST | `/v2/device-pairing/poll` | `pollDevicePairing(requestId:proof:)` | 已封装；公开；传入 poll proof | `endpointWire(pollDevicePairing)` |
-| POST | `/v2/device-pairing/cancel` | `cancelDevicePairing(requestId:proof:)` | 已封装；公开；传入 cancel proof | `endpointWire(cancelDevicePairing)` |
+| POST | `/v2/device-pairing/create` | `DevicePairingSession.begin`（配对 v3，只发 `clientCommitment`） | 公开；直连、不签名、不走 `/v2/sealed`；不代替本机配对批准 | `PairingTests`、`actualPairingV3EnrollsADeviceThatThenConnects` |
+| POST | `/v2/device-pairing/reveal` | `DevicePairingSession.begin`（揭示公钥与 nonce 后才显示随机码） | 同上 | 同上 |
+| POST | `/v2/device-pairing/poll` | `DevicePairingSession.poll()`（v3 poll proof；批准密文以完整 v3 transcript 为 AAD） | 同上 | 同上 |
+| POST | `/v2/device-pairing/cancel` | `DevicePairingSession.cancel()`（v3 cancel proof） | 同上 | 同上 |
 | GET | `/v2/workspaces` | `workspaces()`、`workspaceCatalog()` | 已封装；认证；解包 workspaces；`workspaceCatalog()` 另保留 rejected（目录在后端不可用的已存工作区） | `endpointWire(workspaces)`、`workspaceCatalogKeepsRejectedRecordsApart` |
 | PUT | `/v2/workspaces` | `replaceWorkspaces(_:)` | 已封装；认证；后端按归属合并 | `endpointWire(replaceWorkspaces)` |
 | DELETE | `/v2/workspaces/{workspace_id}` | `deleteWorkspace(id:)` | 已封装；认证 | `endpointWire(deleteWorkspace)` |

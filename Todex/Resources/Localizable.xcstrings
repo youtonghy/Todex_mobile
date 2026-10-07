@@ -9269,34 +9269,6 @@
         }
       }
     },
-    "加密公钥": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Encryption public key"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化公開鍵"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화 공개 키"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "加密公钥"
-          }
-        }
-      }
-    },
     "加载更早的消息": {
       "localizations": {
         "en": {
@@ -16801,6 +16773,34 @@
         }
       }
     },
+    "已加密（%@）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encrypted (%@)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暗号化済み（%@）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "암호화됨(%@)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已加密（%@）"
+          }
+        }
+      }
+    },
     "已加载线程": {
       "localizations": {
         "en": {
@@ -18253,34 +18253,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "已获取 %lld 个模型 · 点按选择"
-          }
-        }
-      }
-    },
-    "已设置 · 点按编辑": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Set · Tap to edit"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "設定済み · タップして編集"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "설정됨 · 탭하여 편집"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已设置 · 点按编辑"
           }
         }
       }
@@ -26209,6 +26181,34 @@
         }
       }
     },
+    "未加密（仅限本机后端）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not encrypted (local backend only)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暗号化なし（ローカルのバックエンドのみ）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "암호화 안 됨(로컬 백엔드 전용)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未加密（仅限本机后端）"
+          }
+        }
+      }
+    },
     "未加载": {
       "localizations": {
         "en": {
@@ -26877,34 +26877,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "未获得相机权限。可前往系统设置允许访问，或返回使用照片导入。"
-          }
-        }
-      }
-    },
-    "未设置": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not set"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未設定"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "설정 안 됨"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未设置"
           }
         }
       }
@@ -38249,34 +38221,6 @@
         }
       }
     },
-    "请填写加密公钥，或导入后端配对信息": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enter the encryption public key, or import the backend pairing info"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "暗号化公開鍵を入力するか、バックエンドのペアリング情報を読み込んでください"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "암호화 공개 키를 입력하거나 백엔드 페어링 정보를 가져오세요"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请填写加密公钥，或导入后端配对信息"
-          }
-        }
-      }
-    },
     "请填写后端地址": {
       "localizations": {
         "en": {
@@ -43033,6 +42977,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "需要你确认"
+          }
+        }
+      }
+    },
+    "需要加密配对，点按导入配对信息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encrypted pairing required. Tap to import pairing info."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暗号化ペアリングが必要です。タップしてペアリング情報を読み込みます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "암호화 페어링이 필요합니다. 탭하여 페어링 정보를 가져오세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要加密配对，点按导入配对信息"
           }
         }
       }

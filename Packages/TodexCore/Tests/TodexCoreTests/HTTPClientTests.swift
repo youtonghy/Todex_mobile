@@ -74,25 +74,39 @@ struct HTTPClientTests {
         #expect(encoded["deviceSecret"] == nil)
     }
 
-    @Test func policyUsesActualStatusAndCannotSilentlyDowngrade() throws {
-        let none = BackendConnection()
-        try RealtimeClient.validatePolicy(result(404, "not JSON"), connection: none)
-        try RealtimeClient.validatePolicy(result(200, #"{"requiredProtocol":"none"}"#), connection: none)
+    @Test func policyFollowsTransportV2ClientRules() throws {
+        func configurationMessage(_ response: HTTPResult, _ connection: BackendConnection) -> String? {
+            do {
+                try RealtimeClient.validatePolicy(response, connection: connection)
+                return nil
+            } catch TodexError.configuration(let message) { return message } catch { return "other: \(error)" }
+        }
+        let local = BackendConnection()
+        #expect(local.isLoopback)
+        try RealtimeClient.validatePolicy(result(200, #"{"requiredProtocol":"none","transportVersion":2}"#), connection: local)
+        // Plaintext against a backend that requires encryption: pair, not a bare 403.
+        #expect(
+            configurationMessage(result(200, #"{"requiredProtocol":"x25519"}"#), local)
+                == SecureTransportError.pairingRequired.localizedDescription)
         let encrypted = BackendConnection(encryption: .x25519, publicKey: "configured")
         try RealtimeClient.validatePolicy(result(200, #"{"requiredProtocol":"none"}"#), connection: encrypted)
         try RealtimeClient.validatePolicy(result(200, #"{"requiredProtocol":"x25519"}"#), connection: encrypted)
+        #expect(
+            configurationMessage(result(200, #"{"requiredProtocol":"ml-kem-768"}"#), encrypted)
+                == SecureTransportError.repairRequired.localizedDescription)
+        let remote = BackendConnection(serverURL: "https://lan.example")
+        #expect(
+            configurationMessage(result(200, #"{"requiredProtocol":"none"}"#), remote)
+                == SecureTransportError.encryptionRequired.localizedDescription)
+        // No 404 fallback any more: a backend without the policy cannot speak v2.
         for response in [
-            result(401, #"{"code":"NOT_FOUND","message":"no"}"#), result(500, #"{"code":"404"}"#),
-            result(200, #"{"requiredProtocol":"ml-kem-768"}"#), result(200, #"{"requiredProtocol":"future"}"#),
-            result(200, #"{"requiredProtocol":true}"#), result(200, "[]"), result(200, ""),
+            result(404, "not JSON"), result(401, #"{"code":"NOT_FOUND","message":"no"}"#), result(500, #"{"code":"404"}"#),
+            result(200, #"{"requiredProtocol":"future"}"#), result(200, #"{"requiredProtocol":true}"#),
+            result(200, "[]"), result(200, ""),
         ] {
-            #expect(throws: (any Error).self) { try RealtimeClient.validatePolicy(response, connection: encrypted) }
-        }
-        #expect(throws: (any Error).self) {
-            try RealtimeClient.validatePolicy(result(404, ""), connection: .init(encryption: .x25519))
-        }
-        #expect(throws: (any Error).self) {
-            try RealtimeClient.validatePolicy(result(200, #"{"requiredProtocol":"x25519"}"#), connection: none)
+            for connection in [local, encrypted] {
+                #expect(throws: (any Error).self) { try RealtimeClient.validatePolicy(response, connection: connection) }
+            }
         }
     }
 
@@ -166,9 +180,20 @@ struct NetworkHTTPReply: Sendable {
         .init(status: status, data: Data(value.prettyPrinted.utf8))
     }
 }
+private let loopbackHostCounter = Mutex<UInt32>(0)
+/// A distinct 127.0.0.0/8 host per fixture. Fixtures intercept requests with
+/// URLProtocol (nothing reaches the network); loopback keeps an unpinned
+/// profile on plaintext under the transport v2 client rules.
+func uniqueLoopbackHost() -> String {
+    let next = loopbackHostCounter.withLock {
+        $0 += 1
+        return $0
+    }
+    return "127.\((next >> 16) & 0xff).\((next >> 8) & 0xff).\(next & 0xff)"
+}
 final class NetworkHTTPFixture: Sendable {
     typealias Handler = @Sendable (URLRequest) throws -> NetworkHTTPReply?
-    private let host = UUID().uuidString.lowercased() + ".invalid"
+    private let host = uniqueLoopbackHost()
     let session: URLSession
     private let calls = Mutex<[URLRequest]>([])
     init(_ handler: @escaping Handler) {

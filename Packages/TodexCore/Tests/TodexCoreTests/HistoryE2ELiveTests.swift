@@ -540,37 +540,23 @@ private func restReplay(api: APIClient, keys: HistoryDecryptor, conversationID: 
     return events
 }
 
-/// A socket whose upgrade omits `historyEncryption=1`, signed like a real one.
+/// A client whose upgrade omits `historyEncryption=1`, otherwise signed and
+/// framed exactly like a real one (transport v2 when the fixture pins a key).
 private func legacySocketClient(_ connection: BackendConnection) throws -> RealtimeClient {
-    var components = URLComponents(url: try connection.normalizedURL(), resolvingAgainstBaseURL: false)!
-    components.scheme = "ws"
-    components.path = "/v2/ws"
-    let device = try #require(DeviceIdentity(secretKeyBase64URL: connection.deviceSecret))
-    components.percentEncodedQuery = try device.authQuery(pathAndQuery: "/v2/ws")
-    let request = URLRequest(url: try #require(components.url))
-    return RealtimeClient(
-        connection: connection, http: HTTPClient(connection: connection),
-        makeSocket: { _ in LegacyWebSocket(request: request) })
+    RealtimeClient(connection: connection, transport: PreHistoryTransport(base: BackendSecureTransport(connection: connection)))
 }
 
-/// A plain URLSession socket for the hand-built pre-v3 upgrade request.
-private final class LegacyWebSocket: RealtimeSocket {
-    private let task: URLSessionWebSocketTask
-    init(request: URLRequest) {
-        task = URLSession(configuration: .ephemeral).webSocketTask(with: request)
-        task.resume()
+private struct PreHistoryTransport: SecureTransport {
+    let base: BackendSecureTransport
+    var mode: SecureTransportMode { base.mode }
+    func request(
+        method: HTTPMethod, path: String, query: [String: String], headers: [String: String], body: Data?
+    ) async throws -> SecureTransportResponse {
+        try await base.request(method: method, path: path, query: query, headers: headers, body: body)
     }
-    func send(_ text: String, completion: @escaping @Sendable ((any Error)?) -> Void) {
-        task.send(.string(text)) { completion($0) }
+    func openWebSocket(path: String, query: [String: String]) async throws -> any SecureWebSocket {
+        try await base.openWebSocket(path: path, query: query.filter { $0.key != "historyEncryption" })
     }
-    func receive() async throws -> String {
-        switch try await task.receive() {
-        case .string(let text): return text
-        case .data(let data): return String(decoding: data, as: UTF8.self)
-        @unknown default: throw TodexError.invalid("unknown WebSocket message")
-        }
-    }
-    func cancel() { task.cancel(with: .goingAway, reason: nil) }
 }
 
 private func expectServerError(_ codes: Set<String>, _ operation: () async throws -> Void) async {

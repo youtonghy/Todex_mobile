@@ -13,13 +13,10 @@ public actor RealtimeClient {
     private nonisolated let browserFrameSink: AsyncStream<JSONValue>.Continuation
     private let eventQueue: RealtimeEventQueue
     private let connection: BackendConnection
-    private let http: HTTPClient
-    private let makeSocket: @Sendable (URLRequest) -> any RealtimeSocket
-    /// Transport v2: when set, `connect` opens the socket through it (v2
-    /// framing or loopback plaintext) instead of the legacy v1 crypto session.
-    private let transport: (any SecureTransport)?
-    private var socket: (any RealtimeSocket)?
-    private var crypto: TransportCryptoSession?
+    /// Transport v2 client rules: v2 framing for a pinned profile, plaintext
+    /// only for an unpinned loopback one, refused otherwise.
+    private let transport: any SecureTransport
+    private var socket: (any SecureWebSocket)?
     private var receiver: Task<Void, Never>?
     private var heartbeat: Task<Void, Never>?
     private var generation = UUID()
@@ -34,26 +31,16 @@ public actor RealtimeClient {
     private var pending: [String: Pending] = [:]
 
     public init(connection: BackendConnection) {
-        self.init(
-            connection: connection, http: HTTPClient(connection: connection),
-            makeSocket: { FoundationRealtimeSocket(request: $0) })
+        self.init(connection: connection, transport: BackendSecureTransport(connection: connection))
     }
 
-    /// Connects through `transport` (transport v2 client rules). The policy
-    /// request goes through the same rules.
+    /// Connects through `transport`; the policy request goes through it too.
     public init(connection: BackendConnection, transport: any SecureTransport) {
-        self.init(
-            connection: connection, http: HTTPClient(connection: connection, transportV2: true),
-            makeSocket: { FoundationRealtimeSocket(request: $0) }, transport: transport)
+        self.init(connection: connection, transport: transport, eventCapacity: 4096)
     }
 
-    init(
-        connection: BackendConnection, http: HTTPClient, eventCapacity: Int = 4096,
-        makeSocket: @escaping @Sendable (URLRequest) -> any RealtimeSocket, transport: (any SecureTransport)? = nil
-    ) {
+    init(connection: BackendConnection, transport: any SecureTransport, eventCapacity: Int) {
         self.connection = connection
-        self.http = http
-        self.makeSocket = makeSocket
         self.transport = transport
         let queue = RealtimeEventQueue(capacity: eventCapacity)
         eventQueue = queue
@@ -74,55 +61,23 @@ public actor RealtimeClient {
         let revision = generation
         do {
             try Task.checkCancellation()
-            let policy: HTTPResult
-            if let transport {
-                let answer = try await transport.request(
-                    method: .get, path: "/v2/transport-policy", query: [:], headers: [:], body: nil)
-                guard answer.body.count <= 2048 else { throw TodexError.invalid(CoreMessage.invalidPolicy) }
-                policy = HTTPResult(statusCode: answer.status, data: answer.body, headers: answer.headers)
-            } else {
-                policy = try await http.response(
-                    path: "/v2/transport-policy", authenticated: false, timeout: 10, maximumBytes: 2048)
-            }
-            try Self.validatePolicy(policy, connection: connection)
+            let answer = try await transport.request(
+                method: .get, path: "/v2/transport-policy", query: [:], headers: [:], body: nil)
+            guard answer.body.count <= 2048 else { throw TodexError.invalid(CoreMessage.invalidPolicy) }
+            try Self.validatePolicy(
+                HTTPResult(statusCode: answer.status, data: answer.body, headers: answer.headers),
+                connection: connection)
             try Task.checkCancellation()
             guard revision == generation else { throw CancellationError() }
-            if let transport {
-                // `historyEncryption=1` declares this client decrypts history
-                // v3 payloads; the device signature covers it and the v2
-                // handshake parameters.
-                let socket = SecureRealtimeSocket(
-                    base: try await transport.openWebSocket(path: "/v2/ws", query: ["historyEncryption": "1"]))
-                guard revision == generation, !Task.isCancelled else {
-                    socket.cancel()
-                    throw CancellationError()
-                }
-                try await start(socket: socket, revision: revision)
-                return
-            }
-            if connection.encryption != .none {
-                do { crypto = try TransportCryptoSession(connection: connection) } catch {
-                    throw TodexError.configuration(String(localized: "加密公钥无法使用：\(error.localizedDescription)", bundle: .module))
-                }
-            }
-            var components = URLComponents(url: try connection.normalizedURL(), resolvingAgainstBaseURL: false)!
-            components.scheme = components.scheme == "https" ? "wss" : "ws"
-            components.path = "/v2/ws"
-            // Transport-crypto material travels as query parameters so the
-            // device signature binds the handshake to this enrolled device.
             // `historyEncryption=1` declares this client decrypts history v3
-            // payloads; the device signature below covers it.
-            var query = ["historyEncryption=1", crypto?.handshakeQuery ?? ""].filter { !$0.isEmpty }
-                .joined(separator: "&")
-            if let device = DeviceIdentity(secretKeyBase64URL: connection.deviceSecret) {
-                let auth = try device.authQuery(pathAndQuery: "/v2/ws\(query.isEmpty ? "" : "?\(query)")")
-                query = query.isEmpty ? auth : "\(query)&\(auth)"
+            // payloads; the device signature covers it and the v2 handshake
+            // parameters.
+            let socket = try await transport.openWebSocket(path: "/v2/ws", query: ["historyEncryption": "1"])
+            guard revision == generation, !Task.isCancelled else {
+                socket.cancel()
+                throw CancellationError()
             }
-            components.percentEncodedQuery = query.isEmpty ? nil : query
-            guard let url = components.url else { throw TodexError.invalid(String(localized: "WebSocket 地址无效", bundle: .module)) }
-            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
-            request.httpShouldHandleCookies = false
-            try await start(socket: makeSocket(request), revision: revision)
+            try await start(socket: socket, revision: revision)
         } catch {
             failed(error, revision: revision)
             throw error
@@ -130,7 +85,7 @@ public actor RealtimeClient {
     }
 
     /// Verifies the socket with a ping, then starts the heartbeat.
-    private func start(socket: any RealtimeSocket, revision: UUID) async throws {
+    private func start(socket: any SecureWebSocket, revision: UUID) async throws {
         self.socket = socket
         receiver = Task { [weak self] in await self?.receive(revision: revision, socket: socket) }
         let pong = try await sendCommand(
@@ -164,7 +119,6 @@ public actor RealtimeClient {
         heartbeat = nil
         socket?.cancel()
         socket = nil
-        crypto = nil
         usedRequestIDs.removeAll()
         let requests = pending
         pending.removeAll()
@@ -201,28 +155,22 @@ public actor RealtimeClient {
         let token = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                // Cancellation before submission must not consume a crypto nonce.
+                // Cancellation before submission must not consume a transport counter.
                 guard !Task.isCancelled else {
                     continuation.resume(throwing: CancellationError())
                     return
                 }
-                do {
-                    // No await between encrypting, registering and enqueueing the
-                    // frame. The actor owns crypto and the socket preserves sends.
-                    let encoded = try crypto?.encrypt(plaintext) ?? plaintext
-                    let timeoutTask = Task { [weak self] in
-                        do { try await Task.sleep(for: .seconds(timeout)) } catch { return }
-                        await self?.expire(id, token: token, revision: revision)
-                    }
-                    usedRequestIDs.insert(id)
-                    pending[id] = Pending(
-                        command: command, token: token, continuation: continuation, timeout: timeoutTask)
-                    socket.send(encoded) { [weak self] error in
-                        if let error { Task { await self?.sendFailed(revision: revision, error: error) } }
-                    }
-                } catch {
-                    continuation.resume(throwing: error)
-                    failed(error, revision: revision)
+                // No await between registering and enqueueing the frame; the
+                // socket seals and sends in call order.
+                let timeoutTask = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(timeout)) } catch { return }
+                    await self?.expire(id, token: token, revision: revision)
+                }
+                usedRequestIDs.insert(id)
+                pending[id] = Pending(
+                    command: command, token: token, continuation: continuation, timeout: timeoutTask)
+                socket.send(plaintext) { [weak self] error in
+                    if let error { Task { await self?.sendFailed(revision: revision, error: error) } }
                 }
             }
         } onCancel: {
@@ -230,12 +178,11 @@ public actor RealtimeClient {
         }
     }
 
-    private func receive(revision: UUID, socket: any RealtimeSocket) async {
+    private func receive(revision: UUID, socket: any SecureWebSocket) async {
         do {
             while !Task.isCancelled && revision == generation {
-                let raw = try await socket.receive()
+                let text = try await socket.receive()
                 guard revision == generation, !Task.isCancelled else { return }
-                let text = try crypto?.decrypt(raw) ?? raw
                 let frame = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
                 guard let response = RealtimeResponse(frame) else { throw TodexError.invalid(String(localized: "后端事件格式无效", bundle: .module)) }
                 if response.type == "agentBrowser.frame" {
@@ -314,7 +261,7 @@ public actor RealtimeClient {
     }
     private func sendFailed(revision: UUID, error: any Error) {
         guard revision == generation else { return }
-        // A failed encrypted send breaks the nonce sequence for the entire socket.
+        // A failed send breaks the transport counter sequence for the entire socket.
         // Its request may already have timed out or stopped waiting.
         failed(error, revision: revision)
     }
@@ -327,25 +274,22 @@ public actor RealtimeClient {
         !payload["conversationId"].stringValue.isEmpty || payload["code"] == "EVENT_STREAM_LAGGED"
     }
 
+    /// `/v2/transport-policy` under the transport v2 client rules: the answer
+    /// must be a valid policy (an older backend without it cannot speak v2),
+    /// it never downgrades a pinned profile, and a different required
+    /// protocol than the pinned one asks for re-pairing.
     static func validatePolicy(_ response: HTTPResult, connection: BackendConnection) throws {
-        if response.statusCode != 404 {
-            let value = try response.json()
-            guard case .object = value, let name = value["requiredProtocol"].optionalString,
-                let required = EncryptionProtocol(rawValue: name)
-            else { throw TodexError.invalid(CoreMessage.invalidPolicy) }
-            guard required == .none || required == connection.encryption else {
-                throw TodexError.configuration(String(localized: "后端要求 \(name) 加密，请导入对应公钥", bundle: .module))
-            }
-        }
-        if connection.encryption != .none
-            && connection.publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-            throw TodexError.configuration(String(localized: "尚未导入加密公钥，请先完成密钥传输验证", bundle: .module))
-        }
+        let value = try response.json()
+        guard case .object = value, let name = value["requiredProtocol"].optionalString,
+            EncryptionProtocol(rawValue: name) != nil
+        else { throw TodexError.invalid(CoreMessage.invalidPolicy) }
+        try SecureTransportError.checkPolicy(connection, requiredProtocol: name)
     }
 
     static func socketError(_ error: any Error, response: URLResponse?) -> any Error {
         guard let response = response as? HTTPURLResponse, response.statusCode != 101 else { return error }
+        // 426 PROTOCOL_UPGRADE_REQUIRED: the backend refused this handshake's transport.
+        if response.statusCode == 426 { return SecureTransportError.transportRejected }
         let message =
             [401, 403].contains(response.statusCode)
             ? String(localized: "后端拒绝认证，请检查令牌与配对状态", bundle: .module) : String(localized: "WebSocket 握手失败（HTTP \(response.statusCode)）", bundle: .module)
@@ -547,38 +491,4 @@ final class RealtimeEventQueue: Sendable {
         }
         for (index, waiter) in waiters.enumerated() { waiter.resume(returning: index == 0 ? finalFrame : nil) }
     }
-}
-
-protocol RealtimeSocket: Sendable {
-    func send(_ text: String, completion: @escaping @Sendable ((any Error)?) -> Void)
-    func receive() async throws -> String
-    func cancel()
-}
-
-/// Legacy (v1/plaintext) text socket over the shared URLSession WebSocket.
-private final class FoundationRealtimeSocket: RealtimeSocket {
-    private let base: FoundationWebSocket
-    init(request: URLRequest) { base = FoundationWebSocket(request: request) }
-    func send(_ text: String, completion: @escaping @Sendable ((any Error)?) -> Void) {
-        base.send(.text(text), completion: completion)
-    }
-    func receive() async throws -> String {
-        switch try await base.receive() {
-        case .text(let value): return value
-        case .data(let value):
-            guard let text = String(data: value, encoding: .utf8) else { throw TodexError.invalid(String(localized: "收到非 UTF-8 消息", bundle: .module)) }
-            return text
-        }
-    }
-    func cancel() { base.cancel() }
-}
-
-/// Adapts a transport socket (v2 or plaintext) to the realtime loop.
-private struct SecureRealtimeSocket: RealtimeSocket {
-    let base: any SecureWebSocket
-    func send(_ text: String, completion: @escaping @Sendable ((any Error)?) -> Void) {
-        base.send(text, completion: completion)
-    }
-    func receive() async throws -> String { try await base.receive() }
-    func cancel() { base.cancel() }
 }

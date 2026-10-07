@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Synchronization
 import Testing
@@ -144,7 +143,7 @@ struct RealtimeClientTests {
         defer { fixture.close() }
         let socket = ScriptedRealtimeSocket()
         let client = RealtimeClient(
-            connection: fixture.client().connection, http: fixture.client(), makeSocket: { _ in socket })
+            connection: fixture.client().connection, transport: ScriptedTransport(fixture.client()) { socket })
         try await client.connect()
         let resultFlag = RealtimeFlag()
         let work = Task {
@@ -168,8 +167,7 @@ struct RealtimeClientTests {
         defer { fixture.close() }
         let socket = ScriptedRealtimeSocket()
         let client = RealtimeClient(
-            connection: fixture.client().connection, http: fixture.client(), eventCapacity: 4,
-            makeSocket: { _ in socket })
+            connection: fixture.client().connection, transport: ScriptedTransport(fixture.client()) { socket }, eventCapacity: 4)
         try await client.connect()
         // connect emits its ping response and connection.ready; two slots remain.
         for index in 1...3 {
@@ -189,7 +187,7 @@ struct RealtimeClientTests {
         defer { fixture.close() }
         let socket = ScriptedRealtimeSocket()
         let client = RealtimeClient(
-            connection: fixture.client().connection, http: fixture.client(), makeSocket: { _ in socket })
+            connection: fixture.client().connection, transport: ScriptedTransport(fixture.client()) { socket })
         try await client.connect()
         do {
             _ = try await client.command(type: "conversation.create", payload: [:], timeout: 0.02, id: "once")
@@ -223,7 +221,7 @@ struct RealtimeClientTests {
         defer { fixture.close() }
         let socket = ScriptedRealtimeSocket()
         let client = RealtimeClient(
-            connection: fixture.client().connection, http: fixture.client(), makeSocket: { _ in socket })
+            connection: fixture.client().connection, transport: ScriptedTransport(fixture.client()) { socket })
         try await client.connect()
         let work = Task { try await client.command(type: "conversation.prompt", payload: [:], id: "prompt") }
         await socket.waitForSent(2)
@@ -250,7 +248,7 @@ struct RealtimeClientTests {
         defer { fixture.close() }
         let socket = ScriptedRealtimeSocket()
         let client = RealtimeClient(
-            connection: fixture.client().connection, http: fixture.client(), makeSocket: { _ in socket })
+            connection: fixture.client().connection, transport: ScriptedTransport(fixture.client()) { socket })
         try await client.connect()
         let watch = Task {
             try await client.command(type: "agentBrowser.watch", payload: ["conversationId": "c"], id: "w")
@@ -304,7 +302,7 @@ struct RealtimeClientTests {
         let second = ScriptedRealtimeSocket()
         let sockets = RealtimeSocketList([first, second])
         let client = RealtimeClient(
-            connection: fixture.client().connection, http: fixture.client(), makeSocket: { _ in sockets.take() })
+            connection: fixture.client().connection, transport: ScriptedTransport(fixture.client()) { sockets.take() })
         try await client.connect()
         let old = Task { try await client.command(type: "conversation.create", payload: [:], id: "reused") }
         await first.waitForSent(2)
@@ -329,7 +327,7 @@ struct RealtimeClientTests {
         defer { fixture.close() }
         let socket = ScriptedRealtimeSocket()
         let client = RealtimeClient(
-            connection: fixture.client().connection, http: fixture.client(), makeSocket: { _ in socket })
+            connection: fixture.client().connection, transport: ScriptedTransport(fixture.client()) { socket })
         try await client.connect()
         do {
             _ = try await client.command(type: "conversation.create", payload: [:], timeout: 0.02)
@@ -341,65 +339,13 @@ struct RealtimeClientTests {
         #expect(socket.sent.count == 2)
     }
 
-    @Test func encryptedConcurrentCommandsStayInNonceOrderAndVerifyBeforeUse() async throws {
-        let fixture = NetworkHTTPFixture { _ in .json(["requiredProtocol": "x25519"]) }
-        defer { fixture.close() }
-        let server = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: Data(repeating: 9, count: 32))
-        var connection = fixture.client().connection
-        connection.encryption = .x25519
-        connection.publicKey = CryptoEncoding.encode(server.publicKey.rawRepresentation)
-        let box = RealtimeSocketList([])
-        let client = RealtimeClient(
-            connection: connection, http: fixture.client(),
-            makeSocket: { request in
-                do {
-                    guard let url = request.url,
-                        let clientKey = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                            .queryItems?.first(where: { $0.name == "client_key" })?.value
-                    else { throw TodexError.invalid("握手缺少 client_key") }
-                    #expect(request.value(forHTTPHeaderField: "x-todex-client-key") == nil)
-                    // History v3 support is declared on the upgrade URL.
-                    #expect(
-                        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
-                            .contains(URLQueryItem(name: "historyEncryption", value: "1")) == true)
-                    let clientPublic = try CryptoEncoding.decode(clientKey, count: 32)
-                    let secret = try server.sharedSecretFromKeyAgreement(with: .init(rawRepresentation: clientPublic))
-                    let key = secret.hkdfDerivedSymmetricKey(
-                        using: SHA256.self, salt: server.publicKey.rawRepresentation + clientPublic,
-                        sharedInfo: Data("x25519".utf8), outputByteCount: 32)
-                    let socket = ScriptedRealtimeSocket(key: key, echo: true)
-                    box.append(socket)
-                    return socket
-                } catch {
-                    Issue.record(error)
-                    return ScriptedRealtimeSocket()
-                }
-            })
-        await #expect(throws: (any Error).self) { try await client.command(type: "conversation.create", payload: [:]) }
-        try await client.connect()
-        try await withThrowingTaskGroup(of: JSONValue.self) { group in
-            for index in 0..<30 {
-                group.addTask {
-                    try await client.command(type: "conversation.create", payload: ["index": .number(Double(index))])
-                }
-            }
-            var results: Set<JSONValue> = []
-            for try await result in group { results.insert(result["index"]) }
-            #expect(results.count == 30)
-        }
-        let socket = box.snapshot[0]
-        #expect(socket.sent.count == 31)
-        #expect(socket.clientCounters == Array(0..<31).map(UInt64.init))
-        await client.disconnect()
-    }
-
     @Test func policyFailuresStopBeforeSocketCreationAndReportClosed() async throws {
         let fixture = NetworkHTTPFixture { _ in .json(["code": "NOT_FOUND", "message": "unauthorized"], status: 401) }
         defer { fixture.close() }
         let socket = ScriptedRealtimeSocket()
         let client = RealtimeClient(
-            connection: fixture.client().connection, http: fixture.client(),
-            makeSocket: { _ in
+            connection: fixture.client().connection,
+            transport: ScriptedTransport(fixture.client()) {
                 Issue.record("Should not create a socket")
                 return socket
             })
@@ -454,7 +400,29 @@ private final class RealtimeSocketList: Sendable {
     var snapshot: [ScriptedRealtimeSocket] { sockets.withLock { $0 } }
 }
 
-private final class ScriptedRealtimeSocket: RealtimeSocket {
+/// Stands in for `BackendSecureTransport`: policy over the fixture's HTTP
+/// client (plaintext loopback), sockets from the test.
+private struct ScriptedTransport: SecureTransport {
+    let http: HTTPClient
+    let makeSocket: @Sendable () -> ScriptedRealtimeSocket
+    init(_ http: HTTPClient, socket: @escaping @Sendable () -> ScriptedRealtimeSocket) {
+        self.http = http
+        makeSocket = socket
+    }
+    var mode: SecureTransportMode { http.transportMode }
+    func request(
+        method: HTTPMethod, path: String, query: [String: String], headers: [String: String], body: Data?
+    ) async throws -> SecureTransportResponse {
+        let result = try await http.response(method, path: path, query: query, rawBody: body, headers: headers)
+        return SecureTransportResponse(status: result.statusCode, headers: result.headers, body: result.data)
+    }
+    func openWebSocket(path: String, query: [String: String]) async throws -> any SecureWebSocket {
+        #expect(path == "/v2/ws" && query == ["historyEncryption": "1"])
+        return makeSocket()
+    }
+}
+
+private final class ScriptedRealtimeSocket: SecureWebSocket {
     private struct State {
         var inbound: [String] = []
         var reader: CheckedContinuation<String, any Error>?
@@ -463,39 +431,15 @@ private final class ScriptedRealtimeSocket: RealtimeSocket {
         var sentWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
         var cancelWaiters: [CheckedContinuation<Void, Never>] = []
         var cancelled = false
-        var serverCounter: UInt64 = 0
-        var clientCounters: [UInt64] = []
     }
     private let state = Mutex(State())
-    private let key: SymmetricKey?
-    private let echo: Bool
-    init(key: SymmetricKey? = nil, echo: Bool = false) {
-        self.key = key
-        self.echo = echo
-    }
+    let isEncrypted = false
     var sent: [JSONValue] { state.withLock { $0.sent } }
-    var clientCounters: [UInt64] { state.withLock { $0.clientCounters } }
     var isCancelled: Bool { state.withLock { $0.cancelled } }
 
     func send(_ text: String, completion: @escaping @Sendable ((any Error)?) -> Void) {
         do {
-            var bytes = Data(text.utf8)
-            if let key {
-                let frame = try JSONDecoder().decode(JSONValue.self, from: bytes)
-                let nonce = try CryptoEncoding.decode(frame["nonce"].stringValue, count: 24)
-                let counter = nonce[8..<16].enumerated().reduce(UInt64(0)) {
-                    $0 | UInt64($1.element) << ($1.offset * 8)
-                }
-                let expected = state.withLock { state in
-                    let n = state.clientCounters.count
-                    state.clientCounters.append(counter)
-                    return n
-                }
-                #expect(counter == UInt64(expected) && nonce[0] == 2)
-                bytes = try XChaChaAEAD.open(
-                    CryptoEncoding.decode(frame["ciphertext"].stringValue), key: key, nonce: nonce,
-                    aad: TransportCryptoSession.aad)
-            }
+            let bytes = Data(text.utf8)
             let frame = try JSONDecoder().decode(JSONValue.self, from: bytes)
             let waiters = state.withLock {
                 $0.sent.append(frame)
@@ -506,11 +450,8 @@ private final class ScriptedRealtimeSocket: RealtimeSocket {
                 return ready
             }
             for waiter in waiters { waiter.resume() }
-            if frame["type"] == "server.ping" || echo {
-                try push([
-                    "id": frame["id"], "type": "server.result",
-                    "payload": frame["type"] == "server.ping" ? ["pong": true] : frame["payload"],
-                ])
+            if frame["type"] == "server.ping" {
+                try push(["id": frame["id"], "type": "server.result", "payload": ["pong": true]])
             }
         } catch { completion(error) }
     }
@@ -526,22 +467,7 @@ private final class ScriptedRealtimeSocket: RealtimeSocket {
         }
     }
     func push(_ frame: JSONValue) throws {
-        var raw = frame.prettyPrinted
-        if let key {
-            let counter = state.withLock {
-                let n = $0.serverCounter
-                $0.serverCounter += 1
-                return n
-            }
-            let nonce = TransportCryptoSession.nonce(direction: 1, counter: counter)
-            let ciphertext = try XChaChaAEAD.seal(
-                Data(raw.utf8), key: key, nonce: nonce, aad: TransportCryptoSession.aad)
-            let encrypted: JSONValue = [
-                "type": "todex.crypto.v1", "protocol": "x25519", "nonce": .string(CryptoEncoding.encode(nonce)),
-                "ciphertext": .string(CryptoEncoding.encode(ciphertext)),
-            ]
-            raw = encrypted.prettyPrinted
-        }
+        let raw = frame.prettyPrinted
         let reader: CheckedContinuation<String, any Error>? = state.withLock {
             let reader = $0.reader
             $0.reader = nil

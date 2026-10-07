@@ -6,7 +6,7 @@ import Testing
 @testable import TodexCore
 
 struct PairingTests {
-    @Test func backendDevicePairingFixtureMatchesEveryDerivedValue() throws {
+    @Test func pairingV3MaterialMatchesVectorAndUnwrapsUnderTheFullTranscript() throws {
         let v = try fixture()
         let material = try fixtureMaterial()
         #expect(material.verificationCode == v["verificationCode"].stringValue)
@@ -14,36 +14,37 @@ struct PairingTests {
         #expect(encoded(material.wrapKey) == v["wrapKey"].stringValue)
         #expect(encoded(material.pollProof) == v["pollProof"].stringValue)
         #expect(encoded(material.cancelProof) == v["cancelProof"].stringValue)
-        #expect(try material.unwrap(v) == v["deviceId"].stringValue)
-        let plaintext = Data(#"{"deviceId":"dev_1-HghL4hOwHlBoUq"}"#.utf8)
-        #expect(
+        // The backend seals the credential with the full v3 transcript as AAD.
+        #expect(try material.unwrap(approvedFixture()) == v["deviceId"].stringValue)
+        var shortAAD = try approvedFixture()
+        shortAAD["ciphertext"] = .string(
             try CryptoEncoding.encode(
                 XChaChaAEAD.seal(
-                    plaintext, key: material.wrapKey, nonce: CryptoEncoding.decode(v["nonce"].stringValue),
-                    aad: material.transcript)) == v["ciphertext"].stringValue)
+                    Data(#"{"deviceId":"\#(v["deviceId"].stringValue)"}"#.utf8), key: material.wrapKey,
+                    nonce: CryptoEncoding.decode(v["nonce"].stringValue), aad: material.transcript.dropLast(32))))
+        #expect(throws: (any Error).self) { try material.unwrap(shortAAD) }
     }
 
     @Test func forgedEnrollmentAndTranscriptSubstitutionAreRejected() throws {
-        let v = try fixture()
+        let v = try approvedFixture()
         let original = try fixtureMaterial()
         var damaged = v
         var ciphertext = try CryptoEncoding.decode(v["ciphertext"].stringValue)
         ciphertext[ciphertext.count - 1] ^= 1
         damaged["ciphertext"] = .string(CryptoEncoding.encode(ciphertext))
         #expect(throws: (any Error).self) { try original.unwrap(damaged) }
-        let wrongID = try PairingMaterial(
-            requestID: "21111111-2222-4333-8444-555555555555", privateKey: fixturePrivateKey(),
-            serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue), device: fixtureDevice())
+        let wrongID = try material(requestID: "21111111-2222-4333-8444-555555555555")
         #expect(wrongID.verificationCode != original.verificationCode)
         #expect(throws: (any Error).self) { try wrongID.unwrap(v) }
-        let wrongClient = try PairingMaterial(
-            requestID: v["requestId"].stringValue, privateKey: .init(),
-            serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue), device: fixtureDevice())
+        let wrongClient = try material(privateKey: .init())
+        #expect(throws: (any Error).self) { try wrongClient.unwrap(v) }
+        // The reveal binds the committed nonce; a different one changes the code and key.
+        let wrongNonce = try material(clientNonce: Data(repeating: 7, count: 32))
+        #expect(wrongNonce.verificationCode != original.verificationCode)
+        #expect(throws: (any Error).self) { try wrongNonce.unwrap(v) }
         #expect(throws: (any Error).self) { try wrongClient.unwrap(v) }
         // A credential addressed to a different device key must not unwrap here.
-        let otherDevice = try PairingMaterial(
-            requestID: v["requestId"].stringValue, privateKey: fixturePrivateKey(),
-            serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue), device: DeviceIdentity())
+        let otherDevice = try material(device: DeviceIdentity())
         #expect(throws: (any Error).self) { try otherDevice.unwrap(v) }
         for nonce in ["AA", v["nonce"].stringValue + "=", String(repeating: "A", count: 32)] {
             damaged = v
@@ -79,11 +80,21 @@ struct PairingTests {
         var noEncryption = try link()
         noEncryption["preferredEncryption"] = "none"
         noEncryption["protocol"] = nil
-        let importedNone = try importer.ingest(noEncryption.prettyPrinted, current: same)
+        // Transport v2 client rules: a keyless remote pairing could never
+        // connect, so it is refused instead of saved.
+        do {
+            _ = try importer.ingest(noEncryption.prettyPrinted, current: same)
+            Issue.record("a keyless remote pairing link was imported")
+        } catch TodexError.configuration(let message) {
+            #expect(message == SecureTransportError.encryptionRequired.localizedDescription)
+        }
+        noEncryption["serverUrl"] = "http://127.0.0.1:7345"
+        let local = BackendConnection(id: "local", serverURL: "http://127.0.0.1:7345", deviceSecret: "enrolled")
+        let importedNone = try importer.ingest(noEncryption.prettyPrinted, current: local)
         let none = try #require(importedNone)
         #expect(none.encryption == .none && none.publicKey.isEmpty && none.deviceSecret == "enrolled")
         noEncryption["authToken"] = ""
-        #expect(try importer.ingest(noEncryption.prettyPrinted, current: same)?.deviceSecret == "enrolled")
+        #expect(try importer.ingest(noEncryption.prettyPrinted, current: local)?.deviceSecret == "enrolled")
     }
 
     @Test func mlkemQRFragmentsSupportUnorderedRepeatedScans() throws {
@@ -160,7 +171,7 @@ struct PairingTests {
     @Test func enrollmentUsesCorrectProofsAndDeliversCredentialOnce() async throws {
         let endpoint = try PairingEndpoint(results: [["status": "pending"], approvedFixture()])
         let session = try await begin(endpoint, name: "  Mac\u{0000}\u{202E}测试  ")
-        #expect(session.verificationCode == "4C62C-4C83F")
+        #expect(session.verificationCode == (try fixture())["verificationCode"].stringValue)
         #expect(session.expiresAt == 2_000_000_300_000)
         #expect(session.pollIntervalMilliseconds == 1000)
         #expect(try await session.poll() == .pending)
@@ -168,12 +179,19 @@ struct PairingTests {
         #expect(try await session.poll() == .expired)
         try await session.cancel()
         let calls = await endpoint.calls
-        #expect(calls.map(\.action) == ["create", "poll", "poll"])
+        #expect(calls.map(\.action) == ["create", "reveal", "poll", "poll"])
+        // Commit first: create carries only the commitment, never the key.
         #expect(calls[0].body["deviceName"] == "Mac测试")
-        #expect(calls[0].body["clientPublicKey"] == (try fixture())["clientPublicKey"])
+        #expect(calls[0].body["clientCommitment"] == (try fixture())["commitment"])
         #expect(calls[0].body["devicePublicKey"] == (try fixture())["devicePublicKey"])
-        #expect(calls[1].body["proof"] == (try fixture())["pollProof"])
-        #expect(calls[1].body.objectValue.count == 2)
+        #expect(calls[0].body.objectValue.count == 3)
+        #expect(
+            calls[1].body == [
+                "requestId": (try fixture())["requestId"], "clientPublicKey": (try fixture())["clientPublicKey"],
+                "clientNonce": (try fixture())["clientNonce"],
+            ])
+        #expect(calls[2].body["proof"] == (try fixture())["pollProof"])
+        #expect(calls[2].body.objectValue.count == 2)
     }
 
     @Test(arguments: ["rejected", "expired"])
@@ -183,7 +201,7 @@ struct PairingTests {
         #expect(try await session.poll() == (status == "rejected" ? .rejected : .expired))
         #expect(try await session.poll() == .expired)
         try await session.cancel()
-        #expect(await endpoint.calls.count == 2)
+        #expect(await endpoint.calls.count == 3)
     }
 
     @Test func concurrentPollAndCancelDoNotReleaseAnApprovedCredential() async throws {
@@ -197,7 +215,7 @@ struct PairingTests {
         await endpoint.completePoll(try approvedFixture())
         #expect(try await polling.value == .expired)
         let calls = await endpoint.calls
-        #expect(calls.map(\.action) == ["create", "poll", "cancel"])
+        #expect(calls.map(\.action) == ["create", "reveal", "poll", "cancel"])
         #expect(calls.last?.body["proof"] == (try fixture())["cancelProof"])
     }
 
@@ -211,7 +229,7 @@ struct PairingTests {
         await endpoint.completePoll(try approvedFixture())
         #expect(try await polling.value == .expired)
         #expect(try await session.poll() == .expired)
-        #expect(await endpoint.calls.count == 2)
+        #expect(await endpoint.calls.count == 3)
     }
 
     @Test func failedApprovalIsTerminalAndInvalidCreationIsRejected() async throws {
@@ -231,7 +249,15 @@ struct PairingTests {
             response[field] = value
             let invalid = try PairingEndpoint(createResponse: response)
             await #expect(throws: (any Error).self) { try await begin(invalid) }
+            #expect(await invalid.calls.map(\.action) == ["create"])
         }
+        // A reveal that does not answer pending is refused and withdrawn.
+        let badReveal = try PairingEndpoint(revealResponse: ["status": "approved"])
+        await #expect(throws: (any Error).self) { try await begin(badReveal) }
+        await badReveal.waitForCalls(3)
+        let calls = await badReveal.calls
+        #expect(calls.map(\.action) == ["create", "reveal", "cancel"])
+        #expect(calls.last?.body["proof"] == (try fixture())["cancelProof"])
         #expect(DevicePairingSession.sanitizedDeviceName(" \n\u{202E}") == "TodeX")
         #expect(DevicePairingSession.sanitizedDeviceName(String(repeating: "🦦", count: 100)).unicodeScalars.count == 80)
     }
@@ -252,6 +278,14 @@ struct PairingTests {
         #expect(request.url?.path == "/v2/device-pairing/poll")
         #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+        #expect(request.value(forHTTPHeaderField: "x-todex-device-id") == nil)
+        #expect(request.value(forHTTPHeaderField: "x-todex-transport") == nil)
+        // The bootstrap client reaches nothing but the pairing routes, unsigned.
+        await #expect(throws: TodexError.self) { _ = try await client.request(path: "/v2/version", authenticated: false) }
+        await #expect(throws: TodexError.self) {
+            _ = try await client.request(.post, path: "/v2/device-pairing/poll", body: [:], authenticated: true)
+        }
+        #expect(recorder.requests.count == 1)
         for (status, data) in [
             (401, Data("{}".utf8)), (429, Data("{}".utf8)), (200, Data("[]".utf8)),
             (
@@ -336,21 +370,49 @@ struct PairingTests {
     ) async throws -> DevicePairingSession {
         try await DevicePairingSession.begin(
             deviceName: name, device: fixtureDevice(), privateKey: fixturePrivateKey(),
-            post: { action, body in try await endpoint.post(action, body) }, now: { clock.now })
+            clientNonce: CryptoEncoding.decode((try fixture())["clientNonce"].stringValue), post: { action, body in try await endpoint.post(action, body) }, now: { clock.now })
     }
 }
 
+/// Device pairing v3 vector from TodeX_protocol's transport-v2.json (the
+/// backend asserts the same values), re-encoded as base64url like the wire.
 private func fixture() throws -> JSONValue {
-    try JSONDecoder().decode(JSONValue.self, from: Data(devicePairingFixtureJSON.utf8))
+    let url = try #require(Bundle.module.url(forResource: "transport-v2", withExtension: "json", subdirectory: "Fixtures"))
+    let v = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: url))["pairingV3"]
+    func b64(_ name: String) throws -> JSONValue { .string(CryptoEncoding.encode(try hexBytes(v[name]))) }
+    let device = try #require(DeviceIdentity(secretKeyBase64URL: CryptoEncoding.encode(try hexBytes(v["deviceSeed"]))))
+    return [
+        "requestId": v["requestId"], "expiresAt": 2_000_000_300_000, "clientSecret": try b64("clientSecretKey"),
+        "clientPublicKey": try b64("clientPublicKey"), "serverPublicKey": try b64("serverPublicKey"),
+        "deviceSecret": try b64("deviceSeed"), "devicePublicKey": try b64("devicePublicKey"),
+        "deviceId": .string(device.deviceID), "clientNonce": try b64("clientNonce"),
+        "commitment": v["commitmentBase64Url"], "transcript": try b64("transcript"),
+        "verificationCode": v["verificationCode"], "wrapKey": try b64("wrapKey"), "pollProof": try b64("pollProof"),
+        "cancelProof": try b64("cancelProof"), "nonce": .string(CryptoEncoding.encode(Data(repeating: 0x0b, count: 24))),
+    ]
+}
+private func hexBytes(_ value: JSONValue) throws -> Data {
+    let text = Array(value.stringValue.utf8)
+    try #require(text.count % 2 == 0)
+    return Data(
+        try stride(from: 0, to: text.count, by: 2).map { index in
+            try #require(UInt8(String(decoding: text[index..<index + 2], as: UTF8.self), radix: 16))
+        })
 }
 private func fixturePrivateKey() throws -> Curve25519.KeyAgreement.PrivateKey {
     try .init(rawRepresentation: CryptoEncoding.decode(fixture()["clientSecret"].stringValue))
 }
-private func fixtureMaterial() throws -> PairingMaterial {
-    try PairingMaterial(
-        requestID: fixture()["requestId"].stringValue, privateKey: fixturePrivateKey(),
-        serverPublicKey: CryptoEncoding.decode(fixture()["serverPublicKey"].stringValue), device: fixtureDevice())
+private func material(
+    requestID: String? = nil, privateKey: Curve25519.KeyAgreement.PrivateKey? = nil, device: DeviceIdentity? = nil,
+    clientNonce: Data? = nil
+) throws -> PairingMaterial {
+    let v = try fixture()
+    return try PairingMaterial(
+        v3RequestID: requestID ?? v["requestId"].stringValue, privateKey: privateKey ?? fixturePrivateKey(),
+        serverPublicKey: CryptoEncoding.decode(v["serverPublicKey"].stringValue), device: device ?? fixtureDevice(),
+        clientNonce: clientNonce ?? CryptoEncoding.decode(v["clientNonce"].stringValue))
 }
+private func fixtureMaterial() throws -> PairingMaterial { try material() }
 private func fixtureDevice() throws -> DeviceIdentity {
     try #require(DeviceIdentity(secretKeyBase64URL: fixture()["deviceSecret"].stringValue))
 }
@@ -362,19 +424,23 @@ private func createFixture() throws -> JSONValue {
         "pollIntervalMs": 1000,
     ]
 }
+/// What the backend's poll returns once approved: the device credential
+/// sealed under the v3 wrap key with the full transcript as AAD.
 private func approvedFixture() throws -> JSONValue {
     let v = try fixture()
-    return ["status": "approved", "expiresAt": v["expiresAt"], "nonce": v["nonce"], "ciphertext": v["ciphertext"]]
+    return try approval(plaintext: JSONEncoder().encode(["deviceId": v["deviceId"]] as JSONValue))
 }
 private func approval(plaintext: Data) throws -> JSONValue {
+    let v = try fixture()
     let material = try fixtureMaterial()
-    var result = try approvedFixture()
-    result["ciphertext"] = .string(
-        try CryptoEncoding.encode(
-            XChaChaAEAD.seal(
-                plaintext, key: material.wrapKey, nonce: CryptoEncoding.decode(fixture()["nonce"].stringValue),
-                aad: material.transcript)))
-    return result
+    return [
+        "status": "approved", "expiresAt": v["expiresAt"], "nonce": v["nonce"],
+        "ciphertext": .string(
+            try CryptoEncoding.encode(
+                XChaChaAEAD.seal(
+                    plaintext, key: material.wrapKey, nonce: CryptoEncoding.decode(v["nonce"].stringValue),
+                    aad: material.transcript))),
+    ]
 }
 
 private actor PairingEndpoint {
@@ -384,19 +450,29 @@ private actor PairingEndpoint {
     }
     private(set) var calls: [Call] = []
     private let createResponse: JSONValue
+    private let revealResponse: JSONValue
     private var results: [JSONValue]
+    private var callWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private let holdPoll: Bool
     private var pollContinuation: CheckedContinuation<JSONValue, Never>?
     private var startedContinuation: CheckedContinuation<Void, Never>?
 
-    init(createResponse: JSONValue? = nil, results: [JSONValue] = [], holdPoll: Bool = false) throws {
+    init(
+        createResponse: JSONValue? = nil, revealResponse: JSONValue = ["status": "pending"], results: [JSONValue] = [],
+        holdPoll: Bool = false
+    ) throws {
         self.createResponse = try createResponse ?? createFixture()
+        self.revealResponse = revealResponse
         self.results = results
         self.holdPoll = holdPoll
     }
     func post(_ action: String, _ body: JSONValue) async throws -> JSONValue {
         calls.append(Call(action: action, body: body))
+        let ready = callWaiters.filter { $0.0 <= calls.count }
+        callWaiters.removeAll { $0.0 <= calls.count }
+        for waiter in ready { waiter.1.resume() }
         if action == "create" { return createResponse }
+        if action == "reveal" { return revealResponse }
         if action == "cancel" { return ["status": "expired"] }
         if holdPoll {
             return await withCheckedContinuation {
@@ -407,6 +483,10 @@ private actor PairingEndpoint {
         }
         guard !results.isEmpty else { throw TodexError.invalid("Unexpected extra poll") }
         return results.removeFirst()
+    }
+    func waitForCalls(_ count: Int) async {
+        if calls.count >= count { return }
+        await withCheckedContinuation { callWaiters.append((count, $0)) }
     }
     func waitForPoll() async {
         if pollContinuation != nil { return }
@@ -443,8 +523,11 @@ private final class PairingURLProtocol: URLProtocol, @unchecked Sendable {
         config.protocolClasses = [Self.self]
         config.urlCache = nil
         config.httpCookieStorage = nil
-        return HTTPClient(
-            connection: .init(serverURL: "https://\(host)", deviceSecret: "must-not-be-sent"),
+        // Pinned and remote on purpose: pairing still goes direct and unsigned.
+        return HTTPClient.pairingBootstrap(
+            connection: .init(
+                serverURL: "https://\(host)", deviceSecret: "must-not-be-sent", encryption: .x25519,
+                publicKey: "V9tLNZ8jrl4Ubk4lEgVnBHIlBjSMFQwUdT0Mkz0E1CE"),
             session: URLSession(configuration: config))
     }
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -466,26 +549,3 @@ private final class PairingURLProtocol: URLProtocol, @unchecked Sendable {
     }
     override func stopLoading() {}
 }
-
-// Verbatim backend tests/fixtures/device-pairing-v2.json. Only synthetic keys
-// and credentials, asserted byte-for-byte by backend device_pairing.rs tests.
-private let devicePairingFixtureJSON = #"""
-    {
-        "requestId": "11111111-2222-4333-8444-555555555555",
-        "expiresAt": 2000000300000,
-        "clientSecret": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
-        "serverSecret": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
-        "deviceSecret": "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU",
-        "clientPublicKey": "E75P6uryBMf9M1j8nAByGIHRdCeBKCJ-xnTzf3_pe20",
-        "serverPublicKey": "V9tLNZ8jrl4Ubk4lEgVnBHIlBjSMFQwUdT0Mkz0E1CE",
-        "devicePublicKey": "1UIH2hlJd9z0atv-wrwudbUtWopCGE_t_cAAJPDj6No",
-        "deviceId": "dev_1-HghL4hOwHlBoUq",
-        "transcript": "dG9kZXguZGV2aWNlLXBhaXJpbmcudjIvdHJhbnNjcmlwdAAxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUAE75P6uryBMf9M1j8nAByGIHRdCeBKCJ-xnTzf3_pe21X20s1nyOuXhRuTiUSBWcEciUGNIwVDBR1PQyTPQTUIQDVQgfaGUl33PRq2_7CvC51tS1aikIYT-39wAAk8OPo2g",
-        "verificationCode": "4C62C-4C83F",
-        "wrapKey": "BEw73pJCmVWDrRwkM4agWrV4qustwqLCEShnyF9pM78",
-        "pollProof": "NfpnayjZHSBwdA1WmkGpUxxj4AH7gsoxZan0DOw-LvY",
-        "cancelProof": "cCqtcPGH1Y77iBS1DtHlF3eXRtu2RlTKv-cRC4PmjHw",
-        "nonce": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL",
-        "ciphertext": "pg9ke2BjSCm11hjADR1t20TwxwL03iXd2Em21PmbCxpvtYPrJh94ZfDTBjr3pNg8v6_2"
-    }
-    """#
