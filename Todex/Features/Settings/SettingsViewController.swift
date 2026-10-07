@@ -163,10 +163,11 @@ final class SettingsViewController: SettingsListController {
                 SettingsRow(
                     title: String(localized: "会话历史加密"),
                     detail: liveSession == nil
-                        ? String(localized: "连接此后端后可管理端到端加密、设备授权与恢复密钥")
-                        : liveSession?.historyEncryption?.isEnabled == true
-                            ? String(localized: "端到端加密已开启") : String(localized: "端到端加密、设备授权与恢复密钥"),
-                    symbol: "lock.shield", id: "settings.historyEncryption", enabled: liveSession != nil
+                        ? String(localized: "连接此后端后可管理设备授权与恢复密钥")
+                        : liveSession?.historyRecoveryMissing == true
+                            ? String(localized: "已端到端加密 · 尚未设置恢复密钥") : String(localized: "已端到端加密"),
+                    symbol: "lock.shield", id: "settings.historyEncryption",
+                    color: liveSession?.historyRecoveryMissing == true ? .systemOrange : .label, enabled: liveSession != nil
                 ) { [weak self] in
                     guard let liveSession else { return }
                     self?.navigationController?.pushViewController(

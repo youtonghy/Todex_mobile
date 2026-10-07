@@ -281,6 +281,34 @@
         }
       }
     },
+    "  只读": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Read-only"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  読み取り専用"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  읽기 전용"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  只读"
+          }
+        }
+      }
+    },
     "  已完成": {
       "localizations": {
         "en": {
@@ -5041,34 +5069,6 @@
         }
       }
     },
-    "之后的新内容会以明文保存在后端。已加密的历史仍需授权设备才能读取。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New content will be stored on the backend in plaintext. Already encrypted history still needs an authorized device to read."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "以後の新しい内容はバックエンドに平文で保存されます。暗号化済みの履歴を読むには引き続き承認済みのデバイスが必要です。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이후 새 내용은 백엔드에 평문으로 저장됩니다. 이미 암호화된 기록은 여전히 승인된 기기가 있어야 읽을 수 있습니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "之后的新内容会以明文保存在后端。已加密的历史仍需授权设备才能读取。"
-          }
-        }
-      }
-    },
     "交给 Agent 核对：%@": {
       "localizations": {
         "en": {
@@ -5317,34 +5317,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "仍有冲突标记"
-          }
-        }
-      }
-    },
-    "仍然跳过": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skip Anyway"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "スキップする"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "그래도 건너뛰기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "仍然跳过"
           }
         }
       }
@@ -5933,6 +5905,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "会继续重试"
+          }
+        }
+      }
+    },
+    "会话内容在后端磁盘上始终只以密文保存，只有已授权的设备能解密；后端运行 Agent 时仍能看到明文。旧版未加密的对话保持原样，只能查看、导出、归档或删除。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation content is always stored only as ciphertext on the backend's disk, and only authorized devices can decrypt it; the backend still sees plaintext while it runs the agent. Legacy unencrypted conversations stay as they are and can only be viewed, exported, archived, or deleted."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会話の内容はバックエンドのディスクに常に暗号文としてのみ保存され、承認済みのデバイスだけが復号できます。バックエンドはエージェントの実行中は平文を参照できます。暗号化されていない旧形式の会話はそのまま残り、表示、書き出し、アーカイブ、削除のみ可能です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화 내용은 백엔드 디스크에 항상 암호문으로만 저장되며, 승인된 기기만 복호화할 수 있습니다. 백엔드는 에이전트를 실행하는 동안에는 평문을 볼 수 있습니다. 암호화되지 않은 이전 형식의 대화는 그대로 유지되며 보기, 내보내기, 보관, 삭제만 할 수 있습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会话内容在后端磁盘上始终只以密文保存，只有已授权的设备能解密；后端运行 Agent 时仍能看到明文。旧版未加密的对话保持原样，只能查看、导出、归档或删除。"
           }
         }
       }
@@ -7365,6 +7365,34 @@
         }
       }
     },
+    "关闭提示": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知を閉じる"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "알림 닫기"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭提示"
+          }
+        }
+      }
+    },
     "关闭标签": {
       "localizations": {
         "en": {
@@ -7417,34 +7445,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "关闭标签会丢失当前文件的本地编辑。"
-          }
-        }
-      }
-    },
-    "关闭端到端加密？": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Turn Off End-to-End Encryption?"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エンドツーエンド暗号化をオフにしますか？"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "종단 간 암호화를 끌까요?"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "关闭端到端加密？"
           }
         }
       }
@@ -8789,34 +8789,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "创建工作树…"
-          }
-        }
-      }
-    },
-    "创建恢复密钥": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create Recovery Key"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "復元キーを作成"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "복구 키 만들기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "创建恢复密钥"
           }
         }
       }
@@ -13273,34 +13245,6 @@
         }
       }
     },
-    "如果所有已授权的设备都丢失或重置，加密历史将永久无法读取。之后仍可在此页面创建恢复密钥。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "If every authorized device is lost or reset, encrypted history becomes permanently unreadable. You can still create a recovery key on this page later."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "承認済みのデバイスをすべて紛失またはリセットすると、暗号化された履歴は永久に読めなくなります。復元キーは後でこのページから作成できます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "승인된 기기를 모두 잃거나 초기화하면 암호화된 기록을 영구히 읽을 수 없습니다. 나중에 이 페이지에서 복구 키를 만들 수 있습니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "如果所有已授权的设备都丢失或重置，加密历史将永久无法读取。之后仍可在此页面创建恢复密钥。"
-          }
-        }
-      }
-    },
     "始终允许": {
       "localizations": {
         "en": {
@@ -13325,6 +13269,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "始终允许"
+          }
+        }
+      }
+    },
+    "始终开启 · 密钥纪元 %lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always on · Key epoch %lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "常にオン · キーエポック %lld"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "항상 켜짐 · 키 에포크 %lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "始终开启 · 密钥纪元 %lld"
           }
         }
       }
@@ -15289,6 +15261,34 @@
         }
       }
     },
+    "尚未设置历史恢复密钥：所有已授权设备丢失后，加密历史将无法恢复。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No history recovery key is set: if every authorized device is lost, the encrypted history can't be recovered."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴の復元キーが未設定です。承認済みのデバイスをすべて失うと、暗号化された履歴は復元できません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기록 복구 키가 설정되지 않았습니다. 승인된 기기를 모두 잃으면 암호화된 기록을 복구할 수 없습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚未设置历史恢复密钥：所有已授权设备丢失后，加密历史将无法恢复。"
+          }
+        }
+      }
+    },
     "尚未设置地址": {
       "localizations": {
         "en": {
@@ -15317,30 +15317,30 @@
         }
       }
     },
-    "尚未设置恢复密钥：所有授权设备丢失后，加密历史将无法恢复。": {
+    "尚未设置恢复密钥": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No recovery key is set: if every authorized device is lost, encrypted history cannot be recovered."
+            "value": "No recovery key set"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "復元キーが未設定です。承認済みのデバイスをすべて失うと、暗号化された履歴は復元できません。"
+            "value": "復元キーが未設定です"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "복구 키가 설정되지 않았습니다. 승인된 기기를 모두 잃으면 암호화된 기록을 복구할 수 없습니다."
+            "value": "복구 키가 설정되지 않음"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "尚未设置恢复密钥：所有授权设备丢失后，加密历史将无法恢复。"
+            "value": "尚未设置恢复密钥"
           }
         }
       }
@@ -17417,34 +17417,6 @@
         }
       }
     },
-    "已开启 · 密钥纪元 %lld": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "On · Key epoch %lld"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "オン · 鍵エポック %lld"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "켜짐 · 키 에포크 %lld"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已开启 · 密钥纪元 %lld"
-          }
-        }
-      }
-    },
     "已开始审查未提交改动": {
       "localizations": {
         "en": {
@@ -18229,6 +18201,62 @@
         }
       }
     },
+    "已端到端加密": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "End-to-end encrypted"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エンドツーエンド暗号化済み"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "종단 간 암호화됨"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已端到端加密"
+          }
+        }
+      }
+    },
+    "已端到端加密 · 尚未设置恢复密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "End-to-end encrypted · No recovery key set"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エンドツーエンド暗号化済み · 復元キー未設定"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "종단 간 암호화됨 · 복구 키 미설정"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已端到端加密 · 尚未设置恢复密钥"
+          }
+        }
+      }
+    },
     "已获取 %lld 个模型 · 点按选择": {
       "localizations": {
         "en": {
@@ -18953,62 +18981,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "建议：%@"
-          }
-        }
-      }
-    },
-    "开启后，新的会话内容在后端磁盘上只以密文保存，只有已授权的设备能解密。后端运行 Agent 时仍能看到明文；已有历史会在后台重新加密，期间 Time Machine 或 APFS 快照可能仍保留旧明文。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "When on, new conversation content is stored on the backend's disk only as ciphertext that authorized devices can decrypt. The backend still sees plaintext while running agents. Existing history is re-encrypted in the background; Time Machine or APFS snapshots may still keep old plaintext."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "オンにすると、新しい会話内容はバックエンドのディスクに暗号文としてのみ保存され、承認済みのデバイスだけが復号できます。エージェント実行中はバックエンドも平文を扱います。既存の履歴はバックグラウンドで再暗号化されますが、Time Machine や APFS スナップショットに古い平文が残る場合があります。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "켜면 새 대화 내용은 백엔드 디스크에 암호문으로만 저장되며 승인된 기기만 복호화할 수 있습니다. 에이전트 실행 중에는 백엔드도 평문을 봅니다. 기존 기록은 백그라운드에서 다시 암호화되며, Time Machine이나 APFS 스냅샷에 이전 평문이 남아 있을 수 있습니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "开启后，新的会话内容在后端磁盘上只以密文保存，只有已授权的设备能解密。后端运行 Agent 时仍能看到明文；已有历史会在后台重新加密，期间 Time Machine 或 APFS 快照可能仍保留旧明文。"
-          }
-        }
-      }
-    },
-    "开启端到端加密？": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Turn On End-to-End Encryption?"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エンドツーエンド暗号化をオンにしますか？"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "종단 간 암호화를 켤까요?"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "开启端到端加密？"
           }
         }
       }
@@ -21001,6 +20973,34 @@
         }
       }
     },
+    "所有已授权的设备丢失或重置后，加密历史将永久无法读取": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If every authorized device is lost or reset, the encrypted history can never be read again"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認済みのデバイスをすべて紛失またはリセットすると、暗号化された履歴は二度と読めなくなります"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인된 기기를 모두 잃어버리거나 초기화하면 암호화된 기록을 영구히 읽을 수 없습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所有已授权的设备丢失或重置后，加密历史将永久无法读取"
+          }
+        }
+      }
+    },
     "所选仓库已不存在，已改回工作区根目录。": {
       "localizations": {
         "en": {
@@ -22313,34 +22313,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "排队消息 %lld 条%@"
-          }
-        }
-      }
-    },
-    "接下来会生成恢复密钥（24 个单词和二维码）。请抄写并离线保存；它是所有设备丢失后读取历史的唯一途径。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Next, a recovery key (24 words and a QR code) is generated. Write it down and keep it offline; it is the only way to read history if every device is lost."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "次に復元キー（24 語と QR コード）を生成します。書き写してオフラインで保管してください。すべてのデバイスを失ったとき、履歴を読む唯一の手段です。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "다음으로 복구 키(24개 단어와 QR 코드)를 생성합니다. 적어서 오프라인으로 보관하세요. 모든 기기를 잃었을 때 기록을 읽을 수 있는 유일한 방법입니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "接下来会生成恢复密钥（24 个单词和二维码）。请抄写并离线保存；它是所有设备丢失后读取历史的唯一途径。"
           }
         }
       }
@@ -24949,6 +24921,62 @@
         }
       }
     },
+    "旧版未加密历史，只读": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Legacy unencrypted history, read-only"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暗号化されていない旧形式の履歴（読み取り専用）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "암호화되지 않은 이전 형식의 기록, 읽기 전용"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧版未加密历史，只读"
+          }
+        }
+      }
+    },
+    "旧版未加密的历史不能继续对话，可以查看、导出、归档或删除": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can't continue legacy unencrypted history. You can view, export, archive, or delete it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暗号化されていない旧形式の履歴では会話を続けられません。表示、書き出し、アーカイブ、削除は可能です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "암호화되지 않은 이전 형식의 기록에서는 대화를 이어갈 수 없습니다. 보기, 내보내기, 보관, 삭제는 할 수 있습니다."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧版未加密的历史不能继续对话，可以查看、导出、归档或删除"
+          }
+        }
+      }
+    },
     "是": {
       "localizations": {
         "en": {
@@ -26429,34 +26457,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "未完成"
-          }
-        }
-      }
-    },
-    "未开启": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Off"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "オフ"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "꺼짐"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未开启"
           }
         }
       }
@@ -33965,34 +33965,6 @@
         }
       }
     },
-    "确定不保存恢复密钥？": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skip Saving the Recovery Key?"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "復元キーを保存せずに続けますか？"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "복구 키를 저장하지 않을까요?"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "确定不保存恢复密钥？"
-          }
-        }
-      }
-    },
     "确认": {
       "localizations": {
         "en": {
@@ -34357,6 +34329,62 @@
         }
       }
     },
+    "立即设置": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set Up Now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐ設定"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금 설정"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "立即设置"
+          }
+        }
+      }
+    },
+    "立即设置恢复密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set Up Recovery Key Now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐ復元キーを設定"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금 복구 키 설정"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "立即设置恢复密钥"
+          }
+        }
+      }
+    },
     "端到端加密": {
       "localizations": {
         "en": {
@@ -34381,62 +34409,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "端到端加密"
-          }
-        }
-      }
-    },
-    "端到端加密、设备授权与恢复密钥": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "End-to-end encryption, device access and the recovery key"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エンドツーエンド暗号化、デバイスの承認、復元キー"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "종단 간 암호화, 기기 승인, 복구 키"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "端到端加密、设备授权与恢复密钥"
-          }
-        }
-      }
-    },
-    "端到端加密已开启": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "End-to-end encryption is on"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エンドツーエンド暗号化はオンです"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "종단 간 암호화가 켜져 있습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "端到端加密已开启"
           }
         }
       }
@@ -39761,34 +39733,6 @@
         }
       }
     },
-    "跳过": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skip"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "スキップ"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "건너뛰기"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "跳过"
-          }
-        }
-      }
-    },
     "转为草稿": {
       "localizations": {
         "en": {
@@ -40569,34 +40513,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "返回"
-          }
-        }
-      }
-    },
-    "返回保存": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Go Back and Save"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "戻って保存"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "돌아가서 저장"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "返回保存"
           }
         }
       }
@@ -41441,30 +41357,30 @@
         }
       }
     },
-    "连接此后端后可管理端到端加密、设备授权与恢复密钥": {
+    "连接此后端后可管理设备授权与恢复密钥": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connect to this backend to manage end-to-end encryption, device access and the recovery key"
+            "value": "Connect to this backend to manage device access and the recovery key"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このバックエンドに接続すると、エンドツーエンド暗号化、デバイスの承認、復元キーを管理できます"
+            "value": "このバックエンドに接続すると、デバイスの承認と復元キーを管理できます"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "이 백엔드에 연결하면 종단 간 암호화, 기기 승인, 복구 키를 관리할 수 있습니다"
+            "value": "이 백엔드에 연결하면 기기 권한과 복구 키를 관리할 수 있습니다"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "连接此后端后可管理端到端加密、设备授权与恢复密钥"
+            "value": "连接此后端后可管理设备授权与恢复密钥"
           }
         }
       }

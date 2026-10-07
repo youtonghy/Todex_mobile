@@ -39,6 +39,9 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     private var reordering = false
     private var addButton: UIBarButtonItem?
     private let statusLabel = Theme.label(String(localized: "尚未连接"), style: .subheadline, color: .secondaryLabel)
+    /// No history recovery key on this backend yet: a non-blocking notice the
+    /// user can close (remembered per backend) or act on.
+    private lazy var recoveryNotice = makeRecoveryNotice()
 
     init(session: AppSession) {
         self.session = session
@@ -77,7 +80,8 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         filter.accessibilityIdentifier = "home.filter"
         filter.heightAnchor.constraint(greaterThanOrEqualToConstant: 36).isActive = true
         filter.setContentCompressionResistancePriority(.required, for: .vertical)
-        let header = UIStackView(arrangedSubviews: [filter, statusLabel])
+        recoveryNotice.isHidden = true
+        let header = UIStackView(arrangedSubviews: [filter, recoveryNotice, statusLabel])
         header.axis = .vertical
         header.spacing = 14
         header.isLayoutMarginsRelativeArrangement = true
@@ -263,6 +267,7 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                 string: statusParts.joined(separator: " · "),
                 attributes: [.foregroundColor: statusColor, .font: statusFont]))
         statusLabel.attributedText = statusText
+        recoveryNotice.isHidden = !session.showsRecoveryKeyNotice
         if let mismatch = session.versionMismatch {
             if alertedBackendVersion != mismatch.backend {
                 alertedBackendVersion = mismatch.backend
@@ -472,6 +477,13 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             NSAttributedString(
                 string: item.title?.isEmpty == false ? item.title! : String(localized: "新对话"),
                 attributes: [.foregroundColor: tasksDone ? UIColor.secondaryLabel : .label, .font: titleFont]))
+        if item.isLegacyPlaintext {
+            // Pre-e2e history: viewable, never written to again.
+            title.append(
+                NSAttributedString(
+                    string: String(localized: "  只读"),
+                    attributes: [.foregroundColor: UIColor.secondaryLabel, .font: UIFont.preferredFont(forTextStyle: .caption1)]))
+        }
         if tasks != nil {
             title.append(
                 NSAttributedString(
@@ -504,9 +516,10 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         cell.contentView.alpha = tasksDone ? 0.6 : 1
         cell.accessoryType = .disclosureIndicator
         cell.accessibilityIdentifier = "conversation.\(item.id)"
-        if let tasks {
-            cell.accessibilityValue = String(localized: "\(tasks.count) 个关联任务，\(tasksDone ? String(localized: "已完成") : String(localized: "计划中"))")
-        }
+        cell.accessibilityValue = [
+            item.isLegacyPlaintext ? String(localized: "旧版未加密历史，只读") : nil,
+            tasks.map { String(localized: "\($0.count) 个关联任务，\(tasksDone ? String(localized: "已完成") : String(localized: "计划中"))") },
+        ].compactMap { $0 }.joined(separator: "，")
     }
     func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
         reordering
@@ -614,16 +627,22 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                 session.persist()
                 reload()
             },
-            UIAction(title: String(localized: "重命名"), image: Theme.icon("pencil")) { [weak self] _ in
-                self?.askText(title: String(localized: "对话名称"), value: item.title ?? "") { name in
-                    self?.update(item, patch: ["title": .string(name)])
-                }
-            },
             UIAction(title: item.archivedAt == nil ? String(localized: "归档") : String(localized: "恢复"), image: Theme.icon("archivebox")) { [weak self] _ in
                 self?.archive(item, archived: item.archivedAt == nil)
             },
         ]
-        if session.provider(for: item)?.capabilities["controlActions"].arrayValue.contains("fork") == true {
+        // Legacy plaintext history is read-only: no rename, no fork.
+        if !item.isLegacyPlaintext {
+            actions.insert(
+                UIAction(title: String(localized: "重命名"), image: Theme.icon("pencil")) { [weak self] _ in
+                    self?.askText(title: String(localized: "对话名称"), value: item.title ?? "") { name in
+                        self?.update(item, patch: ["title": .string(name)])
+                    }
+                }, at: 1)
+        }
+        if !item.isLegacyPlaintext,
+            session.provider(for: item)?.capabilities["controlActions"].arrayValue.contains("fork") == true
+        {
             actions.append(
                 UIAction(title: String(localized: "分叉对话"), image: Theme.icon("arrow.triangle.branch")) { [weak self] _ in
                     Task { [weak self] in
@@ -757,7 +776,7 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                 session.drafts[conversation.id] = draft
                 session.saveSoon()
                 open(conversation)
-            } catch { showError(error) }
+            } catch { writeFailed(error) }
         }
     }
     /// Column header arrow: open the workspace's latest conversation or create one.
@@ -1171,8 +1190,14 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             do {
                 _ = try await session.api?.updateConversation(id: item.id, patch: patch)
                 try await session.refresh()
-            } catch { showError(error) }
+            } catch { writeFailed(error, conversationId: item.id) }
         }
+    }
+    /// Reports a failed write; history errors also re-register this device's
+    /// key or mark the conversation read-only.
+    private func writeFailed(_ error: any Error, conversationId: String? = nil) {
+        session.historyWriteFailed(error, conversationId: conversationId)
+        showError(error)
     }
     private func delete(_ item: ConversationManifest) {
         Task {
@@ -1269,8 +1294,53 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                     session.updatePreferences(remembered, for: conversation)
                 }
                 open(conversation)
-            } catch { showError(error) }
+            } catch { writeFailed(error) }
         }
+    }
+    private func makeRecoveryNotice() -> UIView {
+        let icon = UIImageView(image: Theme.icon("key", pointSize: 15))
+        icon.tintColor = .systemOrange
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        let text = Theme.label(
+            String(localized: "尚未设置历史恢复密钥：所有已授权设备丢失后，加密历史将无法恢复。"), style: .footnote)
+        var closeConfig = UIButton.Configuration.plain()
+        closeConfig.image = Theme.icon("xmark", pointSize: 12)
+        closeConfig.baseForegroundColor = .secondaryLabel
+        let close = UIButton(
+            configuration: closeConfig,
+            primaryAction: UIAction { [weak self] _ in self?.session.dismissRecoveryKeyNotice() })
+        close.accessibilityLabel = String(localized: "关闭提示")
+        close.accessibilityIdentifier = "home.recoveryNotice.close"
+        close.setContentHuggingPriority(.required, for: .horizontal)
+        let top = UIStackView(arrangedSubviews: [icon, text, close])
+        top.alignment = .center
+        top.spacing = 8
+        var setupConfig = UIButton.Configuration.plain()
+        setupConfig.title = String(localized: "立即设置")
+        setupConfig.baseForegroundColor = Theme.accent
+        setupConfig.contentInsets = .init(top: 4, leading: 0, bottom: 4, trailing: 0)
+        let setup = UIButton(
+            configuration: setupConfig, primaryAction: UIAction { [weak self] _ in self?.setUpRecoveryKey() })
+        setup.accessibilityIdentifier = "home.recoveryNotice.setup"
+        let stack = UIStackView(arrangedSubviews: [top, setup])
+        stack.axis = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        stack.isLayoutMarginsRelativeArrangement = true
+        stack.directionalLayoutMargins = .init(top: 8, leading: 12, bottom: 6, trailing: 4)
+        stack.backgroundColor = UIColor.systemOrange.withAlphaComponent(0.12)
+        stack.layer.cornerRadius = 12
+        stack.layer.cornerCurve = .continuous
+        top.widthAnchor.constraint(equalTo: stack.layoutMarginsGuide.widthAnchor).isActive = true
+        stack.accessibilityIdentifier = "home.recoveryNotice"
+        return stack
+    }
+    /// "Set up now": the history encryption page, starting a new recovery key.
+    private func setUpRecoveryKey() {
+        let controller = HistoryEncryptionViewController(session: session, setUpRecovery: true)
+        controller.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            systemItem: .close, primaryAction: UIAction { [weak controller] _ in controller?.dismiss(animated: true) })
+        present(UINavigationController(rootViewController: controller), animated: true)
     }
     private func showSettings() {
         let settings = SettingsViewController(

@@ -187,7 +187,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | `codex.cloudTask.apply` | Unsupported | 缺少云 HTTP adapter 调用，处理器拒绝。 |
 | `agentBrowser.watch` | Supported | 2026-10-06 补充。开始推送该会话 Agent 浏览器标签页的 `agentBrowser.frame`（base64 JPEG；连接慢时只保留最新帧；`closed: true` 表示无标签页）；每连接最多 8 个。`RealtimeClient` 把帧放入独立的 `browserFrames`（只保留最新 8 帧），不进入 `events` 与事件日志；`AppSession` 重连后重新发送仍在观看的会话。 |
 | `agentBrowser.unwatch` | Supported | 停止该会话的帧推送；幂等。 |
-| `history.encryption.get` / `.enable` / `.disable` | Conditional | 2026-10-06 补充，会话历史端到端加密（[规格](../../TodeX_backend/docs/history-encryption.md) §7）。返回 `{mode, epoch, recipients[], myRid?, grants[], myAccess?, revokedDevices[]}`；`myAccess=revoked` 时本机停止自动登记并禁用历史操作；`HistoryAPI` 封装，后端尚未实现时客户端静默视为不支持。 |
+| `history.encryption.get` | Conditional | 2026-10-06 补充，会话历史端到端加密（[规格](../../TodeX_backend/docs/history-encryption.md) §7）。返回 `{mode, epoch, recipients[], myRid?, grants[], myAccess?, revokedDevices[]}`，`mode` 恒为 `e2e`；`myAccess=revoked` 时本机停止自动登记并禁用历史操作；`HistoryAPI` 封装，后端尚未实现时客户端静默视为不支持。2026-10-07 起历史强制加密，`history.encryption.enable` / `.disable` 已从后端与客户端删除。写入错误：`HISTORY_KEY_REQUIRED`（409，尚无接收方，客户端重新登记本机密钥）、`HISTORY_READ_ONLY`（409，旧版未加密对话 `legacyPlaintext` 只读）。 |
 | `history.recipient.register` / `.revoke`、`history.recovery.set` | Conditional | 登记本机 X-Wing 公钥（连接后自动）、吊销接收方、上传恢复密钥公钥。 |
 | `history.grant.request` / `.list` / `.dismiss` / `.fulfill` | Conditional | 旧历史授权：本机在本地解包后为目标 `rid` 重新封装，每批 ≤500，`HistoryGrant` 按页记录进度可续跑；导入恢复密钥时以空 `grantId` 自授权。 |
 | `history.keys.list` / `.wraps` | Conditional | 枚举 `kid` 与取回封装；`HistoryDecryptor` 按需取回并以有界 LRU 缓存 DEK。 |

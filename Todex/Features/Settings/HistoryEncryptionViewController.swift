@@ -3,9 +3,10 @@ import TodexCore
 import UIKit
 
 /// End-to-end encrypted conversation history of the connected backend
-/// (history v3, `TodeX_backend/docs/history-encryption.md`): mode, recipients,
-/// old-history grants and the recovery key. Everything acts through the live
-/// session; private keys never leave this device.
+/// (history v3, `TodeX_backend/docs/history-encryption.md`): history is always
+/// encrypted, so this manages recipients, old-history grants and the recovery
+/// key. Everything acts through the live session; private keys never leave
+/// this device.
 @MainActor
 final class HistoryEncryptionViewController: SettingsListController {
     private let session: AppSession
@@ -15,9 +16,13 @@ final class HistoryEncryptionViewController: SettingsListController {
     private var busy = false
     /// Running grant/import progress, shown under its section.
     private var progress: String?
+    /// Opened from the home screen's "set up now": start creating the
+    /// recovery key once the state is known to lack one.
+    private var setUpRecovery: Bool
 
-    init(session: AppSession) {
+    init(session: AppSession, setUpRecovery: Bool = false) {
         self.session = session
+        self.setUpRecovery = setUpRecovery
         super.init(title: String(localized: "会话历史加密"))
     }
 
@@ -47,6 +52,10 @@ final class HistoryEncryptionViewController: SettingsListController {
             }
             loading = false
             render()
+            if setUpRecovery, session.historyRecoveryMissing, presentedViewController == nil {
+                setUpRecovery = false
+                beginReplaceRecovery(hasCurrent: false)
+            }
         }
     }
 
@@ -93,15 +102,12 @@ final class HistoryEncryptionViewController: SettingsListController {
         sections += [
             SettingsSection(
                 title: String(localized: "会话历史加密"),
-                footer: String(localized: "开启后，新的会话内容在后端磁盘上只以密文保存，只有已授权的设备能解密。后端运行 Agent 时仍能看到明文；已有历史会在后台重新加密，期间 Time Machine 或 APFS 快照可能仍保留旧明文。"),
+                footer: String(localized: "会话内容在后端磁盘上始终只以密文保存，只有已授权的设备能解密；后端运行 Agent 时仍能看到明文。旧版未加密的对话保持原样，只能查看、导出、归档或删除。"),
                 rows: [
                     SettingsRow(
                         title: String(localized: "端到端加密"),
-                        detail: state.isEnabled
-                            ? String(localized: "已开启 · 密钥纪元 \(state.epoch)") : String(localized: "未开启"),
-                        symbol: "lock.shield", id: "history.mode", enabled: !busy && registered,
-                        switchValue: state.isEnabled
-                    ) { [weak self] enabled in enabled ? self?.beginEnable() : self?.confirmDisable() },
+                        detail: String(localized: "始终开启 · 密钥纪元 \(state.epoch)"),
+                        symbol: "lock.shield", id: "history.mode"),
                     SettingsRow(
                         title: String(localized: "本机历史密钥"),
                         detail: revoked
@@ -207,58 +213,41 @@ final class HistoryEncryptionViewController: SettingsListController {
     }
 
     private func recoverySection(_ state: HistoryEncryptionState, revoked: Bool) -> SettingsSection {
-        var rows = [
+        var rows: [SettingsRow] = []
+        if state.activeRecovery == nil {
+            rows.append(
+                SettingsRow(
+                    title: String(localized: "尚未设置恢复密钥"),
+                    detail: String(localized: "所有已授权的设备丢失或重置后，加密历史将永久无法读取"),
+                    symbol: "exclamationmark.triangle", id: "history.recovery.missing", color: .systemOrange))
+        }
+        rows += [
+            SettingsRow(
+                title: state.activeRecovery == nil ? String(localized: "立即设置恢复密钥") : String(localized: "更换恢复密钥"),
+                symbol: state.activeRecovery == nil ? "key" : "arrow.triangle.2.circlepath", id: "history.recovery.replace",
+                color: state.activeRecovery == nil ? Theme.accent : .label, enabled: !busy && !revoked
+            ) { [weak self] in self?.beginReplaceRecovery(hasCurrent: state.activeRecovery != nil) },
             SettingsRow(
                 title: String(localized: "导入恢复密钥"),
                 detail: String(localized: "输入 24 个单词或扫描恢复二维码，让本机读取全部历史"),
                 symbol: "square.and.arrow.down", id: "history.recovery.import", color: Theme.accent,
                 enabled: !busy && !revoked && state.activeRecovery != nil
-            ) { [weak self] in self?.chooseImport() }
+            ) { [weak self] in self?.chooseImport() },
         ]
-        if state.isEnabled {
-            rows.append(
-                SettingsRow(
-                    title: state.activeRecovery == nil ? String(localized: "创建恢复密钥") : String(localized: "更换恢复密钥"),
-                    symbol: "arrow.triangle.2.circlepath", id: "history.recovery.replace", enabled: !busy && !revoked
-                ) { [weak self] in self?.beginReplaceRecovery(hasCurrent: state.activeRecovery != nil) })
-        }
         return SettingsSection(
             title: String(localized: "恢复密钥"),
-            footer: state.activeRecovery == nil
-                ? String(localized: "尚未设置恢复密钥：所有授权设备丢失后，加密历史将无法恢复。")
-                : String(localized: "恢复密钥只在创建时显示一次，后端只保存它的公钥。"),
+            footer: String(localized: "恢复密钥只在创建时显示一次，后端只保存它的公钥。"),
             rows: rows)
     }
 
     // MARK: Flows
 
-    private func beginEnable() {
-        confirm(
-            title: String(localized: "开启端到端加密？"),
-            message: String(localized: "接下来会生成恢复密钥（24 个单词和二维码）。请抄写并离线保存；它是所有设备丢失后读取历史的唯一途径。")
-        ) { [weak self] in
-            self?.showRecoveryKey { seed in
-                self?.perform { try await self?.session.setHistoryEncryption(enabled: true, recoverySeed: seed) }
-            }
-        }
-        render()  // The switch reverts until the flow completes.
-    }
-
-    private func confirmDisable() {
-        confirm(
-            title: String(localized: "关闭端到端加密？"),
-            message: String(localized: "之后的新内容会以明文保存在后端。已加密的历史仍需授权设备才能读取。"), destructive: true
-        ) { [weak self] in
-            self?.perform { try await self?.session.setHistoryEncryption(enabled: false) }
-        }
-        render()
-    }
-
+    /// Creates or replaces the recovery key: it is shown once, and only its
+    /// public half is uploaded after the user confirms they saved it.
     private func beginReplaceRecovery(hasCurrent: Bool) {
         let replace: @MainActor () -> Void = { [weak self] in
-            self?.showRecoveryKey(skippable: false) { seed in
-                guard let seed else { return }
-                self?.perform { try await self?.session.replaceRecoveryKey(seed: seed) }
+            self?.showRecoveryKey { seed in
+                self?.perform { try await self?.session.setRecoveryKey(seed: seed) }
             }
         }
         guard hasCurrent else {
@@ -271,27 +260,13 @@ final class HistoryEncryptionViewController: SettingsListController {
     }
 
     /// Shows a fresh recovery key; `completion` receives its seed once the
-    /// user confirms, or nil when they skip it after the second warning.
-    private func showRecoveryKey(skippable: Bool = true, completion: @escaping @MainActor (Data?) -> Void) {
+    /// user confirms they saved it. Cancelling uploads nothing.
+    private func showRecoveryKey(completion: @escaping @MainActor (Data) -> Void) {
         let seed = HistoryRecoveryKey.generateSeed()
         let controller: RecoveryKeyViewController
         do {
-            controller = try RecoveryKeyViewController(seed: seed, skippable: skippable) { [weak self] saved in
-                guard let self else { return }
-                if saved {
-                    dismiss(animated: true) { completion(seed) }
-                    return
-                }
-                let alert = UIAlertController(
-                    title: String(localized: "确定不保存恢复密钥？"),
-                    message: String(localized: "如果所有已授权的设备都丢失或重置，加密历史将永久无法读取。之后仍可在此页面创建恢复密钥。"),
-                    preferredStyle: .alert)
-                alert.addAction(UIAlertAction(title: String(localized: "返回保存"), style: .cancel))
-                alert.addAction(
-                    UIAlertAction(title: String(localized: "仍然跳过"), style: .destructive) { [weak self] _ in
-                        self?.dismiss(animated: true) { completion(nil) }
-                    })
-                presentedViewController?.present(alert, animated: true)
+            controller = try RecoveryKeyViewController(seed: seed) { [weak self] in
+                self?.dismiss(animated: true) { completion(seed) }
             }
         } catch {
             showError(error)
@@ -414,25 +389,23 @@ final class HistoryEncryptionViewController: SettingsListController {
 }
 
 /// Shows a recovery key once: 24 numbered words and the QR code. The user
-/// confirms they saved it, or skips (the caller warns a second time).
+/// confirms they saved it, or cancels.
 @MainActor
 final class RecoveryKeyViewController: UIViewController {
     private let words: [String]
     private let qrText: String
-    private let skippable: Bool
-    private let onFinish: @MainActor (_ saved: Bool) -> Void
+    private let onSaved: @MainActor () -> Void
 
-    init(seed: Data, skippable: Bool, onFinish: @escaping @MainActor (_ saved: Bool) -> Void) throws {
+    init(seed: Data, onSaved: @escaping @MainActor () -> Void) throws {
         words = try HistoryRecoveryKey.words(seed: seed)
         qrText = try HistoryRecoveryKey.qrString(seed: seed)
-        self.skippable = skippable
-        self.onFinish = onFinish
+        self.onSaved = onSaved
         super.init(nibName: nil, bundle: nil)
         title = String(localized: "恢复密钥")
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("Use init(seed:skippable:onFinish:)") }
+    required init?(coder: NSCoder) { fatalError("Use init(seed:onSaved:)") }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -479,22 +452,14 @@ final class RecoveryKeyViewController: UIViewController {
         var saved = UIButton.Configuration.filled()
         saved.title = String(localized: "我已妥善保存")
         saved.baseBackgroundColor = Theme.accent
-        let savedButton = UIButton(configuration: saved, primaryAction: UIAction { [weak self] _ in self?.onFinish(true) })
+        let savedButton = UIButton(configuration: saved, primaryAction: UIAction { [weak self] _ in self?.onSaved() })
         savedButton.accessibilityIdentifier = "history.recovery.saved"
 
         let stack = UIStackView(arrangedSubviews: [note, grid, qr, savedButton])
         stack.axis = .vertical
         stack.spacing = 20
-        if skippable {
-            var skip = UIButton.Configuration.plain()
-            skip.title = String(localized: "跳过")
-            let skipButton = UIButton(configuration: skip, primaryAction: UIAction { [weak self] _ in self?.onFinish(false) })
-            skipButton.accessibilityIdentifier = "history.recovery.skip"
-            stack.addArrangedSubview(skipButton)
-        } else {
-            navigationItem.leftBarButtonItem = UIBarButtonItem(
-                systemItem: .cancel, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
-        }
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            systemItem: .cancel, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
         let scroll = UIScrollView()
         view.addSubview(scroll)
         scroll.pinEdges(to: view)

@@ -77,6 +77,7 @@ actor Backend {
     func setProviders(_ values: [ProviderDescriptor]) { providers = values }
     func changeTenant() { workspace.tenantId = "tenant-b" }
     func setStatus(_ value: String) { manifest.status = value }
+    func setLegacyPlaintext(_ value: Bool) { manifest.legacyPlaintext = value ? true : nil }
     /// Simulate a backend that predates `beforeSequence`: it answers every page
     /// from the journal head regardless of the parameter.
     func setReversePages(_ value: Bool) { reversePages = value }
@@ -202,6 +203,8 @@ actor FakeSocket: SessionSocket {
     /// Every `history.*` command type except wraps, in send order.
     var historyLog: [String] = []
     var registeredKeys: [String] = []
+    /// The backend lost every recipient (writes then fail with HISTORY_KEY_REQUIRED).
+    func forgetHistoryRecipient() { historyRid = nil }
     func configureHistory(access: String, revokedKeys: Set<String> = [], revokedDevices: [JSONValue] = []) {
         historyBackend = true; historyAccess = access; revokedHistoryKeys = revokedKeys; self.revokedDevices = revokedDevices
     }
@@ -1166,6 +1169,81 @@ nonisolated func historyPush(_ reason: String, rid: String? = nil, deviceId: Str
     try check(await h.socket.registeredKeys.count == registrations, "re-registered after revocation")
     h.session.disconnect()
 }
+/// History is always end-to-end encrypted: a missing recovery key shows a
+/// notice the user can close for this backend; HISTORY_KEY_REQUIRED registers
+/// this device's key again; `legacyPlaintext` conversations refuse every write
+/// locally, and a HISTORY_READ_ONLY refusal marks the conversation read-only.
+@MainActor func legacyPlaintextIsReadOnlyAndKeyRequiredRegisters() async throws {
+    let device = try HistoryCrypto.generateRecipientKey()
+    let h = try Harness(
+        [event(1)], historySeed: device.seedRepresentation, deviceSecret: "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU")
+    await h.backend.setProviders([
+        ProviderDescriptor(id: "codex", displayName: "Codex", available: true, capabilities: ["controlActions": ["fork", "compact"]])
+    ])
+    await h.socket.configureHistory(access: "unregistered")
+    try await h.ready()
+    try await eventually("device key registered") {
+        h.session.historyDeviceRecipientID != nil && h.session.historyEncryption?.myRid == h.session.historyDeviceRecipientID
+    }
+    try check(h.session.historyRecoveryMissing && h.session.showsRecoveryKeyNotice, "missing recovery key not announced")
+    h.session.dismissRecoveryKeyNotice()
+    try check(h.session.historyRecoveryMissing && !h.session.showsRecoveryKeyNotice, "closed notice came back")
+
+    // The backend has no recipient any more: the refused write re-registers.
+    let registered = await h.socket.registeredKeys.count
+    await h.socket.forgetHistoryRecipient()
+    await h.socket.configure(error: TodexError.server(code: HistoryEncryption.keyRequired, message: "no recipient"))
+    do {
+        try await h.session.send(ComposerDraft(text: "needs a key"), in: h.manifest)
+        try check(false, "a write without a recipient succeeded")
+    } catch TodexError.server(let code, _) {
+        try check(code == HistoryEncryption.keyRequired, "unexpected error \(code)")
+    }
+    try await eventually("HISTORY_KEY_REQUIRED registered the key again") {
+        await h.socket.registeredKeys.count == registered + 1 && h.session.historyEncryption?.myRid != nil
+    }
+
+    // Legacy plaintext: nothing reaches the backend, the error reads clearly.
+    await h.socket.configure()
+    await h.backend.setLegacyPlaintext(true)
+    try await h.session.refresh()
+    try check(h.session.isReadOnly("c"), "legacyPlaintext not adopted from the list")
+    let prompts = await h.socket.prompts.count
+    let writes: [(String, () async throws -> Void)] = [
+        ("send", { try await h.session.send(ComposerDraft(text: "must not be sent"), in: h.manifest) }),
+        ("compact", { _ = try await h.session.control("compact", conversation: h.manifest) }),
+        ("fork", { _ = try await h.session.fork(h.manifest) }),
+        ("queue", { try await h.session.editFollowUps("clear", conversation: h.manifest) }),
+        ("steer", { _ = try await h.session.liveControl(["action": "steer", "text": "x"], conversation: h.manifest) }),
+    ]
+    for (name, write) in writes {
+        do {
+            try await write()
+            try check(false, "\(name) wrote to a read-only conversation")
+        } catch TodexError.server(let code, _) {
+            try check(code == HistoryEncryption.readOnly, "\(name): unexpected error \(code)")
+        }
+    }
+    try check(await h.socket.prompts.count == prompts, "a prompt reached the backend")
+    let forks = await h.socket.forks.count, queueCommands = await h.socket.queueCommands.count
+    try check(forks == 0 && queueCommands == 0, "a write reached the backend")
+    try check(
+        TodexError.server(code: HistoryEncryption.readOnly, message: "raw").localizedDescription != "raw", "no notice")
+
+    // A backend refusal marks the conversation read-only before the list does.
+    await h.backend.setLegacyPlaintext(false)
+    try await h.session.refresh()
+    try check(!h.session.isReadOnly("c"), "legacy flag stuck after the list cleared it")
+    await h.socket.configure(error: TodexError.server(code: HistoryEncryption.readOnly, message: "read-only"))
+    do {
+        try await h.session.send(ComposerDraft(text: "refused"), in: h.manifest)
+        try check(false, "a refused write succeeded")
+    } catch TodexError.server(let code, _) {
+        try check(code == HistoryEncryption.readOnly, "unexpected error \(code)")
+    }
+    try check(h.session.isReadOnly("c"), "HISTORY_READ_ONLY did not mark the conversation")
+    h.session.disconnect()
+}
 @MainActor func required<T>(_ value: T?) throws -> T {
     guard let value else { throw Failure(description: "missing value") }
     return value
@@ -1185,6 +1263,7 @@ nonisolated func historyPush(_ reason: String, rid: String? = nil, deviceId: Str
             ("encrypted history: decrypt in memory, ciphertext on disk, retry prompt", encryptedHistoryStaysCiphertextOnDisk),
             ("history push: grant for this device unlocks the open conversation", grantPushUnlocksLoadedConversation),
             ("history revoked: no registration until restored, then a fresh key", revokedDeviceStaysUnregisteredUntilRestored),
+            ("history e2e: recovery notice, key-required re-register, legacy read-only", legacyPlaintextIsReadOnlyAndKeyRequiredRegisters),
             ("corrupt optional cache recovery", corruptCacheIsOptional),
             ("wire subscriber overflow gap", streamOverflowSignalsGap),
             ("backend switch during HTTP replay", staleReplayResponse),

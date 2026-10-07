@@ -1316,7 +1316,13 @@ extension SessionSocket {
     func command(_ type: String, _ payload: JSONValue, timeout: TimeInterval = 30) async throws -> JSONValue {
         guard let socket, isConnected else { throw TodexError.disconnected }
         let current = revision
-        let result = try await socket.command(type: type, payload: payload, timeout: timeout, id: UUID().uuidString)
+        let result: JSONValue
+        do {
+            result = try await socket.command(type: type, payload: payload, timeout: timeout, id: UUID().uuidString)
+        } catch {
+            if current == revision { historyWriteFailed(error, conversationId: payload["conversationId"].optionalString) }
+            throw error
+        }
         try checkRevision(current)
         return result
     }
@@ -1341,6 +1347,7 @@ extension SessionSocket {
         guard conversations.contains(where: { $0.id == id && $0.workspace == conversation.workspace }) else {
             throw TodexError.invalid(String(localized: "对话已切换，请重新打开"))
         }
+        try ensureWritable(conversation)
         guard pendingSends[id] == nil, sending[id] == nil else { throw TodexError.unknownOutcome(String(localized: "已有消息等待核对")) }
         guard let runtime = runtimes[id], runtime.readyForActions else { throw TodexError.invalid(String(localized: "请等待历史记录同步完成")) }
         if ["running", "waitingPermission", "waiting_permission"].contains(runtime.status) {
@@ -1427,6 +1434,7 @@ extension SessionSocket {
             persist()
         } catch let sendError {
             guard current == revision else { throw CancellationError() }
+            historyWriteFailed(sendError, conversationId: id)
             var error = sendError
             // The backend was busy after all (a turn started below the loaded
             // window, or on another device): queue the prompt there under the
@@ -1507,6 +1515,7 @@ extension SessionSocket {
     private func queueFollowUp(_ draft: ComposerDraft, itemId: String, conversation: ConversationManifest)
         async throws -> JSONValue
     {
+        try ensureWritable(conversation)
         var payload = try promptPayload(draft, conversation: conversation)
         payload["itemId"] = .string(itemId)
         if !draft.attachments.isEmpty,
@@ -1536,6 +1545,7 @@ extension SessionSocket {
     }
     /// Removes one item from, clears, or resumes the backend queue.
     func editFollowUps(_ operation: String, itemId: String? = nil, conversation: ConversationManifest) async throws {
+        try ensureWritable(conversation)
         var payload: JSONValue = ["conversationId": .string(conversation.id)]
         if let itemId { payload["itemId"] = .string(itemId) }
         let result = try await command("conversation.queue.\(operation)", payload, timeout: 15)
@@ -1672,7 +1682,8 @@ extension SessionSocket {
         guard foreground, isConnected, !pausedQueues.contains(id), sending[id] == nil, queueDispatches[id] == nil,
             pendingSends[id] == nil,
             let runtime = runtimes[id], ["idle", "completed"].contains(runtime.status), runtime.readyForActions,
-            let first = queues[id]?.first, let conversation = conversations.first(where: { $0.id == id })
+            let first = queues[id]?.first, let conversation = conversations.first(where: { $0.id == id }),
+            !conversation.isLegacyPlaintext
         else { return }
         let current = revision
         let token = UUID()
@@ -1690,6 +1701,7 @@ extension SessionSocket {
         }
     }
     func respond(_ permission: PendingPermission, conversationId: String, decision: JSONValue) async throws {
+        if isReadOnly(conversationId) { throw Self.historyReadOnlyError }
         // Adapter approvals carry the sidecar's session on `runtimeId` and go
         // through `codex.local.approval.respond`; the conversation-level
         // `conversation.permission.respond` would misroute them.
@@ -1721,6 +1733,7 @@ extension SessionSocket {
             ["conversationId": .string(conversationId), "permissionId": .string(permission.id), "decision": decision])
     }
     func control(_ action: String, conversation: ConversationManifest) async throws -> JSONValue {
+        try ensureWritable(conversation)
         guard runtimes[conversation.id]?.readyForActions == true else { throw TodexError.invalid(String(localized: "请等待历史记录同步完成")) }
         guard provider(for: conversation)?.capabilities["controlActions"].arrayValue.contains(.string(action)) == true
         else { throw TodexError.invalid(String(localized: "当前 Agent 不支持此操作")) }
@@ -1732,7 +1745,7 @@ extension SessionSocket {
         // back to the decrypted text. Only the newest user message will do:
         // when a locked run is newer, an older one would just be refused
         // (CONFLICT), so say why instead.
-        if action == "retry", historyEncryption?.isEnabled == true || encryptedConversations.contains(conversation.id) {
+        if action == "retry", historyEncryption != nil || encryptedConversations.contains(conversation.id) {
             guard
                 let latest = runtimes[conversation.id]?.messages.first(where: {
                     $0.role == "user" || $0.category == ConversationRuntime.lockedCategory
@@ -1867,6 +1880,56 @@ extension SessionSocket {
         changed()
     }
 
+    /// A write failed for a history reason: `HISTORY_KEY_REQUIRED` registers
+    /// this device's key again (the next attempt then succeeds), and
+    /// `HISTORY_READ_ONLY` marks the conversation read-only before the list
+    /// refresh says so.
+    func historyWriteFailed(_ error: any Error, conversationId: String? = nil) {
+        switch error {
+        case TodexError.server(HistoryEncryption.keyRequired, _):
+            DebugLog.record("history.key.required", level: .warn)
+            guard !historyAccessRevoked else { return }
+            probeHistoryEncryption()
+        case TodexError.server(HistoryEncryption.readOnly, _):
+            guard let conversationId, let index = conversations.firstIndex(where: { $0.id == conversationId }),
+                !conversations[index].isLegacyPlaintext
+            else { return }
+            DebugLog.record("history.readOnly", level: .info)
+            conversations[index].legacyPlaintext = true
+            changed()
+        default: return
+        }
+    }
+
+    /// Conversations written before history was always end-to-end encrypted
+    /// (`legacyPlaintext`): viewing, export, archive and delete only.
+    func isReadOnly(_ conversationId: String) -> Bool {
+        conversations.first { $0.id == conversationId }?.isLegacyPlaintext == true
+    }
+
+    nonisolated static let historyReadOnlyError = TodexError.server(code: HistoryEncryption.readOnly, message: "")
+
+    private func ensureWritable(_ conversation: ConversationManifest) throws {
+        if conversation.isLegacyPlaintext || isReadOnly(conversation.id) { throw Self.historyReadOnlyError }
+    }
+
+    /// No recovery key yet: losing every authorized device would lose the
+    /// encrypted history. Settings warns; the home screen shows a dismissible
+    /// notice until one is set or the user closes it (per backend).
+    var historyRecoveryMissing: Bool {
+        guard let historyEncryption, !historyAccessRevoked else { return false }
+        return historyEncryption.activeRecovery == nil
+    }
+
+    var showsRecoveryKeyNotice: Bool {
+        historyRecoveryMissing && !defaults.bool(forKey: key("history-recovery-notice-dismissed"))
+    }
+
+    func dismissRecoveryKeyNotice() {
+        defaults.set(true, forKey: key("history-recovery-notice-dismissed"))
+        changed()
+    }
+
     /// `history.encryption.updated`: re-read the state after a short quiet
     /// period; when keys were wrapped for this device, decrypt the affected
     /// loaded conversations again so their locked rows open in place.
@@ -1987,30 +2050,9 @@ extension SessionSocket {
         try checkRevision(current)
     }
 
-    /// Turns e2e on (after uploading the optional recovery public key, so the
-    /// first keys are wrapped for it too) or off.
-    func setHistoryEncryption(enabled: Bool, recoverySeed: Data? = nil) async throws {
-        guard let api = historyAPI() else { throw TodexError.disconnected }
-        try ensureHistoryAccess()
-        let current = revision
-        let state: HistoryEncryptionState
-        if enabled {
-            try await refreshHistoryEncryption()
-            if let recoverySeed {
-                _ = try await api.setRecovery(
-                    publicKey: HistoryCrypto.recipientKey(seed: recoverySeed).publicKey.rawRepresentation)
-            }
-            state = try await api.enable()
-        } else {
-            state = try await api.disable()
-        }
-        try checkRevision(current)
-        historyEncryption = state
-        changed()
-    }
-
-    /// Replaces the recovery recipient with a new key's public half.
-    func replaceRecoveryKey(seed: Data) async throws {
+    /// Sets (or replaces) the recovery recipient with a new key's public half.
+    /// History is always end-to-end encrypted, so nothing else is switched.
+    func setRecoveryKey(seed: Data) async throws {
         guard let api = historyAPI() else { throw TodexError.disconnected }
         try ensureHistoryAccess()
         _ = try await api.setRecovery(publicKey: HistoryCrypto.recipientKey(seed: seed).publicKey.rawRepresentation)
@@ -2165,6 +2207,7 @@ extension SessionSocket {
     /// runtime, so a never-opened conversation can be forked. The copy inherits
     /// the source's composer preferences, as on desktop.
     func fork(_ conversation: ConversationManifest) async throws -> ConversationManifest {
+        try ensureWritable(conversation)
         guard provider(for: conversation)?.capabilities["controlActions"].arrayValue.contains("fork") == true else {
             throw TodexError.invalid(String(localized: "当前 Agent 未提供已验证的原生分叉能力。"))
         }
@@ -2191,6 +2234,7 @@ extension SessionSocket {
         return created
     }
     func liveControl(_ control: JSONValue, conversation: ConversationManifest) async throws -> JSONValue {
+        try ensureWritable(conversation)
         guard let runtime = runtimes[conversation.id], runtime.readyForActions, !runtime.activeTurnId.isEmpty else {
             throw TodexError.invalid(String(localized: "没有已同步的运行任务"))
         }

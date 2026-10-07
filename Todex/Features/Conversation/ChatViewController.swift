@@ -25,6 +25,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private var transientNotice: (text: String, color: UIColor, until: Date)?
     private var noticedCompaction: String?
     private let placeholder = Theme.label(String(localized: "描述你的任务"), color: .placeholderText)
+    private weak var attachButton: UIButton?
+    private weak var expandButton: UIButton?
     private let status = Theme.label(String(localized: "正在同步…"), style: .caption1, color: .secondaryLabel)
     private let chips = UIStackView()
     private let alerts = UIStackView()
@@ -199,12 +201,14 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         expand.addAction(
             UIAction { [weak self] _ in self?.presentFullscreenComposer() }, for: .touchUpInside)
         glass.contentView.addSubview(expand)
+        expandButton = expand
         expand.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             expand.trailingAnchor.constraint(equalTo: composer.trailingAnchor, constant: -5),
             expand.topAnchor.constraint(equalTo: composer.topAnchor, constant: 2),
         ])
         let attach = Theme.iconButton("plus")
+        attachButton = attach
         attach.accessibilityLabel = String(localized: "附件")
         attach.showsMenuAsPrimaryAction = true
         attach.menu = UIMenu(children: [
@@ -613,8 +617,12 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         }
         return styled
     }
+    /// Legacy plaintext history (`legacyPlaintext`): viewable and exportable,
+    /// archive and delete stay in the list, but nothing writes to it again.
+    private var readOnly: Bool { conversation.isLegacyPlaintext || session.isReadOnly(conversation.id) }
+    private static let readOnlyReason = String(localized: "旧版未加密的历史不能继续对话，可以查看、导出、归档或删除")
     private var canSend: Bool {
-        session.isConnected && session.runtimes[conversation.id]?.readyForActions == true && !draft.isEmpty
+        !readOnly && session.isConnected && session.runtimes[conversation.id]?.readyForActions == true && !draft.isEmpty
             && !submitting && !switchingAgent && session.pendingSends[conversation.id] == nil
     }
     /// Legacy drafts stored records without tokens in the text; materialize the
@@ -661,11 +669,18 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         if renderedDraft != value {
             render(value)
         }
+        let readOnly = readOnly
+        placeholder.text = readOnly ? Self.readOnlyReason : String(localized: "描述你的任务")
         placeholder.isHidden = !value.text.isEmpty
-        composer.accessibilityHint = value.isEmpty ? String(localized: "描述你的任务") : nil
+        composer.isEditable = !readOnly
+        composer.accessibilityHint = readOnly ? Self.readOnlyReason : value.isEmpty ? String(localized: "描述你的任务") : nil
+        attachButton?.isEnabled = !readOnly
+        expandButton?.isEnabled = !readOnly
+        modelChip.isEnabled = !readOnly
+        workModeChip.isEnabled = !readOnly
         sendButton.configuration?.title = running ? String(localized: "加入队列") : String(localized: "发送")
         sendButton.isEnabled = canSend
-        stopButton.isHidden = !running
+        stopButton.isHidden = !running || readOnly
         stopButton.isEnabled = session.isConnected && runtime?.readyForActions == true
         chips.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for skill in draft.skills {
@@ -682,6 +697,20 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             computer: runtime?.desktopComputer ?? DesktopComputerState(),
             browser: runtime?.desktopBrowser ?? DesktopBrowserState())
         alerts.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        if readOnly {
+            // Read-only: no approvals, queues or run controls, only the bar.
+            let bar = Theme.label(String(localized: "旧版未加密历史，只读"), style: .footnote, color: .secondaryLabel)
+            bar.accessibilityIdentifier = "chat.readOnly"
+            alerts.addArrangedSubview(bar)
+            alerts.addArrangedSubview(Theme.label(Self.readOnlyReason, style: .caption1, color: .secondaryLabel))
+            if let error = session.storageError ?? (session.isConnected ? nil : session.lastError) {
+                alerts.addArrangedSubview(Theme.label(error, style: .caption1, color: .systemOrange))
+            }
+            alerts.isHidden = false
+            permissionChip.isEnabled = false
+            moreChip.menu = moreMenu()
+            return
+        }
         if let pending = session.pendingSends[conversation.id] {
             alerts.addArrangedSubview(
                 Theme.button(String(localized: "消息等待核对 · 查看"), icon: "exclamationmark.arrow.trianglehead.2.clockwise.rotate.90") {
@@ -975,6 +1004,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         }
     }
     private func submit(nativeQueue: Bool = true) {
+        guard !readOnly else { return }
         if runClientCommand() { return }
         guard canSend else { return }
         let value = draft
@@ -1484,7 +1514,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                     stack[index] = ConversationContainerController(session: session, conversation: manifest)
                     navigation.setViewControllers(stack, animated: true)
                 }
-            } catch { showError(error) }
+            } catch {
+                session.historyWriteFailed(error)
+                showError(error)
+            }
         }
     }
     /// `/archive`: same confirm + `archived` patch as the desktop alert, then
@@ -2380,7 +2413,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                     stack[index] = ConversationContainerController(session: session, conversation: manifest)
                     navigation.setViewControllers(stack, animated: true)
                 }
-            } catch { showError(error) }
+            } catch {
+                session.historyWriteFailed(error)
+                showError(error)
+            }
         }
     }
     // Icon + tint encode the active option so the icon-only chips stay legible.
@@ -2447,6 +2483,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                 )
             }
         ]
+        // Read-only history keeps only the configuration view.
+        guard !readOnly else { return UIMenu(children: values) }
         let supported = capability["controlActions"].arrayValue.compactMap(\.optionalString)
         for (action, label) in [("retry", String(localized: "重试上一轮")), ("fork", String(localized: "从此处分叉")), ("compact", String(localized: "压缩上下文"))]
         where supported.contains(action) {
