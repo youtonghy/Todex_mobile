@@ -288,6 +288,16 @@ actor FakeSocket: SessionSocket {
         return [:]
     }
 }
+nonisolated let loopbackHostCounter = Mutex<UInt32>(0)
+/// A distinct canonical 127.x.y.z host per call (never 127.0.0.1, which a
+/// real local backend may own; FixtureProtocol keeps requests in-process).
+nonisolated func uniqueLoopbackHost() -> String {
+    let next = loopbackHostCounter.withLock { value -> UInt32 in
+        value += 1
+        return value
+    }
+    return "127.\((next >> 16) % 254 + 1).\((next >> 8) & 0xff).\(next & 0xff)"
+}
 nonisolated func base64URLDecoded(_ text: String) throws -> Data {
     var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
     base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
@@ -309,8 +319,11 @@ nonisolated func base64URLDecoded(_ text: String) throws -> Data {
     let seeds: SeedBox
     init(_ journal: [ConversationEvent] = [], snapshot: SessionSnapshot? = nil, historySeed: Data? = nil, deviceSecret: String = "") throws {
         backend = Backend(journal); socket = FakeSocket(backend: backend)
-        let host = UUID().uuidString.lowercased() + ".invalid"
-        connection = BackendConnection(id: "test-" + UUID().uuidString, name: "Fixture", serverURL: "https://" + host, deviceSecret: deviceSecret)
+        // Transport v2 refuses a remote backend without a pinned key; an
+        // unpinned loopback host stays plaintext, so the fixture uses a
+        // distinct 127.0.0.0/8 host (FixtureProtocol intercepts by host).
+        let host = uniqueLoopbackHost()
+        connection = BackendConnection(id: "test-" + UUID().uuidString, name: "Fixture", serverURL: "http://" + host, deviceSecret: deviceSecret)
         let seeds = SeedBox(historySeed); self.seeds = seeds
         store = try TestEnvironment.store()
         if let snapshot { try store.save(snapshot, key: LocalStore.namespace(connection) + "-state") }
