@@ -176,10 +176,14 @@ public enum ProtocolCatalog {
             support = .supported
             detail = "Releases the per-connection subscription slot and stops the forwarding task; idempotent."
         case .conversationCreate, .conversationPrompt, .conversationFollowUp, .conversationRetry,
-            .conversationCancel, .conversationInterrupt, .conversationStop, .conversationPermissionRespond:
+            .conversationPermissionRespond:
             support = .supported
             detail =
                 "Implemented conversation handler; runtime ownership, provider capability and lifecycle checks still apply."
+        case .conversationCancel, .conversationInterrupt, .conversationStop:
+            support = .supported
+            detail =
+                "Implemented conversation handler; the optional turnId limits it to that active turn (otherwise {cancelled: false, activeTurnId}, a no-op). Runtime ownership, provider capability and lifecycle checks still apply."
         case .serverPing:
             support = .supported
             detail = "Returns server.result with pong = true."

@@ -364,8 +364,12 @@ public final class APIClient: Sendable {
         try await http.request(.post, path: "\(conversationPath(id))/prompt", body: prompt)
     }
 
-    public func cancelConversation(id: String) async throws -> JSONValue {
-        try await http.request(.post, path: "\(conversationPath(id))/cancel")
+    /// Cancels the active turn. With `turnId` the backend cancels only that
+    /// turn: another (or no) active turn answers `{"cancelled": false,
+    /// "activeTurnId": <id|null>}`, a no-op rather than an error.
+    public func cancelConversation(id: String, turnId: String? = nil) async throws -> JSONValue {
+        guard let turnId, !turnId.isEmpty else { return try await http.request(.post, path: "\(conversationPath(id))/cancel") }
+        return try await http.request(.post, path: "\(conversationPath(id))/cancel", body: ["turnId": .string(turnId)])
     }
 
     public func interruptConversation(id: String) async throws -> JSONValue {

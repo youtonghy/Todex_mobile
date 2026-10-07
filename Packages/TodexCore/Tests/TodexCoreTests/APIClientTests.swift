@@ -779,6 +779,11 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
         .init(name: "cancelConversation", method: "POST", path: "/v2/conversations/\(escaped)/cancel") {
             try await $0.cancelConversation(id: id)
         },
+        .init(
+            name: "cancelConversationTurn", method: "POST", path: "/v2/conversations/\(escaped)/cancel",
+            body: ["turnId": "turn_1"], response: ["cancelled": false, "activeTurnId": nil],
+            expectedResult: ["cancelled": false, "activeTurnId": nil]
+        ) { try await $0.cancelConversation(id: id, turnId: "turn_1") },
         .init(name: "interruptConversation", method: "POST", path: "/v2/conversations/\(escaped)/interrupt") {
             try await $0.interruptConversation(id: id)
         },

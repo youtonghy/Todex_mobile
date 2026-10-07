@@ -1765,8 +1765,26 @@ extension SessionSocket {
                 payload["prompt"] = .string(latest.text)
             }
         }
-        return try await command("conversation.\(action)", payload, timeout: action == "compact" ? 310 : 45)
+        // Stop actions name the turn the user saw running, so a stop that
+        // arrives after that turn ended cannot cancel the next one.
+        let stopping = Self.turnScopedControls.contains(action)
+        if stopping, let turnId = runtimes[conversation.id]?.activeTurnId, !turnId.isEmpty {
+            payload["turnId"] = .string(turnId)
+        }
+        let result = try await command("conversation.\(action)", payload, timeout: action == "compact" ? 310 : 45)
+        if stopping, result["cancelled"] == .bool(false) {
+            // That turn already ended (or another one is running): nothing
+            // was stopped, which is not an error.
+            DebugLog.record(
+                "conversation.stop.noop",
+                ["action": action, "activeTurnId": result["activeTurnId"].optionalString ?? ""], level: .info)
+        }
+        return result
     }
+
+    /// Controls that accept `turnId` and answer `{"cancelled": false,
+    /// "activeTurnId"}` when it is no longer the active turn.
+    private static let turnScopedControls: Set<String> = ["cancel", "stop", "interrupt"]
 
     /// `retryRequest` of the user message at `sequence`, fetched in full
     /// detail and decrypted; `nil` when the message predates it.
