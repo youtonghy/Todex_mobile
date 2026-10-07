@@ -8,7 +8,7 @@
 
 **67/67 个普通 HTTP method + path 已封装，72/72 个 WS 可识别命令已编目（含 2026-10-06 补充的 13 个 `history.*` 命令）。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 67 个普通 HTTP 接口；`POST /v2/device-pairing/reveal`（配对 v3）与传输隧道 `POST /v2/sealed` 也不计入。
 
-**传输 v2（2026-10-07 起）**：`HTTPClient` 不再有开关，按配置推导：协议与公钥由设备验证批准后一次写入并标记 `transportVerified`（2026-10-08 起，配对 v3 的 transcript 绑定后端传输协议与公钥）；已验证地固定协议与公钥时，所有 REST（含 `/health`、本机回环）都经 `POST /v2/sealed` 封装，WebSocket 用 `tv=2`；未固定公钥的远程后端在发出任何请求前即被拒绝并提示加密配对；已固定但未经验证的公钥（旧版本保存的配置）在任何主机（含本机回环）都被拒绝并提示重新配对，已验证但缺协议或缺公钥的配置按公钥无效拒绝；仅未固定公钥的本机回环后端走明文。配对链接（二维码）只读取 `serverUrl`（版本 1 或 2），分片二维码已删除。配对路由由独立的 bootstrap 客户端直连（不签名、不走隧道）。旧的 `todex.crypto.v1` 帧与配对 v2 已删除，APIClient 也不再封装 v2 配对接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
+**传输 v2（2026-10-07 起）**：`HTTPClient` 不再有开关，按配置推导：协议与公钥由设备验证批准后一次写入并标记 `transportVerified`（2026-10-08 起，配对 v3 的 transcript 绑定后端传输协议与公钥）；已验证地固定协议与公钥时，所有 REST（含 `/health`、本机回环）都经 `POST /v2/sealed` 封装，WebSocket 用 `tv=2`；未固定公钥的远程后端在发出任何请求前即被拒绝并提示加密配对；已固定但未经验证的公钥（旧版本保存的配置）在任何主机（含本机回环）都被拒绝并提示重新配对，已验证但缺协议或缺公钥的配置按公钥无效拒绝；仅未固定公钥的本机回环后端走明文。封装 REST 为 revision 2（2026-10-08 起）：请求带 `X-Todex-Sealed-Revision: 2`，只解密 `200` + `application/vnd.todex.sealed; r=2` 的响应，响应体为 32 字节 `response_nonce` 加记录流，`k_down` 按 nonce 逐响应派生；不带 `r=2` 的封装响应或不含 `"sealedRevision": 2` 的传输策略视为后端过旧（提示升级、停止重连、不回落）。隧道内的 `503 TRANSPORT_BUSY`（保证未执行）等待 `Retry-After`（最多 5 秒）后重签重试一次；经认证的 `401 AUTH_TIMESTAMP_REJECTED` 按其 `serverTime` 记录该后端的时钟偏差，重签重试一次，此后 REST 与 WebSocket 升级签名都使用校正后的时间；未经认证的应答从不改变时钟。配对链接（二维码）只读取 `serverUrl`（版本 1 或 2），分片二维码已删除。配对路由由独立的 bootstrap 客户端直连（不签名、不走隧道）。旧的 `todex.crypto.v1` 帧与配对 v2 已删除，APIClient 也不再封装 v2 配对接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
 ## 验证范围
 
@@ -37,9 +37,9 @@ swift test --package-path /path/to/TodexCore-copy \
 | GET | `/health` | `health()` | 已封装；公开；text/plain | `endpointWire(health)` |
 | GET | `/v2/version` | `version()` | 已封装；已配对时签名（数据目录与工作区根路径仅返回给已认证请求），未配对回退为不签名 | `endpointWire(version)`、`versionIsSignedWhenEnrolledAndFallsBackToUnsignedWhenNot` |
 | GET | `/v2/transport-policy` | `transportPolicy()` | 已封装；公开 | `endpointWire(transportPolicy)` |
-| POST | `/v2/device-pairing/create` | `DevicePairingSession.begin`（配对 v3，发 `clientCommitment` 与 `transportBinding: 1`；校验响应的 `transportProtocol`/`transportPublicKey`，`none` 仅限本机回环） | 公开；直连、不签名、不走 `/v2/sealed`；不代替本机配对批准 | `PairingTests`、`actualPairingV3EnrollsADeviceThatThenConnects` |
+| POST | `/v2/device-pairing/create` | `DevicePairingSession.begin`（配对 v3，发 `clientCommitment`、`transportBinding: 1` 与 `deviceNameBinding: 1`；设备名先规范化（去掉控制与 bidi 字符、去首尾 Unicode 空白、最多 80 个标量，空则用 `TodeX`）后原样发送并绑定进 transcript；校验响应的 `transportProtocol`/`transportPublicKey`，`none` 仅限本机回环） | 公开；直连、不签名、不走 `/v2/sealed`；不代替本机配对批准 | `PairingTests`、`actualPairingV3EnrollsADeviceThatThenConnects` |
 | POST | `/v2/device-pairing/reveal` | `DevicePairingSession.begin`（揭示公钥与 nonce 后才显示随机码） | 同上 | 同上 |
-| POST | `/v2/device-pairing/poll` | `DevicePairingSession.poll()`（v3 poll proof；批准密文以完整 v3 transcript 为 AAD，明文的 `deviceId` 与传输协议/公钥须与本机及 create 响应逐字一致，`.approved` 携带待固定的传输） | 同上 | 同上 |
+| POST | `/v2/device-pairing/poll` | `DevicePairingSession.poll()`（v3 poll proof；批准密文以完整 v3 transcript 为 AAD，明文的 `deviceId` 与传输协议/公钥须与本机及 create 响应逐字一致，`.approved` 携带待固定的传输；429/5xx/网络失败/超时抛 `DevicePairingRetryableError`，界面在过期前翻倍退避（参考 `Retry-After`，最多 5 秒）继续查询） | 同上 | 同上 |
 | POST | `/v2/device-pairing/cancel` | `DevicePairingSession.cancel()`（v3 cancel proof） | 同上 | 同上 |
 | GET | `/v2/workspaces` | `workspaces()`、`workspaceCatalog()` | 已封装；认证；解包 workspaces；`workspaceCatalog()` 另保留 rejected（目录在后端不可用的已存工作区） | `endpointWire(workspaces)`、`workspaceCatalogKeepsRejectedRecordsApart` |
 | PUT | `/v2/workspaces` | `replaceWorkspaces(_:)` | 已封装；认证；后端按归属合并 | `endpointWire(replaceWorkspaces)` |
@@ -86,7 +86,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | DELETE | `/v2/conversations/{conversation_id}` | `deleteConversation(id:)` | 已封装；认证 | `endpointWire(deleteConversation)` |
 | GET | `/v2/conversations/{conversation_id}/events` | `events(conversationId:after:limit:)`、`events(conversationId:before:limit:)` | 已封装；认证；保留 replay 外层字段 | `endpointWire(events)` |
 | POST | `/v2/conversations/{conversation_id}/prompt` | `promptConversation(id:prompt:)` | 已封装；认证；JSONValue 原样发送 | `endpointWire(promptConversation)` |
-| POST | `/v2/conversations/{conversation_id}/cancel` | `cancelConversation(id:)` | 已封装；认证 | `endpointWire(cancelConversation)` |
+| POST | `/v2/conversations/{conversation_id}/cancel` | `cancelConversation(id:turnId:)` | 已封装；认证；带 `turnId` 时只取消该轮，非当前活动轮返回 `{cancelled: false, activeTurnId}`（无操作） | `endpointWire(cancelConversation)`、`endpointWire(cancelConversationTurn)` |
 | POST | `/v2/conversations/{conversation_id}/interrupt` | `interruptConversation(id:)` | 已封装；认证；后端与 cancel 共用处理器 | `endpointWire(interruptConversation)` |
 | POST | `/v2/conversations/{conversation_id}/permissions/{permission_id}` | `respondPermission(conversationId:permissionId:decision:)` | 已封装；认证；JSONValue 原样发送 | `endpointWire(respondPermission)` |
 | GET | `/v2/kanban/tasks` | `kanbanTasks()` | 已封装；认证；解包 tasks | `endpointWire(kanbanTasks)` |
@@ -138,9 +138,9 @@ swift test --package-path /path/to/TodexCore-copy \
 | `conversation.fork` | Conditional | 要求 provider 原生 fork/compact 能力。 |
 | `conversation.compact` | Conditional | 要求 provider 原生 fork/compact 能力。 |
 | `conversation.control` | Conditional | 需要 expectedTurnId 与 control；取决于 live control probe。 |
-| `conversation.cancel` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
-| `conversation.interrupt` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
-| `conversation.stop` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
+| `conversation.cancel` | Supported | 已实现处理器；客户端已知当前轮时带 `turnId`，过期的停止得到 `{cancelled: false, activeTurnId}` 并按无操作处理；仍检查归属、能力及生命周期。 |
+| `conversation.interrupt` | Supported | 已实现处理器；客户端已知当前轮时带 `turnId`，过期的停止得到 `{cancelled: false, activeTurnId}` 并按无操作处理；仍检查归属、能力及生命周期。 |
+| `conversation.stop` | Supported | 已实现处理器；客户端已知当前轮时带 `turnId`，过期的停止得到 `{cancelled: false, activeTurnId}` 并按无操作处理；仍检查归属、能力及生命周期。 |
 | `conversation.permission.respond` | Supported | 已实现处理器；仍检查归属、能力及生命周期。 |
 | `mcp.list` | Conditional | 统一 MCP 实现；依赖会话、资源和配置。 |
 | `mcp.refresh` | Conditional | 统一 MCP 实现；依赖会话、资源和配置。 |
