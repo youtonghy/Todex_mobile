@@ -38,8 +38,10 @@ enum CredentialStore {
     #endif
 
     /// Returns the base64url-encoded Ed25519 device seed for this backend
-    /// profile, or "" when the device is not enrolled on it.
-    static func deviceSecret(for id: String) -> String {
+    /// profile, or "" when the device is not enrolled on it. Any other
+    /// Keychain failure (locked before first unlock, corrupted item) throws:
+    /// treating it as "not enrolled" would silently drop the credential.
+    static func deviceSecret(for id: String) throws -> String {
         #if targetEnvironment(simulator)
             if keychainUnavailable { return fallbackSecrets()[id] ?? "" }
         #endif
@@ -48,10 +50,11 @@ enum CredentialStore {
             kSecAttrAccount as String: id, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else {
-            return ""
-        }
-        return String(decoding: data, as: UTF8.self)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return "" }
+        guard status == errSecSuccess, let data = result as? Data, let secret = String(data: data, encoding: .utf8)
+        else { throw TodexError.invalid(String(localized: "无法读取设备密钥")) }
+        return secret
     }
     static func save(_ secret: String, for id: String) throws {
         #if targetEnvironment(simulator)

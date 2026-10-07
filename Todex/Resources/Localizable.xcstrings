@@ -24837,6 +24837,34 @@
         }
       }
     },
+    "无法读取设备密钥": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not read the device key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイスキーを読み取れません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기기 키를 읽을 수 없습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取设备密钥"
+          }
+        }
+      }
+    },
     "无法连接后端": {
       "localizations": {
         "en": {

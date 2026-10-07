@@ -229,6 +229,7 @@ extension SessionSocket {
         makeSocket = socketFactory
         saveCredential = credentialWriter
         var startupError: Error?
+        var keychainError: Error?
         if let initial {
             connections = initial
         } else {
@@ -236,7 +237,13 @@ extension SessionSocket {
                 startupError = error
             }
             for index in connections.indices {
-                connections[index].deviceSecret = CredentialStore.deviceSecret(for: connections[index].id)
+                do {
+                    connections[index].deviceSecret = try CredentialStore.deviceSecret(for: connections[index].id)
+                } catch {
+                    // The profile stays unsigned for this launch; surface why
+                    // instead of looking unpaired.
+                    keychainError = keychainError ?? error
+                }
             }
         }
         selectedID = defaults.string(forKey: "selectedBackend")
@@ -260,6 +267,7 @@ extension SessionSocket {
         stateNamespace = LocalStore.namespace(connections.first { $0.id == selectedID })
         if let startupError { reportStorageError(startupError, namespace: stateNamespace, version: 0) }
         loadState()
+        if let keychainError { operationError = keychainError.localizedDescription }
     }
 
     func observe(_ callback: @escaping () -> Void) -> UUID {

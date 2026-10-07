@@ -701,6 +701,34 @@
         }
       }
     },
+    "传输加密校验失败，请重新连接": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transport encryption check failed. Please reconnect."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通信の暗号化検証に失敗しました。再接続してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "전송 암호화 검증에 실패했습니다. 다시 연결하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "传输加密校验失败，请重新连接"
+          }
+        }
+      }
+    },
     "传输加密配置不匹配": {
       "localizations": {
         "en": {
@@ -2073,6 +2101,34 @@
         }
       }
     },
+    "后端的加密方式已变更，请重新配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backend's encryption method has changed. Please pair again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックエンドの暗号化方式が変更されました。再度ペアリングしてください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백엔드의 암호화 방식이 변경되었습니다. 다시 페어링하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后端的加密方式已变更，请重新配对"
+          }
+        }
+      }
+    },
     "后端终止了连接且不会自动重试，请检查后端配置后重新连接。": {
       "localizations": {
         "en": {
@@ -2997,6 +3053,34 @@
         }
       }
     },
+    "无法生成安全随机数": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not generate secure random bytes"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "安全な乱数を生成できません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "안전한 난수를 생성할 수 없습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法生成安全随机数"
+          }
+        }
+      }
+    },
     "无法解析后端主机名。请检查后端地址拼写，或改用 IP 地址。": {
       "localizations": {
         "en": {
@@ -3389,6 +3473,34 @@
         }
       }
     },
+    "消息过大（%lld 字节，上限 %lld 字节），未发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message too large (%lld bytes, limit %lld bytes); not sent"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メッセージが大きすぎます（%lld バイト、上限 %lld バイト）。送信されませんでした"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메시지가 너무 큽니다(%lld바이트, 한도 %lld바이트). 전송되지 않았습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "消息过大（%lld 字节，上限 %lld 字节），未发送"
+          }
+        }
+      }
+    },
     "第 %lld 个单词“%@”不在恢复词表中": {
       "localizations": {
         "en": {
@@ -3749,6 +3861,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "设备验证密文无效"
+          }
+        }
+      }
+    },
+    "设备验证密钥长度无效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid device verification key length"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイス認証キーの長さが無効です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기기 인증 키 길이가 올바르지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备验证密钥长度无效"
           }
         }
       }
@@ -4225,6 +4365,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "请输入有效的 HTTP 或 HTTPS 后端地址"
+          }
+        }
+      }
+    },
+    "远程后端必须使用加密连接，请重新扫码进行加密配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote backends require an encrypted connection. Scan the QR code again to pair with encryption."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモートのバックエンドには暗号化接続が必要です。QR コードを再度スキャンして暗号化ペアリングを行ってください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원격 백엔드는 암호화 연결이 필요합니다. QR 코드를 다시 스캔하여 암호화 페어링을 진행하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "远程后端必须使用加密连接，请重新扫码进行加密配对"
           }
         }
       }

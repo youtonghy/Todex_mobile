@@ -339,6 +339,28 @@ struct PairingMaterial: Sendable {
         verificationCode = "\(hex.prefix(5))-\(hex.suffix(5))"
     }
 
+    /// Device pairing v3 (commit, then reveal): the transcript also binds the
+    /// client's 32-byte nonce, whose commitment the server saw before it chose
+    /// its key, so a MITM can no longer grind a key against the 40-bit code.
+    /// HKDF is as in v2 with the v3 labels (Clarification 6).
+    init(
+        v3RequestID requestID: String, privateKey: Curve25519.KeyAgreement.PrivateKey, serverPublicKey: Data,
+        device: DeviceIdentity, clientNonce: Data
+    ) throws {
+        let shared = try CryptoEncoding.sharedSecret(privateKey: privateKey, publicKey: serverPublicKey)
+        let transcript = try DevicePairingV3.transcript(
+            requestID: requestID, clientPublic: privateKey.publicKey.rawRepresentation, serverPublic: serverPublicKey,
+            devicePublic: device.publicKey, clientNonce: clientNonce)
+        let salt = Data(SHA256.hash(data: transcript))
+        self.transcript = transcript
+        deviceID = device.deviceID
+        wrapKey = CryptoEncoding.derive(ikm: shared, salt: salt, info: DevicePairingV3.wrapInfo)
+        pollProof = CryptoEncoding.derive(ikm: shared, salt: salt, info: DevicePairingV3.pollInfo)
+        cancelProof = CryptoEncoding.derive(ikm: shared, salt: salt, info: DevicePairingV3.cancelInfo)
+        let hex = salt.prefix(5).map { String(format: "%02X", $0) }.joined()
+        verificationCode = "\(hex.prefix(5))-\(hex.suffix(5))"
+    }
+
     /// Decrypts the delivered credential and returns the enrolled device ID.
     /// The backend pins it to this key; the check defends the contract anyway.
     func unwrap(_ response: JSONValue) throws -> String {
@@ -362,5 +384,40 @@ struct PairingMaterial: Sendable {
     private struct Credential: Decodable {
         let deviceId: String
         var deviceID: String { deviceId }
+    }
+}
+
+/// Device pairing v3 client primitives (transport-v2.md, "Device pairing v3").
+public enum DevicePairingV3 {
+    public static let commitLabel = "todex.device-pairing.v3/commit"
+    public static let transcriptDomain = "todex.device-pairing.v3/transcript\0"
+    public static let wrapInfo = "todex.device-pairing.v3/wrap-key"
+    public static let pollInfo = "todex.device-pairing.v3/poll-proof"
+    public static let cancelInfo = "todex.device-pairing.v3/cancel-proof"
+    public static let nonceLength = 32
+
+    /// `SHA256(LP("todex.device-pairing.v3/commit") || client_public || client_nonce)`.
+    public static func commitment(clientPublic: Data, clientNonce: Data) throws -> Data {
+        try requireLengths(clientPublic: clientPublic, clientNonce: clientNonce)
+        return Data(
+            SHA256.hash(data: TransportBytes.lengthPrefixed(Data(commitLabel.utf8)) + clientPublic + clientNonce))
+    }
+
+    /// `domain || request_id || 0x00 || client_public || server_public || 0x00 || device_public || client_nonce`.
+    public static func transcript(
+        requestID: String, clientPublic: Data, serverPublic: Data, devicePublic: Data, clientNonce: Data
+    ) throws -> Data {
+        try requireLengths(clientPublic: clientPublic, clientNonce: clientNonce)
+        guard serverPublic.count == 32, devicePublic.count == 32 else {
+            throw TodexError.invalid(String(localized: "设备验证密钥长度无效", bundle: .module))
+        }
+        return Data(transcriptDomain.utf8) + Data(requestID.utf8) + Data([0]) + clientPublic + serverPublic + Data([0])
+            + devicePublic + clientNonce
+    }
+
+    private static func requireLengths(clientPublic: Data, clientNonce: Data) throws {
+        guard clientPublic.count == 32, clientNonce.count == nonceLength else {
+            throw TodexError.invalid(String(localized: "设备验证密钥长度无效", bundle: .module))
+        }
     }
 }

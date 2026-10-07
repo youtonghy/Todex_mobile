@@ -110,7 +110,12 @@ public struct DeviceIdentity: Sendable {
         let (path, query) = Self.split(pathAndQuery)
         let timestamp = String(Int(Date().timeIntervalSince1970))
         var nonceBytes = Data(count: 16)
-        _ = nonceBytes.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
+        let status = nonceBytes.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
+        // A failed RNG would leave an all-zero nonce, which the daemon's replay
+        // cache would reject (or worse, accept once); never sign with it.
+        guard status == errSecSuccess else {
+            throw TodexError.invalid(String(localized: "无法生成安全随机数", bundle: .module))
+        }
         let nonce = CryptoEncoding.encode(nonceBytes)
         let signature = try privateKey.signature(
             for: Self.payload(

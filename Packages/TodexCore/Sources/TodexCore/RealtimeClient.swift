@@ -15,6 +15,9 @@ public actor RealtimeClient {
     private let connection: BackendConnection
     private let http: HTTPClient
     private let makeSocket: @Sendable (URLRequest) -> any RealtimeSocket
+    /// Transport v2: when set, `connect` opens the socket through it (v2
+    /// framing or loopback plaintext) instead of the legacy v1 crypto session.
+    private let transport: (any SecureTransport)?
     private var socket: (any RealtimeSocket)?
     private var crypto: TransportCryptoSession?
     private var receiver: Task<Void, Never>?
@@ -36,13 +39,22 @@ public actor RealtimeClient {
             makeSocket: { FoundationRealtimeSocket(request: $0) })
     }
 
+    /// Connects through `transport` (transport v2 client rules). The policy
+    /// request goes through the same rules.
+    public init(connection: BackendConnection, transport: any SecureTransport) {
+        self.init(
+            connection: connection, http: HTTPClient(connection: connection, transportV2: true),
+            makeSocket: { FoundationRealtimeSocket(request: $0) }, transport: transport)
+    }
+
     init(
         connection: BackendConnection, http: HTTPClient, eventCapacity: Int = 4096,
-        makeSocket: @escaping @Sendable (URLRequest) -> any RealtimeSocket
+        makeSocket: @escaping @Sendable (URLRequest) -> any RealtimeSocket, transport: (any SecureTransport)? = nil
     ) {
         self.connection = connection
         self.http = http
         self.makeSocket = makeSocket
+        self.transport = transport
         let queue = RealtimeEventQueue(capacity: eventCapacity)
         eventQueue = queue
         events = AsyncStream(unfolding: { await queue.next() }, onCancel: { queue.finish() })
@@ -62,11 +74,32 @@ public actor RealtimeClient {
         let revision = generation
         do {
             try Task.checkCancellation()
-            let policy = try await http.response(
-                path: "/v2/transport-policy", authenticated: false, timeout: 10, maximumBytes: 2048)
+            let policy: HTTPResult
+            if let transport {
+                let answer = try await transport.request(
+                    method: .get, path: "/v2/transport-policy", query: [:], headers: [:], body: nil)
+                guard answer.body.count <= 2048 else { throw TodexError.invalid(CoreMessage.invalidPolicy) }
+                policy = HTTPResult(statusCode: answer.status, data: answer.body, headers: answer.headers)
+            } else {
+                policy = try await http.response(
+                    path: "/v2/transport-policy", authenticated: false, timeout: 10, maximumBytes: 2048)
+            }
             try Self.validatePolicy(policy, connection: connection)
             try Task.checkCancellation()
             guard revision == generation else { throw CancellationError() }
+            if let transport {
+                // `historyEncryption=1` declares this client decrypts history
+                // v3 payloads; the device signature covers it and the v2
+                // handshake parameters.
+                let socket = SecureRealtimeSocket(
+                    base: try await transport.openWebSocket(path: "/v2/ws", query: ["historyEncryption": "1"]))
+                guard revision == generation, !Task.isCancelled else {
+                    socket.cancel()
+                    throw CancellationError()
+                }
+                try await start(socket: socket, revision: revision)
+                return
+            }
             if connection.encryption != .none {
                 do { crypto = try TransportCryptoSession(connection: connection) } catch {
                     throw TodexError.configuration(String(localized: "加密公钥无法使用：\(error.localizedDescription)", bundle: .module))
@@ -89,30 +122,34 @@ public actor RealtimeClient {
             guard let url = components.url else { throw TodexError.invalid(String(localized: "WebSocket 地址无效", bundle: .module)) }
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
             request.httpShouldHandleCookies = false
-            let socket = makeSocket(request)
-            self.socket = socket
-            receiver = Task { [weak self] in await self?.receive(revision: revision, socket: socket) }
-            let pong = try await sendCommand(
-                type: "server.ping", payload: [:], timeout: 15, id: UUID().uuidString, verifying: true)
-            guard pong["pong"] == .bool(true), revision == generation else { throw TodexError.invalid(CoreMessage.handshakeFailed) }
-            try Task.checkCancellation()
-            connected = true
-            guard emit(["type": "connection.ready", "payload": [:]]) else { throw TodexError.disconnected }
-            heartbeat = Task { [weak self] in
-                while !Task.isCancelled {
-                    do {
-                        try await Task.sleep(for: .seconds(25))
-                        guard let self else { return }
-                        _ = try await self.command(type: "server.ping", payload: [:], timeout: 12)
-                    } catch {
-                        if !Task.isCancelled { await self?.failed(error, revision: revision) }
-                        return
-                    }
-                }
-            }
+            try await start(socket: makeSocket(request), revision: revision)
         } catch {
             failed(error, revision: revision)
             throw error
+        }
+    }
+
+    /// Verifies the socket with a ping, then starts the heartbeat.
+    private func start(socket: any RealtimeSocket, revision: UUID) async throws {
+        self.socket = socket
+        receiver = Task { [weak self] in await self?.receive(revision: revision, socket: socket) }
+        let pong = try await sendCommand(
+            type: "server.ping", payload: [:], timeout: 15, id: UUID().uuidString, verifying: true)
+        guard pong["pong"] == .bool(true), revision == generation else { throw TodexError.invalid(CoreMessage.handshakeFailed) }
+        try Task.checkCancellation()
+        connected = true
+        guard emit(["type": "connection.ready", "payload": [:]]) else { throw TodexError.disconnected }
+        heartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(25))
+                    guard let self else { return }
+                    _ = try await self.command(type: "server.ping", payload: [:], timeout: 12)
+                } catch {
+                    if !Task.isCancelled { await self?.failed(error, revision: revision) }
+                    return
+                }
+            }
         }
     }
 
@@ -518,45 +555,30 @@ protocol RealtimeSocket: Sendable {
     func cancel()
 }
 
-private final class SocketRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
-    func urlSession(
-        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void
-    ) { completionHandler(nil) }
-}
-
+/// Legacy (v1/plaintext) text socket over the shared URLSession WebSocket.
 private final class FoundationRealtimeSocket: RealtimeSocket {
-    private let session: URLSession
-    private let task: URLSessionWebSocketTask
-    init(request: URLRequest) {
-        let config = URLSessionConfiguration.ephemeral
-        config.httpCookieStorage = nil
-        config.httpShouldSetCookies = false
-        config.urlCredentialStorage = nil
-        config.urlCache = nil
-        session = URLSession(configuration: config, delegate: SocketRedirectDelegate(), delegateQueue: nil)
-        task = session.webSocketTask(with: request)
-        task.maximumMessageSize = 8 * 1024 * 1024
-        task.resume()
-    }
+    private let base: FoundationWebSocket
+    init(request: URLRequest) { base = FoundationWebSocket(request: request) }
     func send(_ text: String, completion: @escaping @Sendable ((any Error)?) -> Void) {
-        task.send(.string(text)) { [task] error in
-            completion(error.map { RealtimeClient.socketError($0, response: task.response) })
-        }
+        base.send(.text(text), completion: completion)
     }
     func receive() async throws -> String {
-        do {
-            switch try await task.receive() {
-            case .string(let value): return value
-            case .data(let value):
-                guard let text = String(data: value, encoding: .utf8) else { throw TodexError.invalid(String(localized: "收到非 UTF-8 消息", bundle: .module)) }
-                return text
-            @unknown default: throw TodexError.invalid(String(localized: "收到未知消息格式", bundle: .module))
-            }
-        } catch { throw RealtimeClient.socketError(error, response: task.response) }
+        switch try await base.receive() {
+        case .text(let value): return value
+        case .data(let value):
+            guard let text = String(data: value, encoding: .utf8) else { throw TodexError.invalid(String(localized: "收到非 UTF-8 消息", bundle: .module)) }
+            return text
+        }
     }
-    func cancel() {
-        task.cancel(with: .goingAway, reason: nil)
-        session.invalidateAndCancel()
+    func cancel() { base.cancel() }
+}
+
+/// Adapts a transport socket (v2 or plaintext) to the realtime loop.
+private struct SecureRealtimeSocket: RealtimeSocket {
+    let base: any SecureWebSocket
+    func send(_ text: String, completion: @escaping @Sendable ((any Error)?) -> Void) {
+        base.send(text, completion: completion)
     }
+    func receive() async throws -> String { try await base.receive() }
+    func cancel() { base.cancel() }
 }
