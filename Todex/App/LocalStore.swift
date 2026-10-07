@@ -213,6 +213,8 @@ nonisolated struct SessionSnapshot: Codable, Sendable {
     var readSequences: [String: Int] = [:]
     var pinnedWorkspaces: [String] = []
     var pinnedConversations: [String] = []
+    /// Workspace group ids folded in the home list (local, per backend).
+    var collapsedWorkspaceGroups: Set<String> = []
     var pausedQueues: Set<String> = []
     var activeConversationID: String?
     var tasks: [KanbanTask] = []
@@ -240,6 +242,7 @@ extension SessionSnapshot {
         readSequences = try c.decodeIfPresent([String: Int].self, forKey: .readSequences) ?? [:]
         pinnedWorkspaces = try c.decodeIfPresent([String].self, forKey: .pinnedWorkspaces) ?? []
         pinnedConversations = try c.decodeIfPresent([String].self, forKey: .pinnedConversations) ?? []
+        collapsedWorkspaceGroups = try c.decodeIfPresent(Set<String>.self, forKey: .collapsedWorkspaceGroups) ?? []
         pausedQueues = try c.decodeIfPresent(Set<String>.self, forKey: .pausedQueues) ?? []
         activeConversationID = try c.decodeIfPresent(String.self, forKey: .activeConversationID)
         tasks = try c.decodeIfPresent([KanbanTask].self, forKey: .tasks) ?? []

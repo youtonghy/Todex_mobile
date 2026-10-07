@@ -58,6 +58,8 @@ extension SessionSocket {
     var pausedQueues: Set<String> = []
     var pinnedWorkspaces: [String] = []
     var pinnedConversations: [String] = []
+    /// Workspace group ids folded in the home list; local only, like pins.
+    var collapsedWorkspaceGroups: Set<String> = []
     var readSequences: [String: Int] = [:]
     /// Local-only conversation label colors (`#rrggbb`) in this backend's namespace.
     private(set) var conversationLabels: [String: String] = [:]
@@ -3012,6 +3014,7 @@ extension SessionSocket {
             queues: queues, pendingSends: pendingSends, legacyCursors: legacyCursors,
             localThreads: localThreads, readSequences: reads,
             pinnedWorkspaces: pinnedWorkspaces, pinnedConversations: pinnedConversations,
+            collapsedWorkspaceGroups: collapsedWorkspaceGroups,
             pausedQueues: pausedQueues, activeConversationID: activeConversationID, tasks: tasks,
             sentAttachments: sentAttachments, conversationLabels: conversationLabels,
             usageRecords: usageRecords)
@@ -3098,6 +3101,7 @@ extension SessionSocket {
         pausedQueues = []
         pinnedWorkspaces = []
         pinnedConversations = []
+        collapsedWorkspaceGroups = []
         tasks = []
         usageRecords = []
         readSequences = [:]
@@ -3160,6 +3164,7 @@ extension SessionSocket {
                     (snapshot.pinnedConversations.firstIndex(of: $0) ?? Int.max)
                         < (snapshot.pinnedConversations.firstIndex(of: $1) ?? Int.max)
                 }
+                collapsedWorkspaceGroups = snapshot.collapsedWorkspaceGroups.union(collapsedWorkspaceGroups)
                 readSequences = Dictionary(
                     conversations.compactMap { conversation in
                         snapshot.readSequences[conversationScope(conversation)].map { (conversation.id, $0) }

@@ -25,6 +25,11 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
     public var ringStyle: String?
     /// Manual sidebar order shared with the desktop client; nil sorts first.
     public var sortOrder: Int?
+    /// Sidebar grouping shared with the desktop client: workspaces sharing a
+    /// `groupId` form one group and each carries the group's name. The backend
+    /// trims and caps both at 64 characters; nil means not grouped.
+    public var groupId: String?
+    public var groupName: String?
     public var createdAt: Int
     public var updatedAt: Int
 
@@ -49,6 +54,8 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
         iconColor: String? = nil,
         ringStyle: String? = nil,
         sortOrder: Int? = nil,
+        groupId: String? = nil,
+        groupName: String? = nil,
         createdAt: Int = Int(Date().timeIntervalSince1970 * 1_000),
         updatedAt: Int? = nil
     ) {
@@ -70,6 +77,8 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
         self.iconColor = iconColor
         self.ringStyle = ringStyle
         self.sortOrder = sortOrder
+        self.groupId = groupId
+        self.groupName = groupName
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
     }
@@ -78,7 +87,7 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
         case id, name, path, sessionId, tenantId, threadId, model, reasoningEffort
         case approvalPolicy, sandboxMode, permissionProfile, approvalsReviewer, serviceTier
         case personality, icon, iconColor, ringStyle
-        case sortOrder, createdAt, updatedAt
+        case sortOrder, groupId, groupName, createdAt, updatedAt
     }
 
     public init(from decoder: any Decoder) throws {
@@ -102,6 +111,8 @@ public struct WorkspaceRecord: Codable, Sendable, Identifiable, Equatable {
         iconColor = try c.decodeIfPresent(String.self, forKey: .iconColor)
         ringStyle = try c.decodeIfPresent(String.self, forKey: .ringStyle)
         sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
+        groupId = try c.decodeIfPresent(String.self, forKey: .groupId)
+        groupName = try c.decodeIfPresent(String.self, forKey: .groupName)
         createdAt = try c.decode(Int.self, forKey: .createdAt)
         updatedAt = try c.decode(Int.self, forKey: .updatedAt)
     }

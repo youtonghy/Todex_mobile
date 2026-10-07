@@ -15,7 +15,19 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     private enum HomeRow {
         case conversation(ConversationManifest)
     }
+    /// One entry per listed workspace, in the flattened group layout order.
     private var groups: [(WorkspaceRecord, [HomeRow])] = []
+    /// Table sections of the active backend's list: a header-only section per
+    /// workspace group, then a section per workspace (an index into `groups`),
+    /// nested under its group. Members of a folded group get no section.
+    private enum ListSection {
+        case group(WorkspaceGroup, members: [Int])
+        case workspace(Int, nested: Bool)
+    }
+    private var sections: [ListSection] = []
+    /// The synced workspace layout (every workspace, unfiltered) the list was built from.
+    private var layoutEntries: [WorkspaceEntry] = []
+    private var listQuery = ""
     /// Workspaces whose stored path the backend rejects: dimmed, not selectable.
     private var missing: [String: RejectedWorkspace] = [:]
     /// Other configured backends' cached workspaces (read-only, never merged
@@ -193,6 +205,8 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                 }
             }
             groups = []
+            sections = []
+            layoutEntries = []
         } else {
             missing = Dictionary(
                 session.rejectedWorkspaces.filter { rejected in !sortedWorkspaces.contains { $0.id == rejected.id } }
@@ -214,7 +228,8 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             let missingRecords = session.rejectedWorkspaces.filter { missing[$0.id] != nil }.map {
                 WorkspaceRecord(id: $0.id, name: $0.name.isEmpty ? $0.path : $0.name, path: $0.path)
             }
-            groups = (sortedWorkspaces + missingRecords).compactMap { workspace in
+            layoutEntries = WorkspaceGroups.entries(sortedWorkspaces)
+            groups = (layoutEntries.flatMap(\.workspaces) + missingRecords).compactMap { workspace in
                 if missing[workspace.id] != nil {
                     let visible =
                         filter.selectedSegmentIndex == 0
@@ -244,6 +259,8 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                 return (!query.isEmpty || filter.selectedSegmentIndex != 0) && records.isEmpty
                     ? nil : (workspace, records.map(HomeRow.conversation))
             }
+            listQuery = query
+            rebuildSections()
         }
         refreshOtherBackends(query: query, visible: filter.selectedSegmentIndex == 0)
         var statusParts = [session.connection?.name, session.status].compactMap { $0 }
@@ -310,21 +327,63 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         }
         table.reloadData()
     }
+    /// Lays `groups` out along `layoutEntries`: a group header where the group
+    /// has listed members, its members nested below unless the group is folded
+    /// (a search shows them regardless). Missing workspaces list last.
+    private func rebuildSections() {
+        let index = Dictionary(groups.enumerated().map { ($1.0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var placed: Set<Int> = []
+        sections = []
+        for entry in layoutEntries {
+            switch entry {
+            case .workspace(let workspace):
+                guard let at = index[workspace.id] else { continue }
+                sections.append(.workspace(at, nested: false))
+                placed.insert(at)
+            case .group(let group):
+                let members = group.workspaces.compactMap { index[$0.id] }
+                guard !members.isEmpty else { continue }
+                sections.append(.group(group, members: members))
+                placed.formUnion(members)
+                if !groupFolded(group.id) {
+                    sections += members.map { .workspace($0, nested: true) }
+                }
+            }
+        }
+        sections += groups.indices.filter { !placed.contains($0) }.map { .workspace($0, nested: false) }
+    }
+    private func groupFolded(_ id: String) -> Bool {
+        listQuery.isEmpty && session.collapsedWorkspaceGroups.contains(id)
+    }
+    /// The `groups` index shown by a workspace section, nil for group headers
+    /// and other backends.
+    private func workspaceIndex(_ section: Int) -> Int? {
+        guard section < sections.count, case .workspace(let index, _) = sections[section] else { return nil }
+        return index
+    }
     func numberOfSections(in tableView: UITableView) -> Int {
-        reordering ? (groups.isEmpty ? 0 : 1) : groups.count + otherBackends.count
+        reordering ? (groups.isEmpty ? 0 : 1) : sections.count + otherBackends.count
     }
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         if reordering { return groups.count }
-        if section >= groups.count { return max(1, otherBackends[section - groups.count].workspaces.count) }
-        let (workspace, items) = groups[section]
+        if section >= sections.count { return max(1, otherBackends[section - sections.count].workspaces.count) }
+        guard let index = workspaceIndex(section) else { return 0 }
+        let (workspace, items) = groups[index]
         if collapsed.contains(workspace.id) { return 0 }
         if missing[workspace.id] != nil { return 1 }
         return min(items.count, expanded.contains(workspace.id) ? Int.max : 5) + 1
     }
     func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
         if reordering { return nil }
-        if section >= groups.count { return backendHeader(otherBackends[section - groups.count].connection) }
-        let workspace = groups[section].0
+        if section >= sections.count { return backendHeader(otherBackends[section - sections.count].connection) }
+        let workspace: WorkspaceRecord
+        let nested: Bool
+        switch sections[section] {
+        case .group(let group, let members): return groupHeader(group, members: members)
+        case .workspace(let index, let isNested):
+            workspace = groups[index].0
+            nested = isNested
+        }
         let isMissing = missing[workspace.id] != nil
         let name = UIButton(type: .system)
         name.contentHorizontalAlignment = .leading
@@ -357,6 +416,82 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         more.widthAnchor.constraint(equalToConstant: 44).isActive = true
         more.heightAnchor.constraint(equalToConstant: 44).isActive = true
         let stack = UIStackView(arrangedSubviews: [name, more])
+        stack.alignment = .center
+        stack.spacing = 8
+        if nested {
+            // Group members sit indented under their group header.
+            stack.isLayoutMarginsRelativeArrangement = true
+            stack.directionalLayoutMargins = .init(top: 0, leading: 20, bottom: 0, trailing: 0)
+        }
+        stack.addGestureRecognizer(
+            UILongPressGestureRecognizer(target: self, action: #selector(headerLongPressed(_:))))
+        return stack
+    }
+    /// Header-only section for a workspace group: tapping folds or unfolds all
+    /// of its members; a folded group shows its members' strongest attention.
+    private func groupHeader(_ group: WorkspaceGroup, members: [Int]) -> UIView {
+        let folded = groupFolded(group.id)
+        let title = Self.groupName(group)
+        let name = UIButton(type: .system)
+        name.contentHorizontalAlignment = .leading
+        var config = UIButton.Configuration.plain()
+        config.title = title
+        config.titleLineBreakMode = .byTruncatingTail
+        config.image = Theme.icon(folded ? "chevron.right" : "chevron.down")
+        config.imagePadding = 9
+        config.baseForegroundColor = .secondaryLabel
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+            var value = $0
+            value.font = .preferredFont(forTextStyle: .headline)
+            return value
+        }
+        name.configuration = config
+        name.titleLabel?.numberOfLines = 1
+        name.accessibilityIdentifier = "workspaceGroup.\(group.id)"
+        name.accessibilityLabel = String(localized: "分组：\(title)")
+        let attention: Attention? =
+            folded
+            ? members.lazy.flatMap { self.groups[$0].1 }.compactMap { row -> Attention? in
+                switch row {
+                case .conversation(let item): self.attention(item)
+                }
+            }.min(by: { $0.rank < $1.rank }) : nil
+        name.accessibilityValue = [
+            folded ? String(localized: "已折叠") : String(localized: "已展开"),
+            String(localized: "\(group.workspaces.count) 个工作区"),
+            attention?.label,
+        ].compactMap { $0 }.joined(separator: "，")
+        name.addAction(
+            UIAction { [weak self] _ in
+                guard let self, !reordering else { return }
+                if session.collapsedWorkspaceGroups.remove(group.id) == nil {
+                    session.collapsedWorkspaceGroups.insert(group.id)
+                }
+                session.persist()
+                reload()
+            }, for: .touchUpInside)
+        var arranged: [UIView] = [name]
+        if let attention {
+            let dot = Theme.label("●", style: .caption1, color: attention.color)
+            dot.isAccessibilityElement = false
+            arranged.append(dot)
+        }
+        let count = Theme.label("\(group.workspaces.count)", style: .subheadline, color: .tertiaryLabel)
+        count.isAccessibilityElement = false
+        arranged.append(count)
+        for view in arranged.dropFirst() {
+            view.setContentHuggingPriority(.required, for: .horizontal)
+            view.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        let more = UIButton(type: .system)
+        more.setImage(Theme.icon("ellipsis"), for: .normal)
+        more.showsMenuAsPrimaryAction = true
+        more.menu = groupMenu(group)
+        more.accessibilityLabel = String(localized: "\(title) 操作")
+        more.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        more.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        arranged.append(more)
+        let stack = UIStackView(arrangedSubviews: arranged)
         stack.alignment = .center
         stack.spacing = 8
         stack.addGestureRecognizer(
@@ -397,7 +532,12 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         if reordering {
             let workspace = groups[indexPath.row].0
             config.text = Self.displayName(workspace)
-            config.secondaryText = workspace.path
+            // Reordering keeps membership; the group name says where a row belongs.
+            if case .group(let group)? = WorkspaceGroups.group(containing: workspace.id, in: layoutEntries) {
+                config.secondaryText = "\(Self.groupName(group)) · \(workspace.path)"
+            } else {
+                config.secondaryText = workspace.path
+            }
             config.secondaryTextProperties.color = .secondaryLabel
             config.image = Theme.icon(session.pinnedWorkspaces.contains(workspace.id) ? "pin.fill" : "folder")
             cell.contentConfiguration = config
@@ -405,8 +545,8 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             cell.accessibilityIdentifier = "workspace.\(workspace.id)"
             return cell
         }
-        if indexPath.section >= groups.count {
-            let other = otherBackends[indexPath.section - groups.count]
+        if indexPath.section >= sections.count {
+            let other = otherBackends[indexPath.section - sections.count]
             let tint = UIColor(labelHex: other.connection.labelColor) ?? Theme.accent
             if indexPath.row < other.workspaces.count {
                 let workspace = other.workspaces[indexPath.row]
@@ -430,7 +570,8 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             cell.backgroundColor = Theme.surface
             return cell
         }
-        let (workspace, items) = groups[indexPath.section]
+        guard let index = workspaceIndex(indexPath.section) else { return cell }
+        let (workspace, items) = groups[index]
         if let rejected = missing[workspace.id] {
             config.text = String(localized: "目录在后端不可用")
             config.secondaryText = [workspace.path, rejected.message].filter { !$0.isEmpty }.joined(separator: "\n")
@@ -538,14 +679,15 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         if reordering { return }
-        if indexPath.section >= groups.count {
-            let other = otherBackends[indexPath.section - groups.count]
+        if indexPath.section >= sections.count {
+            let other = otherBackends[indexPath.section - sections.count]
             switchBackend(
                 other.connection,
                 open: indexPath.row < other.workspaces.count ? other.workspaces[indexPath.row] : nil)
             return
         }
-        let (workspace, items) = groups[indexPath.section]
+        guard let index = workspaceIndex(indexPath.section) else { return }
+        let (workspace, items) = groups[index]
         if missing[workspace.id] != nil { return }
         let visible = min(items.count, expanded.contains(workspace.id) ? Int.max : 5)
         if indexPath.row >= visible {
@@ -605,8 +747,8 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     }
     /// The conversation shown at a row of the active backend's list, if any.
     private func conversation(at indexPath: IndexPath) -> ConversationManifest? {
-        guard indexPath.section < groups.count else { return nil }
-        let group = groups[indexPath.section]
+        guard let index = workspaceIndex(indexPath.section) else { return nil }
+        let group = groups[index]
         guard missing[group.0.id] == nil,
             indexPath.row < min(group.1.count, expanded.contains(group.0.id) ? Int.max : 5)
         else { return nil }
@@ -922,6 +1064,7 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     }
     /// Workspace ordering mode: the list collapses to one row per workspace
     /// with drag handles; leaving the mode writes the synced sortOrder values.
+    /// Group membership is kept: a group is regathered at its first member.
     private func setReordering(_ on: Bool) {
         guard reordering != on else { return }
         if on {
@@ -941,25 +1084,29 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
                 primaryAction: UIAction { [weak self] _ in self?.setReordering(false) })
         } else {
             reordering = false
+            // Show the new order (groups regathered) until the write settles.
+            let ordered = groups.map(\.0)
+            layoutEntries = WorkspaceGroups.entries(ordered)
+            let rows = Dictionary(groups.map { ($0.0.id, $0.1) }, uniquingKeysWith: { first, _ in first })
+            groups = layoutEntries.flatMap(\.workspaces).map { ($0, rows[$0.id] ?? []) }
+            rebuildSections()
             table.setEditing(false, animated: true)
+            table.reloadData()
             filter.isEnabled = true
             navigationItem.rightBarButtonItem = addButton
-            persistOrder(groups.map(\.0))
+            persistOrder(ordered)
         }
     }
+    /// Writes a flat workspace order; grouped workspaces keep their group,
+    /// which takes the position of its first member.
     private func persistOrder(_ ordered: [WorkspaceRecord]) {
-        var changed = false
-        let now = Int(Date().timeIntervalSince1970 * 1_000)
-        let updated = ordered.enumerated().map { index, workspace in
-            var value = workspace
-            if value.sortOrder != index {
-                value.sortOrder = index
-                value.updatedAt = now
-                changed = true
-            }
-            return value
-        }
-        guard changed else {
+        persistLayout(WorkspaceGroups.entries(ordered))
+    }
+    /// Writes the synced sortOrder/groupId/groupName of every workspace whose
+    /// layout differs from `entries`.
+    private func persistLayout(_ entries: [WorkspaceEntry]) {
+        let updated = WorkspaceGroups.layoutUpdates(entries, now: Int(Date().timeIntervalSince1970 * 1_000))
+        guard !updated.isEmpty else {
             reload()
             return
         }
@@ -1010,9 +1157,70 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             UIAction(title: String(localized: "排序工作区"), image: Theme.icon("arrow.up.arrow.down")) { [weak self] _ in
                 self?.setReordering(true)
             },
+            groupingMenu(workspace),
             UIAction(title: String(localized: "添加其他目录"), image: Theme.icon("folder.badge.plus")) { [weak self] _ in self?.addWorkspace() },
             UIAction(title: String(localized: "工作区信任"), image: Theme.icon("checkmark.shield")) { [weak self] _ in self?.trust(workspace) },
             remove,
+        ])
+    }
+    /// Workspace group actions, applied to the synced layout of every workspace.
+    private func groupingMenu(_ workspace: WorkspaceRecord) -> UIMenu {
+        let entries = WorkspaceGroups.entries(sortedWorkspaces())
+        let current = WorkspaceGroups.group(containing: workspace.id, in: entries)
+        var children: [UIMenuElement] = []
+        if case .workspace? = current {
+            let others: [UIMenuElement] = entries.compactMap { entry in
+                guard case .workspace(let other) = entry, other.id != workspace.id else { return nil }
+                return UIAction(title: Self.displayName(other), image: Theme.icon("folder")) { [weak self] _ in
+                    self?.persistLayout(
+                        WorkspaceGroups.groupTogether(
+                            entries, targetID: workspace.id, workspaceID: other.id,
+                            newGroupID: WorkspaceGroups.newGroupID(), fallbackName: String(localized: "新分组")))
+                }
+            }
+            if !others.isEmpty {
+                children.append(
+                    UIMenu(title: String(localized: "与其他工作区成组"), image: Theme.icon("rectangle.stack.badge.plus"), children: others))
+            }
+        }
+        let targets: [UIMenuElement] = entries.compactMap { entry in
+            guard case .group(let group) = entry, !group.workspaces.contains(where: { $0.id == workspace.id }) else {
+                return nil
+            }
+            return UIAction(title: Self.groupName(group), image: Theme.icon("rectangle.stack")) { [weak self] _ in
+                self?.persistLayout(WorkspaceGroups.move(entries, workspaceID: workspace.id, toGroup: group.id))
+            }
+        }
+        if !targets.isEmpty {
+            children.append(
+                UIMenu(title: String(localized: "移到分组"), image: Theme.icon("arrow.right.square"), children: targets))
+        }
+        if case .group? = current {
+            children.append(
+                UIAction(title: String(localized: "移出分组"), image: Theme.icon("arrow.up.left.square")) { [weak self] _ in
+                    self?.persistLayout(WorkspaceGroups.removeFromGroup(entries, workspaceID: workspace.id))
+                })
+        }
+        return UIMenu(options: .displayInline, children: children)
+    }
+    private func groupMenu(_ group: WorkspaceGroup) -> UIMenu {
+        UIMenu(children: [
+            UIAction(title: String(localized: "重命名分组"), image: Theme.icon("pencil")) { [weak self] _ in
+                self?.askText(title: String(localized: "分组名称"), value: group.name) { [weak self] name in
+                    guard let self else { return }
+                    persistLayout(
+                        WorkspaceGroups.rename(WorkspaceGroups.entries(sortedWorkspaces()), groupID: group.id, name: name))
+                }
+            },
+            UIAction(title: String(localized: "排序工作区"), image: Theme.icon("arrow.up.arrow.down")) { [weak self] _ in
+                self?.setReordering(true)
+            },
+            UIAction(title: String(localized: "取消分组"), image: Theme.icon("rectangle.stack.badge.minus"), attributes: .destructive) {
+                [weak self] _ in
+                guard let self else { return }
+                if session.collapsedWorkspaceGroups.remove(group.id) != nil { session.persist() }
+                persistLayout(WorkspaceGroups.ungroup(WorkspaceGroups.entries(sortedWorkspaces()), groupID: group.id))
+            },
         ])
     }
     /// Backend DELETE /v2/workspaces/{id}: revokes trust and stops the
@@ -1350,6 +1558,9 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             }, onConnect: { [weak self] connection in Task { await self?.session.connect(connection) } })
         present(UINavigationController(rootViewController: settings), animated: true)
     }
+    private static func groupName(_ group: WorkspaceGroup) -> String {
+        group.name.isEmpty ? String(localized: "未命名分组") : group.name
+    }
     /// Workspaces named by their full path show only the last directory component;
     /// custom names are kept as-is.
     private static func displayName(_ workspace: WorkspaceRecord) -> String {
@@ -1373,6 +1584,14 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
     /// clear once the conversation has been viewed (read up to its tail).
     private enum Attention {
         case working, issue, unread
+        /// Lower ranks win when several conversations need attention.
+        var rank: Int {
+            switch self {
+            case .working: 0
+            case .issue: 1
+            case .unread: 2
+            }
+        }
         var color: UIColor {
             switch self {
             case .working: .systemGreen
