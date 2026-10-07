@@ -52,9 +52,11 @@ final class HistoryEncryptionViewController: SettingsListController {
             }
             loading = false
             render()
-            if setUpRecovery, session.historyRecoveryMissing, presentedViewController == nil {
+            // Only the first load acts on "set up now"; later reloads never
+            // reopen the flow.
+            if setUpRecovery {
                 setUpRecovery = false
-                beginReplaceRecovery(hasCurrent: false)
+                if session.historyRecoveryMissing, presentedViewController == nil { beginReplaceRecovery(hasCurrent: false) }
             }
         }
     }
