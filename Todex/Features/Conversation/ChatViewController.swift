@@ -749,20 +749,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             let paused = runtime.followUpsPaused ? " · \(Self.followUpPauseText(runtime.followUpsPauseReason))" : ""
             alerts.addArrangedSubview(
                 Theme.button(
-                    String(localized: "排队消息 \(runtime.followUps.count) 条\(paused)"), icon: "tray.and.arrow.down"
-                ) { [weak self] in self?.showFollowUps() })
-        }
-        if let items = session.queues[conversation.id], !items.isEmpty {
-            let paused = session.pausedQueues.contains(conversation.id)
-            alerts.addArrangedSubview(
-                Theme.button(
-                    String(localized: "候选消息 \(items.count) 条\(paused ? String(localized: " · 已暂停") : "")"),
+                    String(localized: "候选消息 \(runtime.followUps.count) 条\(paused)"),
                     icon: "text.line.first.and.arrowtriangle.forward"
-                ) { [weak self] in self?.showQueue() })
-            // A paused queue's failure reason would otherwise only show offline.
-            if paused, session.isConnected, let error = session.lastError {
-                alerts.addArrangedSubview(Theme.label(String(localized: "候选消息未发送：\(error)"), style: .caption1, color: .systemOrange))
-            }
+                ) { [weak self] in self?.showFollowUps() })
         }
         addRuntimeNotices(runtime, running: running)
         if let error = session.storageError ?? (session.isConnected ? nil : session.lastError) {
@@ -1003,7 +992,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             return true
         }
     }
-    private func submit(nativeQueue: Bool = true) {
+    private func submit() {
         guard !readOnly else { return }
         if runClientCommand() { return }
         guard canSend else { return }
@@ -1027,7 +1016,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
                         throw TodexError.invalid(capability["reason"].optionalString ?? String(localized: "当前模型不支持图片输入"))
                     }
                 }
-                try await session.send(value, in: conversation, nativeQueue: nativeQueue)
+                try await session.send(value, in: conversation)
             } catch { showError(error) }
         }
     }
@@ -1058,10 +1047,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             }
             configure { $0.workMode = "plan" }
             // `/plan <task>` switches to plan mode and sends the task at once;
-            // while a turn runs it waits locally so it is sent as a plan prompt.
+            // while a turn runs it is queued with the plan mode it was sent in.
             if !rest.isEmpty {
                 setDraft(ComposerDraft(text: rest))
-                submit(nativeQueue: false)
+                submit()
                 return true
             }
         case "/model":
@@ -2350,7 +2339,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         let runtime = session.runtimes[conversation.id]
         return session.isConnected && runtime?.readyForActions == true && runtime?.messages.isEmpty == true
             && (session.conversations.first { $0.id == conversation.id }?.lastSequence ?? 0) == 0
-            && session.pendingSends[conversation.id] == nil && (session.queues[conversation.id] ?? []).isEmpty
+            && session.pendingSends[conversation.id] == nil && (runtime?.followUps.isEmpty ?? true)
     }
     private func switchAgent() {
         guard canSwitchAgent, let workspace = session.workspace(for: conversation) else { return }
@@ -2587,34 +2576,50 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         case "start_failed": String(localized: "无法开始，已暂停")
         case "daemon_restarted": String(localized: "后端已重启，已暂停")
         case "rate_limited": String(localized: "额度已用尽，重置后自动继续")
+        case "user": String(localized: "已由你暂停")
         default: String(localized: "已暂停")
         }
     }
-    /// The daemon-held follow-up queue: resume after a pause, remove, or clear.
+    /// The candidate messages the daemon holds for this conversation and sends
+    /// one by one after each turn: resume, pause, edit, delete or clear.
     private func showFollowUps() {
         guard let runtime = session.runtimes[conversation.id] else { return }
         var message = runtime.followUpsPaused
             ? Self.followUpPauseText(runtime.followUpsPauseReason)
             : String(localized: "由后端保存，本轮完成后自动发送")
         if !runtime.followUpsPauseMessage.isEmpty { message += "\n\(runtime.followUpsPauseMessage)" }
-        let sheet = UIAlertController(title: String(localized: "排队消息"), message: message, preferredStyle: .actionSheet)
+        let sheet = UIAlertController(title: String(localized: "候选消息"), message: message, preferredStyle: .actionSheet)
         let running = ["running", "waitingPermission", "waiting_permission"].contains(runtime.status)
         if runtime.followUpsPaused, !running {
             sheet.addAction(
                 UIAlertAction(title: String(localized: "恢复发送"), style: .default) { [weak self] _ in
                     self?.editFollowUps("resume")
                 })
-        }
-        for item in runtime.followUps {
+        } else if !runtime.followUpsPaused, session.hasBackendQueueControl(conversation) {
             sheet.addAction(
-                UIAlertAction(title: String(localized: "移除：\(item["text"].stringValue.prefix(40))"), style: .destructive) {
-                    [weak self] _ in self?.editFollowUps("remove", itemId: item["id"].stringValue)
+                UIAlertAction(title: String(localized: "暂停"), style: .default) { [weak self] _ in
+                    self?.editFollowUps("pause")
+                })
+        }
+        let canEdit = session.hasBackendQueueControl(conversation)
+        for item in runtime.followUps {
+            let id = item["id"].stringValue, preview = item["text"].stringValue.prefix(35)
+            if canEdit {
+                sheet.addAction(
+                    UIAlertAction(title: String(localized: "编辑：\(preview)"), style: .default) { [weak self] _ in
+                        self?.editFollowUp(id)
+                    })
+            }
+            sheet.addAction(
+                UIAlertAction(title: String(localized: "删除：\(preview)"), style: .destructive) { [weak self] _ in
+                    self?.editFollowUps("remove", itemId: id)
                 })
         }
         sheet.addAction(
             UIAlertAction(title: String(localized: "清空"), style: .destructive) { [weak self] _ in
                 self?.editFollowUps("clear")
             })
+        sheet.addAction(UIAlertAction(title: String(localized: "取消"), style: .cancel))
         WBUI.presentSheet(sheet, on: self)
     }
     private func editFollowUps(_ operation: String, itemId: String? = nil) {
@@ -2625,46 +2630,26 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             }
         }
     }
+    /// Takes the item off the backend queue and puts it back in the composer.
+    private func editFollowUp(_ itemId: String) {
+        guard draft.isEmpty else {
+            showNotice(title: String(localized: "输入框已有草稿"), message: String(localized: "先发送或保存当前草稿，再编辑候选消息。"))
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let taken = try await session.takeFollowUp(itemId, conversation: conversation)
+                // Anything typed while the request was in flight stays after it.
+                setDraft(draft.isEmpty ? taken : taken.combined(with: draft))
+            } catch { showError(error) }
+        }
+    }
     private func queueControl(_ value: JSONValue) {
         Task { [weak self] in
             guard let self else { return }
             do { _ = try await session.liveControl(value, conversation: conversation) } catch { showError(error) }
         }
-    }
-    private func showQueue() {
-        let sheet = UIAlertController(title: String(localized: "候选消息"), message: String(localized: "当前任务结束后按顺序发送；后台或断线后暂停。"), preferredStyle: .actionSheet)
-        if session.pausedQueues.contains(conversation.id) {
-            sheet.addAction(
-                UIAlertAction(title: String(localized: "恢复发送"), style: .default) { [weak self] _ in
-                    guard let self else { return }
-                    session.resumeQueue(conversation)
-                })
-        } else {
-            sheet.addAction(
-                UIAlertAction(title: String(localized: "暂停"), style: .default) { [weak self] _ in
-                    guard let self else { return }
-                    session.pausedQueues.insert(conversation.id)
-                    session.changed()
-                })
-        }
-        for item in session.queues[conversation.id] ?? [] {
-            sheet.addAction(
-                UIAlertAction(title: String(localized: "编辑：\(item.draft.text.prefix(35))"), style: .default) { [weak self] _ in
-                    guard let self else { return }
-                    guard draft.isEmpty else {
-                        showNotice(title: String(localized: "输入框已有草稿"), message: String(localized: "先发送或保存当前草稿，再编辑候选消息。"))
-                        return
-                    }
-                    session.removeQueued(item.id, conversationId: conversation.id)
-                    setDraft(item.draft)
-                })
-            sheet.addAction(
-                UIAlertAction(title: String(localized: "删除：\(item.draft.text.prefix(35))"), style: .destructive) { [weak self] _ in
-                    guard let self else { return }
-                    session.removeQueued(item.id, conversationId: conversation.id)
-                })
-        }
-        WBUI.presentSheet(sheet, on: self)
     }
     private func showUnknown(_ pending: PendingSend) {
         let sheet = UIAlertController(

@@ -561,34 +561,6 @@
         }
       }
     },
-    " · 已暂停": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": " · Paused"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": " · 一時停止中"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": " · 일시 중지됨"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": " · 已暂停"
-          }
-        }
-      }
-    },
     " · 已暂停，请核对": {
       "localizations": {
         "en": {
@@ -1621,6 +1593,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@：%@"
+          }
+        }
+      }
+    },
+    "%@：%@\n\n%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@\n\n%@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@：%@\n\n%@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@\n\n%@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@：%@\n\n%@"
           }
         }
       }
@@ -4001,6 +4001,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "[图片]"
+          }
+        }
+      }
+    },
+    "[图片无法恢复]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Image could not be restored]"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[画像を復元できません]"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[이미지를 복원할 수 없음]"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[图片无法恢复]"
           }
         }
       }
@@ -6721,58 +6749,30 @@
         }
       }
     },
-    "候选消息最多 32 条": {
+    "候选消息未能迁移": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Up to 32 candidate messages"
+            "value": "Candidate messages could not be moved"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "候補メッセージは最大 32 件"
+            "value": "候補メッセージを移行できませんでした"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "후보 메시지는 최대 32개"
+            "value": "후보 메시지를 이전하지 못했습니다"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "候选消息最多 32 条"
-          }
-        }
-      }
-    },
-    "候选消息未发送：%@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Candidate message not sent: %@"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "候補メッセージは送信されていません：%@"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "후보 메시지 전송 안 됨: %@"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "候选消息未发送：%@"
+            "value": "候选消息未能迁移"
           }
         }
       }
@@ -13245,6 +13245,34 @@
         }
       }
     },
+    "复制文本": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Text"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テキストをコピー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "텍스트 복사"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制文本"
+          }
+        }
+      }
+    },
     "复制最近一条 Agent 回复": {
       "localizations": {
         "en": {
@@ -14389,6 +14417,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "对话名称"
+          }
+        }
+      }
+    },
+    "对话已不存在": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The conversation no longer exists"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会話が存在しません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화가 더 이상 존재하지 않습니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "对话已不存在"
           }
         }
       }
@@ -18145,6 +18201,34 @@
         }
       }
     },
+    "已由你暂停": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused by you"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ユーザーが一時停止しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용자가 일시 중지함"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已由你暂停"
+          }
+        }
+      }
+    },
     "已由用户解除写保护；请避免重复已生效的操作。": {
       "localizations": {
         "en": {
@@ -19629,62 +19713,6 @@
         }
       }
     },
-    "当前任务尚未结束": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The current task has not finished"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "現在のタスクはまだ終了していません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "현재 작업이 아직 끝나지 않았습니다"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前任务尚未结束"
-          }
-        }
-      }
-    },
-    "当前任务结束后按顺序发送；后台或断线后暂停。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sent in order after the current task finishes; paused in the background or when disconnected."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "現在のタスク終了後に順番に送信します。バックグラウンドまたは切断時は一時停止します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "현재 작업이 끝나면 순서대로 전송합니다. 백그라운드 상태이거나 연결이 끊기면 일시 중지됩니다."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前任务结束后按顺序发送；后台或断线后暂停。"
-          }
-        }
-      }
-    },
     "当前写操作尚未结束或结果未知，请先核对，避免重复执行。": {
       "localizations": {
         "en": {
@@ -19877,6 +19905,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "当前后端版本不支持提交记录，更新并重启后端后可查看。"
+          }
+        }
+      }
+    },
+    "当前后端版本过旧，无法在 Agent 运行时保存候选消息。请升级后端后重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This backend is too old to hold candidate messages while the Agent is running. Upgrade the backend and try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このバックエンドは古いため、Agent の実行中は候補メッセージを保存できません。バックエンドをアップグレードしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 백엔드는 버전이 오래되어 Agent 실행 중에는 후보 메시지를 저장할 수 없습니다. 백엔드를 업그레이드한 뒤 다시 시도하세요."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前后端版本过旧，无法在 Agent 运行时保存候选消息。请升级后端后重试。"
           }
         }
       }
@@ -22397,62 +22453,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "排序工作区"
-          }
-        }
-      }
-    },
-    "排队消息": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Queued messages"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "待機中のメッセージ"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "대기 중인 메시지"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "排队消息"
-          }
-        }
-      }
-    },
-    "排队消息 %lld 条%@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Queued messages: %lld%@"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "待機中のメッセージ %lld 件%@"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "대기 중인 메시지 %lld개%@"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "排队消息 %lld 条%@"
           }
         }
       }
@@ -25141,6 +25141,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "旧版未加密的历史不能继续对话，可以查看、导出、归档或删除"
+          }
+        }
+      }
+    },
+    "旧的明文对话为只读": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The old plaintext conversation is read-only"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "古い平文の会話は読み取り専用です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전 평문 대화는 읽기 전용입니다"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧的明文对话为只读"
           }
         }
       }

@@ -19,6 +19,15 @@ extension SessionSocket {
     var browserFrames: AsyncStream<JSONValue> { AsyncStream { $0.finish() } }
 }
 
+/// Legacy candidate messages that could not move to the backend.
+nonisolated struct DiscardedCandidates: Identifiable, Sendable {
+    let id = UUID()
+    var conversationId: String
+    var title: String
+    var reason: String
+    var texts: [String]
+}
+
 @MainActor final class AppSession {
     private(set) var connections: [BackendConnection] = []
     private(set) var selectedID: String?
@@ -54,8 +63,14 @@ extension SessionSocket {
     // the agent picked for the most recently created conversation.
     private(set) var lastPreferencesByProvider: [String: ConversationPreferences] = [:]
     private(set) var lastAgent: AgentSelection?
-    var queues: [String: [QueuedDraft]] = [:]
-    var pausedQueues: Set<String> = []
+    /// Candidate messages written by builds that kept the queue on the device,
+    /// not yet handed to the backend (see `migrateLegacyQueues`). Nothing new
+    /// is ever added: the backend is the only store for queued messages.
+    private(set) var legacyQueues: [String: [QueuedDraft]] = [:]
+    private(set) var legacyPausedQueues: Set<String> = []
+    /// Legacy candidates the backend cannot take (conversation gone or
+    /// read-only, rejected for good). Their text is shown once, then dropped.
+    private(set) var discardedCandidates: [DiscardedCandidates] = []
     var pinnedWorkspaces: [String] = []
     var pinnedConversations: [String] = []
     /// Workspace group ids folded in the home list; local only, like pins.
@@ -119,8 +134,7 @@ extension SessionSocket {
         let afterSequence: Int
     }
     private var sending: [String: SendOperation] = [:]
-    private var queueDispatches: [String: UUID] = [:]
-    private var completedDuringSend: [String: String] = [:]
+    private var queueMigration: Task<Void, Never>?
     private var observers: [UUID: () -> Void] = [:]
     private var wireSubscribers: [UUID: AsyncStream<JSONValue>.Continuation] = [:]
     private var legacyCursors: [String: Int] = [:]
@@ -544,6 +558,7 @@ extension SessionSocket {
             try await refresh()
             try checkRevision(current)
             probeHistoryEncryption()
+            startLegacyQueueMigration()
             if !legacyCursors.isEmpty {
                 _ = try await socket.command(
                     type: "session.resume",
@@ -615,9 +630,9 @@ extension SessionSocket {
         liveSubscriptions.removeAll()
         watchTask?.cancel()
         watchTask = nil
-        queueDispatches.removeAll()
+        queueMigration?.cancel()
+        queueMigration = nil
         sending.removeAll()
-        completedDuringSend.removeAll()
         for task in sidecarStarts.values { task.cancel() }
         sidecarStarts.removeAll()
         for task in localThreadStarts.values { task.cancel() }
@@ -628,7 +643,6 @@ extension SessionSocket {
             sidecars[id]?.phase = .idle
         }
         for id in Array(runtimes.keys) { runtimes[id]?.beginReplay() }
-        pausedQueues.formUnion(queues.keys)
         isConnected = false
         isConnecting = false
         api = nil
@@ -649,7 +663,6 @@ extension SessionSocket {
         foreground = value
         if !value {
             for id in Array(runtimes.keys) { runtimes[id]?.beginReplay() }
-            pausedQueues.formUnion(queues.keys)
             persist()
             reconnectTask?.cancel()
             reconnectTask = nil
@@ -1332,19 +1345,9 @@ extension SessionSocket {
         try checkRevision(current)
         return result
     }
-    /// `nativeQueue: false` keeps a busy-time follow-up in the local queue: the
-    /// agent's own queue carries text only, so a draft that depends on changed
-    /// composer settings (e.g. `/plan <task>`) must wait for a real prompt.
-    func send(
-        _ draft: ComposerDraft, in conversation: ConversationManifest, enqueueWhenBusy: Bool = true,
-        nativeQueue: Bool = true
-    ) async throws {
-        try await send(draft, in: conversation, enqueueWhenBusy: enqueueWhenBusy, queued: nil, nativeQueue: nativeQueue)
-    }
-    private func send(
-        _ draft: ComposerDraft, in conversation: ConversationManifest, enqueueWhenBusy: Bool, queued: QueuedDraft?,
-        nativeQueue: Bool = true
-    ) async throws {
+    /// While a turn runs the message goes to the backend's follow-up queue
+    /// (`conversation.queue.add`); the daemon starts it when the turn completes.
+    func send(_ draft: ComposerDraft, in conversation: ConversationManifest) async throws {
         let id = conversation.id
         let current = revision
         guard !draft.isEmpty else { return }
@@ -1357,46 +1360,15 @@ extension SessionSocket {
         guard pendingSends[id] == nil, sending[id] == nil else { throw TodexError.unknownOutcome(String(localized: "已有消息等待核对")) }
         guard let runtime = runtimes[id], runtime.readyForActions else { throw TodexError.invalid(String(localized: "请等待历史记录同步完成")) }
         if ["running", "waitingPermission", "waiting_permission"].contains(runtime.status) {
-            guard enqueueWhenBusy else { throw TodexError.server(code: "CONFLICT", message: String(localized: "当前任务尚未结束")) }
-            // The daemon holds follow-ups (attachments and skills included)
-            // and starts them itself once the turn completes.
-            if hasBackendQueue(conversation) {
-                _ = try await queueFollowUp(draft, itemId: UUID().uuidString, conversation: conversation)
-                try checkRevision(current)
-                if drafts[id] == draft { drafts[id] = ComposerDraft() }
-                persist()
-                changed(immediate: true)
-                return
-            }
-            // Desktop parity: a plain-text follow-up goes to the agent's own
-            // queue when the provider has one; attachments and skills can only
-            // travel through a prompt, so they wait in the local queue.
-            // Only while nothing waits locally, or it would overtake earlier drafts.
-            if nativeQueue, provider(for: conversation)?.capabilities["followUpQueue"].boolValue == true,
-                draft.attachments.isEmpty, draft.skills.isEmpty, (queues[id] ?? []).isEmpty
-            {
-                _ = try await liveControl(
-                    ["action": "queueAdd", "itemId": .string(UUID().uuidString), "text": .string(draft.text)],
-                    conversation: conversation)
-                try checkRevision(current)
-                if drafts[id] == draft { drafts[id] = ComposerDraft() }
-                persist()
-                changed(immediate: true)
-                return
-            }
-            guard (queues[id]?.count ?? 0) < 32 else { throw TodexError.invalid(String(localized: "候选消息最多 32 条")) }
-            queues[id, default: []].append(QueuedDraft(draft: draft))
-            pausedQueues.remove(id)
-            if drafts[id] == draft { drafts[id] = ComposerDraft() }
-            changed(immediate: true)
-            try await persistDurably()
+            // The composer keeps the draft until the daemon accepted it, so a
+            // failure (including the queue being full) leaves it untouched.
+            guard hasBackendQueue(conversation) else { throw Self.upgradeBackendError }
+            _ = try await queueFollowUp(draft, itemId: UUID().uuidString, conversation: conversation)
             try checkRevision(current)
+            if drafts[id] == draft { drafts[id] = ComposerDraft() }
+            persist()
+            changed(immediate: true)
             return
-        }
-        if let queued {
-            guard foreground, !pausedQueues.contains(id), queues[id]?.first?.id == queued.id else {
-                throw CancellationError()
-            }
         }
         let payload = try promptPayload(draft, conversation: conversation)
         let requestID = UUID().uuidString
@@ -1409,29 +1381,21 @@ extension SessionSocket {
         }
         pendingSends[id] = PendingSend(requestId: requestID, draft: draft, afterSequence: runtime.appliedSequence)
         sending[id] = SendOperation(requestID: requestID, afterSequence: runtime.appliedSequence)
-        if let queued { queues[id]?.removeAll { $0.id == queued.id } }
         changed(immediate: true)
         var submitted = false
         defer {
             if current == revision, sending[id]?.requestID == requestID {
                 sending.removeValue(forKey: id)
-                if completedDuringSend.removeValue(forKey: id) == requestID {
-                    Task { [weak self] in
-                        guard let self, current == revision else { return }
-                        dispatchQueue(id)
-                    }
-                }
                 changed()
             }
         }
         do {
-            // Durable pending + queue removal BEFORE the only network mutation.
+            // Durable pending ledger BEFORE the only network mutation.
             try await persistDurably()
             try checkRevision(current)
             guard pendingSends[id]?.requestId == requestID else { throw CancellationError() }
-            if queued != nil { guard foreground, !pausedQueues.contains(id) else { throw CancellationError() } }
             guard runtimes[id]?.readyForActions == true, isConnected else { throw TodexError.disconnected }
-            if queued == nil, drafts[id] == draft { drafts[id] = ComposerDraft() }
+            if drafts[id] == draft { drafts[id] = ComposerDraft() }
             persist()
             submitted = true
             _ = try await socket.command(type: "conversation.prompt", payload: payload, timeout: 45, id: requestID)
@@ -1464,23 +1428,21 @@ extension SessionSocket {
                 if !submitted || Self.knownRejection(error) {
                     pendingSends.removeValue(forKey: id)
                     sentAttachments.removeAll { $0.conversationId == id && $0.requestId == requestID }
-                    if let queued {
-                        if queues[id]?.contains(where: { $0.id == queued.id }) != true {
-                            queues[id, default: []].insert(queued, at: 0)
-                        }
-                    } else if drafts[id]?.isEmpty != false {
+                    if let typed = drafts[id], !typed.isEmpty, typed != draft {
+                        // Text entered while the ACK was pending stays; the
+                        // rejected message goes back in front of it.
+                        drafts[id] = draft.combined(with: typed)
+                    } else {
                         drafts[id] = draft
-                    } else if drafts[id] != draft {
-                        // Do not overwrite text entered while the ACK was pending.
-                        queues[id, default: []].insert(QueuedDraft(draft: draft), at: 0)
                     }
                 }
-                pausedQueues.insert(id)
             }
             persist()
             throw error
         }
     }
+    nonisolated static let upgradeBackendError = TodexError.invalid(
+        String(localized: "当前后端版本过旧，无法在 Agent 运行时保存候选消息。请升级后端后重试。"))
     private static func knownRejection(_ error: Error) -> Bool {
         switch error {
         case TodexError.server, TodexError.invalid, TodexError.disconnected: true
@@ -1509,21 +1471,28 @@ extension SessionSocket {
         if !pref.reasoningEffort.isEmpty { payload["reasoningEffort"] = .string(pref.reasoningEffort) }
         return payload
     }
-    /// The connected backend holds this conversation's follow-ups
-    /// (`conversation.queue.*`) instead of the local candidate queue.
+    /// The connected backend holds this conversation's queued candidate
+    /// messages (`conversation.queue.*`). It is the only store for them.
     func hasBackendQueue(_ conversation: ConversationManifest) -> Bool {
-        provider(for: conversation)?.capabilities["backendQueue"].boolValue == true
+        provider(for: conversation)?.supportsBackendQueue == true
+    }
+    /// The backend can also pause the queue, hand an item back for editing
+    /// (`conversation.queue.pause|take`) and add an item already paused.
+    func hasBackendQueueControl(_ conversation: ConversationManifest) -> Bool {
+        provider(for: conversation)?.supportsBackendQueueControl == true
     }
     /// Adds a follow-up to the backend queue. The item id is also the prompt's
     /// clientRequestId, so re-adding after a lost ACK or a relaunch never runs
-    /// it twice. An idle conversation starts it at once (`status: started`).
+    /// it twice. An idle conversation starts it at once (`status: started`)
+    /// unless `paused` asks the daemon to hold it (`backendQueueControl`).
     @discardableResult
-    private func queueFollowUp(_ draft: ComposerDraft, itemId: String, conversation: ConversationManifest)
-        async throws -> JSONValue
-    {
+    private func queueFollowUp(
+        _ draft: ComposerDraft, itemId: String, conversation: ConversationManifest, paused: Bool = false
+    ) async throws -> JSONValue {
         try ensureWritable(conversation)
         var payload = try promptPayload(draft, conversation: conversation)
         payload["itemId"] = .string(itemId)
+        if paused { payload["paused"] = true }
         if !draft.attachments.isEmpty,
             !sentAttachments.contains(where: { $0.conversationId == conversation.id && $0.requestId == itemId })
         {
@@ -1549,45 +1518,112 @@ extension SessionSocket {
             changed()
         }
     }
-    /// Removes one item from, clears, or resumes the backend queue.
+    /// Removes one item from, clears, resumes or (with `backendQueueControl`)
+    /// pauses the backend queue; the daemon persists the result.
     func editFollowUps(_ operation: String, itemId: String? = nil, conversation: ConversationManifest) async throws {
         try ensureWritable(conversation)
+        if operation == "pause", !hasBackendQueueControl(conversation) { throw Self.upgradeBackendError }
         var payload: JSONValue = ["conversationId": .string(conversation.id)]
         if let itemId { payload["itemId"] = .string(itemId) }
         let result = try await command("conversation.queue.\(operation)", payload, timeout: 15)
         runtimes[conversation.id]?.adoptFollowUpQueue(result["queue"])
         changed()
     }
-    /// Moves local candidates (restored after a relaunch, or queued while the
-    /// backend's capabilities were unknown) into the backend queue, in order,
-    /// once the local queue is resumed; restarts and disconnects still pause it.
-    /// The backend then decides when each one runs, busy or not.
-    private func handOverQueue(_ id: String, conversation: ConversationManifest) {
-        guard isConnected, !pausedQueues.contains(id), queueDispatches[id] == nil, !(queues[id] ?? []).isEmpty
-        else { return }
+    /// Takes one queued item off the backend so the composer can edit it; the
+    /// daemon no longer holds it afterwards. The composer must be empty or the
+    /// caller merges the result (`ComposerDraft.combined`).
+    func takeFollowUp(_ itemId: String, conversation: ConversationManifest) async throws -> ComposerDraft {
+        try ensureWritable(conversation)
+        guard hasBackendQueueControl(conversation) else { throw Self.upgradeBackendError }
+        let result = try await command(
+            "conversation.queue.take", ["conversationId": .string(conversation.id), "itemId": .string(itemId)],
+            timeout: 15)
+        runtimes[conversation.id]?.adoptFollowUpQueue(result["queue"])
+        changed()
+        return ComposerDraft(takenItem: result["item"])
+    }
+    func dismissDiscardedCandidates(_ id: UUID) {
+        discardedCandidates.removeAll { $0.id == id }
+        changed()
+    }
+
+    // MARK: Legacy candidate queue migration
+
+    /// Hands candidates that older builds kept on the device to the backend, in
+    /// order and under their original ids (so a repeat after a lost ACK or a
+    /// relaunch never duplicates one). A conversation that was paused locally
+    /// is added paused. Conversations the backend cannot take get a notice with
+    /// their text; transient failures and backends too old for the queue (or
+    /// for a paused add) keep the local data for the next connect.
+    private func startLegacyQueueMigration() {
+        guard !legacyQueues.isEmpty, queueMigration == nil else { return }
         let current = revision
-        let token = UUID()
-        queueDispatches[id] = token
-        Task { [weak self] in
-            guard let self, current == revision, queueDispatches[id] == token else { return }
-            defer { if current == revision, queueDispatches[id] == token { queueDispatches.removeValue(forKey: id) } }
-            while let first = queues[id]?.first {
+        queueMigration = Task { [weak self] in
+            guard let self else { return }
+            await migrateLegacyQueues(revision: current)
+            if current == revision { queueMigration = nil }
+        }
+    }
+    private func migrateLegacyQueues(revision current: UUID) async {
+        for id in legacyQueues.keys.sorted() {
+            guard current == revision, isConnected, !Task.isCancelled else { return }
+            let items = legacyQueues[id] ?? []
+            guard !items.isEmpty else {
+                dropLegacyQueue(id)
+                continue
+            }
+            guard let conversation = conversations.first(where: { $0.id == id }) else {
+                discardLegacyQueue(id, reason: String(localized: "对话已不存在"))
+                continue
+            }
+            if isReadOnly(id) {
+                discardLegacyQueue(id, reason: String(localized: "旧的明文对话为只读"))
+                continue
+            }
+            let paused = legacyPausedQueues.contains(id)
+            guard hasBackendQueue(conversation), !paused || hasBackendQueueControl(conversation) else { continue }
+            for (index, item) in items.enumerated() {
                 do {
-                    try await queueFollowUp(first.draft, itemId: first.id, conversation: conversation)
+                    try await queueFollowUp(
+                        item.draft, itemId: item.id, conversation: conversation, paused: paused && index == 0)
                 } catch {
                     guard current == revision else { return }
-                    pausedQueues.insert(id)
-                    if !(error is CancellationError) { operationError = error.localizedDescription }
-                    persist()
-                    changed()
-                    return
+                    if Self.permanentQueueFailure(error) {
+                        discardLegacyQueue(id, reason: error.localizedDescription)
+                    } else {
+                        DebugLog.record("followups.migrate.failed", ["error": String(describing: error)], level: .error)
+                    }
+                    break
                 }
                 guard current == revision else { return }
-                queues[id]?.removeAll { $0.id == first.id }
+                legacyQueues[id]?.removeAll { $0.id == item.id }
+                // The pause is on the backend now; a later resume must stick.
+                legacyPausedQueues.remove(id)
                 persist()
-                changed()
             }
+            if legacyQueues[id]?.isEmpty == true { dropLegacyQueue(id) }
+            changed()
         }
+    }
+    private static func permanentQueueFailure(_ error: Error) -> Bool {
+        guard case TodexError.server(let code, _) = error else { return false }
+        return [HistoryEncryption.readOnly, "NOT_FOUND", "RESOURCE_EXHAUSTED", "INVALID_ARGUMENT"].contains(code)
+    }
+    private func dropLegacyQueue(_ id: String) {
+        legacyQueues.removeValue(forKey: id)
+        legacyPausedQueues.remove(id)
+        persist()
+    }
+    private func discardLegacyQueue(_ id: String, reason: String) {
+        let items = legacyQueues[id] ?? []
+        if !items.isEmpty {
+            discardedCandidates.append(
+                DiscardedCandidates(
+                    conversationId: id, title: conversations.first { $0.id == id }?.title ?? "", reason: reason,
+                    texts: items.map(\.draft.text)))
+        }
+        dropLegacyQueue(id)
+        changed(immediate: true)
     }
     /// Receipts for one conversation, oldest first, for the timeline to join
     /// against user entries via payload.clientRequestId.
@@ -1665,46 +1701,8 @@ extension SessionSocket {
         }
         pendingSends.removeValue(forKey: id)
         drafts[id] = pending.draft
-        pausedQueues.insert(id)
         persist()
         changed(immediate: true)
-    }
-    func resumeQueue(_ conversation: ConversationManifest) {
-        pausedQueues.remove(conversation.id)
-        dispatchQueue(conversation.id)
-        persist()
-        changed()
-    }
-    func removeQueued(_ item: String, conversationId: String) {
-        queues[conversationId]?.removeAll { $0.id == item }
-        persist()
-        changed()
-    }
-    private func dispatchQueue(_ id: String) {
-        if let conversation = conversations.first(where: { $0.id == id }), hasBackendQueue(conversation) {
-            handOverQueue(id, conversation: conversation)
-            return
-        }
-        guard foreground, isConnected, !pausedQueues.contains(id), sending[id] == nil, queueDispatches[id] == nil,
-            pendingSends[id] == nil,
-            let runtime = runtimes[id], ["idle", "completed"].contains(runtime.status), runtime.readyForActions,
-            let first = queues[id]?.first, let conversation = conversations.first(where: { $0.id == id }),
-            !conversation.isLegacyPlaintext
-        else { return }
-        let current = revision
-        let token = UUID()
-        queueDispatches[id] = token
-        Task { [weak self] in
-            guard let self, current == revision, queueDispatches[id] == token else { return }
-            defer { if current == revision, queueDispatches[id] == token { queueDispatches.removeValue(forKey: id) } }
-            do { try await send(first.draft, in: conversation, enqueueWhenBusy: false, queued: first) } catch {
-                guard current == revision else { return }
-                pausedQueues.insert(id)
-                if !(error is CancellationError) { operationError = error.localizedDescription }
-                persist()
-                changed()
-            }
-        }
     }
     func respond(_ permission: PendingPermission, conversationId: String, decision: JSONValue) async throws {
         if isReadOnly(conversationId) { throw Self.historyReadOnlyError }
@@ -2778,18 +2776,12 @@ extension SessionSocket {
                 conversations[index].lastSequence = max(conversations[index].lastSequence, runtime.appliedSequence)
                 conversations[index].status = runtime.status
             }
-            if ["failed", "cancelled", "interrupted"].contains(runtime.status) { pausedQueues.insert(id) }
             if runtime.status == "completed", oldStatus != "completed", !oldTurn.isEmpty {
                 if live {
                     let reply = runtime.messages.first {
                         $0.role == "assistant" && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     }?.text ?? ""
                     notifyTurnCompleted(id, reply: reply)
-                }
-                if let send = sending[id], runtime.appliedSequence > send.afterSequence {
-                    completedDuringSend[id] = send.requestID
-                } else {
-                    dispatchQueue(id)
                 }
             }
             saveSoon()
@@ -3029,11 +3021,11 @@ extension SessionSocket {
         let snapshot = SessionSnapshot(
             workspaces: workspaces, conversations: storedConversations, drafts: drafts, preferences: preferences,
             lastPreferencesByProvider: lastPreferencesByProvider, lastAgent: lastAgent,
-            queues: queues, pendingSends: pendingSends, legacyCursors: legacyCursors,
+            queues: legacyQueues, pendingSends: pendingSends, legacyCursors: legacyCursors,
             localThreads: localThreads, readSequences: reads,
             pinnedWorkspaces: pinnedWorkspaces, pinnedConversations: pinnedConversations,
             collapsedWorkspaceGroups: collapsedWorkspaceGroups,
-            pausedQueues: pausedQueues, activeConversationID: activeConversationID, tasks: tasks,
+            pausedQueues: legacyPausedQueues, activeConversationID: activeConversationID, tasks: tasks,
             sentAttachments: sentAttachments, conversationLabels: conversationLabels,
             usageRecords: usageRecords)
         let checkpoint = Checkpoint(version: saveVersion, snapshot: snapshot)
@@ -3089,7 +3081,6 @@ extension SessionSocket {
         let different = storageFailures[namespace]?.message != message
         storageFailures[namespace] = (version, message)
         if namespace == stateNamespace {
-            pausedQueues.formUnion(queues.keys)
             if different { changed(immediate: true) }
         }
         // Deliberately do not persist here: a full/protected disk must not create
@@ -3114,9 +3105,10 @@ extension SessionSocket {
         preferences = [:]
         lastPreferencesByProvider = [:]
         lastAgent = nil
-        queues = [:]
+        legacyQueues = [:]
+        legacyPausedQueues = []
+        discardedCandidates = []
         pendingSends = [:]
-        pausedQueues = []
         pinnedWorkspaces = []
         pinnedConversations = []
         collapsedWorkspaceGroups = []
@@ -3170,7 +3162,8 @@ extension SessionSocket {
                 lastPreferencesByProvider =
                     snapshot.lastPreferencesByProvider.merging(lastPreferencesByProvider) { _, edited in edited }
                 lastAgent = lastAgent ?? snapshot.lastAgent
-                queues = snapshot.queues.merging(queues) { _, edited in edited }
+                legacyQueues = snapshot.queues.filter { !$0.value.isEmpty }
+                legacyPausedQueues = snapshot.pausedQueues
                 pendingSends = snapshot.pendingSends
                 legacyCursors = snapshot.legacyCursors
                 localThreads = snapshot.localThreads.merging(localThreads) { _, live in live }
@@ -3192,7 +3185,6 @@ extension SessionSocket {
                 sentAttachments = snapshot.sentAttachments
                 conversationLabels = snapshot.conversationLabels.merging(conversationLabels) { _, edited in edited }
                 usageRecords = UsageLedger.union(usageRecords, snapshot.usageRecords)
-                pausedQueues = Set(queues.keys)  // Restarts never automatically drain a persisted queue.
                 activeConversationID = activeConversationID ?? snapshot.activeConversationID
                 stateLoaded = true
                 if saveAfterLoad {

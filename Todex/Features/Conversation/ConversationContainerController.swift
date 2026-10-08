@@ -376,7 +376,7 @@ final class ConversationContainerController: UIViewController {
         let busy = ["running", "waitingPermission", "waiting_permission"].contains(
             session.runtimes[conversation.id]?.status ?? "")
         try await session.send(ComposerDraft(text: text), in: conversation)
-        // A busy Agent receives it through the local or the Agent's own queue.
+        // A busy Agent receives it through the backend candidate queue.
         return busy
     }
     /// Desktop openGitWorktree: reuse or register the worktree as a workspace,

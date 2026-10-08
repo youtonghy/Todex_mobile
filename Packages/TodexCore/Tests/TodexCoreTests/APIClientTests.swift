@@ -157,6 +157,13 @@ struct APIClientTests {
         #expect(provider.capabilities["futureCapability"]["enabled"] == true)
         #expect(provider.models.first?["futureModelField"] == [1, "x", nil])
         #expect(try JSONValue(encoding: provider) == TestWire.provider)
+        // Queue capabilities default to false; control is a separate bit.
+        #expect(!provider.supportsBackendQueue && !provider.supportsBackendQueueControl)
+        var queued = provider
+        queued.capabilities = ["backendQueue": true]
+        #expect(queued.supportsBackendQueue && !queued.supportsBackendQueueControl)
+        queued.capabilities = ["backendQueue": true, "backendQueueControl": true]
+        #expect(queued.supportsBackendQueue && queued.supportsBackendQueueControl)
 
         let event = try TestWire.event.decoded(ConversationEvent.self)
         #expect(event.sequence == 7)
@@ -359,6 +366,7 @@ struct APIClientTests {
             """
             conversation.subscribe conversation.unsubscribe conversation.create conversation.prompt conversation.followUp conversation.retry
             conversation.queue.add conversation.queue.remove conversation.queue.clear conversation.queue.resume conversation.queue.list
+            conversation.queue.pause conversation.queue.take
             conversation.resume conversation.fork conversation.compact conversation.control conversation.cancel
             conversation.interrupt conversation.stop conversation.permission.respond mcp.list mcp.refresh mcp.call server.ping session.resume
             codex.gateway.control codex.local.start codex.local.status codex.local.stop codex.local.turn codex.local.input

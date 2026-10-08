@@ -295,6 +295,9 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
         } else {
             alertedBackendVersion = nil
         }
+        if let discarded = session.discardedCandidates.first, view.window != nil, presentedViewController == nil {
+            presentDiscardedCandidates(discarded)
+        }
         if showingBoard ? sortedWorkspaces.isEmpty : groups.isEmpty && otherBackends.isEmpty {
             var config = UIContentUnavailableConfiguration.empty()
             config.image = Theme.icon(
@@ -326,6 +329,24 @@ final class HomeViewController: UIViewController, UITableViewDataSource, UITable
             contentUnavailableConfiguration = nil
         }
         table.reloadData()
+    }
+    /// Legacy local candidate messages the backend could not take: their text is
+    /// shown once so it can be copied before it is dropped.
+    private func presentDiscardedCandidates(_ discarded: DiscardedCandidates) {
+        let joined = discarded.texts.map { String($0.prefix(300)) }.joined(separator: "\n— — —\n")
+        let alert = UIAlertController(
+            title: String(localized: "候选消息未能迁移"),
+            message: String(localized: "\(discarded.title)：\(discarded.reason)\n\n\(joined)"), preferredStyle: .alert)
+        alert.addAction(
+            UIAlertAction(title: String(localized: "复制文本"), style: .default) { [weak self] _ in
+                UIPasteboard.general.string = discarded.texts.joined(separator: "\n\n")
+                self?.session.dismissDiscardedCandidates(discarded.id)
+            })
+        alert.addAction(
+            UIAlertAction(title: String(localized: "好"), style: .cancel) { [weak self] _ in
+                self?.session.dismissDiscardedCandidates(discarded.id)
+            })
+        present(alert, animated: true)
     }
     /// Lays `groups` out along `layoutEntries`: a group header where the group
     /// has listed members, its members nested below unless the group is folded

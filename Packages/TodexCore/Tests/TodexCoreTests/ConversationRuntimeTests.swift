@@ -598,6 +598,15 @@ struct ConversationRuntimeTests {
         #expect(runtime.followUpsPaused)
         #expect(runtime.followUpsPauseReason == "start_failed")
         #expect(runtime.followUpsPauseMessage == "file changed")
+        // A user pause survives the turn completing; only the daemon clears it.
+        runtime.ingest(
+            try event(
+                5, "followups.updated",
+                #"{"items":[{"id":"a","text":"Next"}],"paused":true,"pauseReason":"user"}"#))
+        runtime.ingest(try event(6, "turn.completed", #"{"turnId":"t"}"#))
+        #expect(runtime.followUpsPaused)
+        #expect(runtime.followUpsPauseReason == "user")
+        #expect(runtime.followUpsPauseMessage.isEmpty)
         runtime.adoptFollowUpQueue(["items": [], "paused": true, "pauseReason": "stale"])
         #expect(runtime.followUps.isEmpty)
         #expect(!runtime.followUpsPaused)

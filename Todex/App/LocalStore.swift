@@ -203,6 +203,9 @@ nonisolated struct SessionSnapshot: Codable, Sendable {
     var preferences: [String: ConversationPreferences] = [:]
     var lastPreferencesByProvider: [String: ConversationPreferences] = [:]
     var lastAgent: AgentSelection?
+    /// Legacy: local candidate messages written by builds that kept the queue on
+    /// the device. Decoded only so they can be handed to the backend once; they
+    /// are encoded again only while that migration is still pending.
     var queues: [String: [QueuedDraft]] = [:]
     var pendingSends: [String: PendingSend] = [:]
     var legacyCursors: [String: Int] = [:]
@@ -215,12 +218,21 @@ nonisolated struct SessionSnapshot: Codable, Sendable {
     var pinnedConversations: [String] = []
     /// Workspace group ids folded in the home list (local, per backend).
     var collapsedWorkspaceGroups: Set<String> = []
+    /// Legacy companion of `queues` (conversations whose local queue was paused).
     var pausedQueues: Set<String> = []
     var activeConversationID: String?
     var tasks: [KanbanTask] = []
     var sentAttachments: [SentAttachmentRecord] = []
     var conversationLabels: [String: String] = [:]
     var usageRecords: [JSONValue] = []
+
+    // Spelled out because both coding methods are custom.
+    private enum CodingKeys: String, CodingKey {
+        case workspaces, conversations, drafts, preferences, lastPreferencesByProvider, lastAgent, queues
+        case pendingSends, legacyCursors, localThreads, readSequences, pinnedWorkspaces, pinnedConversations
+        case collapsedWorkspaceGroups, pausedQueues, activeConversationID, tasks, sentAttachments
+        case conversationLabels, usageRecords
+    }
 }
 
 /// Every field decodes with decodeIfPresent so a snapshot written by an older
@@ -249,6 +261,32 @@ extension SessionSnapshot {
         sentAttachments = try c.decodeIfPresent([SentAttachmentRecord].self, forKey: .sentAttachments) ?? []
         conversationLabels = try c.decodeIfPresent([String: String].self, forKey: .conversationLabels) ?? [:]
         usageRecords = try c.decodeIfPresent([JSONValue].self, forKey: .usageRecords) ?? []
+    }
+
+    /// Mirrors the synthesized encoding except that the legacy candidate queue
+    /// keys are omitted once nothing is left to migrate.
+    nonisolated func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(workspaces, forKey: .workspaces)
+        try c.encode(conversations, forKey: .conversations)
+        try c.encode(drafts, forKey: .drafts)
+        try c.encode(preferences, forKey: .preferences)
+        try c.encode(lastPreferencesByProvider, forKey: .lastPreferencesByProvider)
+        try c.encodeIfPresent(lastAgent, forKey: .lastAgent)
+        if !queues.isEmpty { try c.encode(queues, forKey: .queues) }
+        try c.encode(pendingSends, forKey: .pendingSends)
+        try c.encode(legacyCursors, forKey: .legacyCursors)
+        try c.encode(localThreads, forKey: .localThreads)
+        try c.encode(readSequences, forKey: .readSequences)
+        try c.encode(pinnedWorkspaces, forKey: .pinnedWorkspaces)
+        try c.encode(pinnedConversations, forKey: .pinnedConversations)
+        try c.encode(collapsedWorkspaceGroups, forKey: .collapsedWorkspaceGroups)
+        if !pausedQueues.isEmpty { try c.encode(pausedQueues, forKey: .pausedQueues) }
+        try c.encodeIfPresent(activeConversationID, forKey: .activeConversationID)
+        try c.encode(tasks, forKey: .tasks)
+        try c.encode(sentAttachments, forKey: .sentAttachments)
+        try c.encode(conversationLabels, forKey: .conversationLabels)
+        try c.encode(usageRecords, forKey: .usageRecords)
     }
 }
 
@@ -445,6 +483,86 @@ nonisolated struct ComposerDraft: Codable, Sendable, Equatable {
     var skills: [SkillAttachment] = []
     var isEmpty: Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty && skills.isEmpty
+    }
+    /// `self` followed by `other`, for restoring a rejected message in front of
+    /// text typed in the meantime without discarding either.
+    func combined(with other: ComposerDraft) -> ComposerDraft {
+        var result = self
+        let tail = other.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty { result.text += (result.text.isEmpty ? "" : "\n\n") + other.text }
+        result.attachments += other.attachments.filter { item in !attachments.contains { $0.id == item.id } }
+        result.skills += other.skills.filter { item in !skills.contains { $0.id == item.id } }
+        return result
+    }
+}
+
+extension ComposerDraft {
+    /// The composer draft behind a `conversation.queue.take` item: `text` keeps
+    /// its inline tokens, and `content` holds what `MessageAttachment.wireValue`
+    /// sent (inline images, `附件：name` file text, `[引用: location]` excerpts).
+    /// Parts without a counterpart in the composer (paths, unknown text) are
+    /// appended to the text so nothing the user queued is lost.
+    nonisolated init(takenItem item: JSONValue) {
+        var text = item["text"].stringValue
+        var tokens: [String: [String]] = [:]
+        if let pattern = try? NSRegularExpression(pattern: "\\[(图片|文件|引用):([^\\]]*)\\]") {
+            let whole = NSRange(text.startIndex..., in: text)
+            for match in pattern.matches(in: text, range: whole) {
+                guard let kind = Range(match.range(at: 1), in: text), let name = Range(match.range(at: 2), in: text)
+                else { continue }
+                tokens[String(text[kind]), default: []].append(String(text[name]))
+            }
+        }
+        func next(_ kind: String) -> String? { tokens[kind]?.isEmpty == false ? tokens[kind]?.removeFirst() : nil }
+        var extra: [String] = []
+        var restored: [MessageAttachment] = []
+        for part in item["content"].arrayValue {
+            switch part["type"].stringValue {
+            case "image":
+                guard let data = Data(base64Encoded: part["data"].stringValue) else {
+                    extra.append(String(localized: "[图片无法恢复]"))
+                    continue
+                }
+                var name = next("图片")
+                if name == nil {
+                    name = "image\(restored.filter(\.isImage).count + 1).jpg"
+                    text += (text.isEmpty || text.hasSuffix(" ") ? "" : " ") + "[图片:\(name ?? "")]"
+                }
+                restored.append(
+                    MessageAttachment(
+                        name: name ?? "", mimeType: part["mimeType"].optionalString ?? "image/jpeg", data: data))
+            case "text":
+                let body = part["text"].stringValue
+                if body.hasPrefix("附件：") {
+                    let lines = body.dropFirst("附件：".count).split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+                    let name = lines.first.map(String.init) ?? ""
+                    let content = lines.count > 1 ? String(lines[1]) : ""
+                    restored.append(MessageAttachment(name: name, mimeType: "text/plain", data: Data(content.utf8)))
+                } else if body.hasPrefix("[引用: "), let close = body.firstIndex(of: "]") {
+                    let location = String(body[body.index(body.startIndex, offsetBy: "[引用: ".count)..<close])
+                    var excerpt = String(body[body.index(after: close)...])
+                    if excerpt.hasPrefix("\nContent:\n") { excerpt.removeFirst("\nContent:\n".count) }
+                    var reference = MessageAttachment.Reference()
+                    reference.path = location
+                    restored.append(
+                        MessageAttachment(
+                            name: next("引用") ?? location, mimeType: "text/plain", data: Data(excerpt.utf8),
+                            reference: reference))
+                } else if !body.isEmpty {
+                    extra.append(body)
+                }
+            default:
+                let path = part["path"].stringValue
+                if !path.isEmpty { extra.append(path) }
+            }
+        }
+        if !extra.isEmpty { text += (text.isEmpty ? "" : "\n") + extra.joined(separator: "\n") }
+        self.init(
+            text: text, attachments: restored,
+            skills: item["skills"].arrayValue.compactMap { skill in
+                let id = skill["resourceId"].stringValue
+                return id.isEmpty ? nil : SkillAttachment(id: id, name: skill["name"].stringValue)
+            })
     }
 }
 nonisolated struct ConversationPreferences: Codable, Sendable {

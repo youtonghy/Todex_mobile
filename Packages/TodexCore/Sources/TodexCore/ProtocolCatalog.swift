@@ -23,6 +23,8 @@ public enum ProtocolCatalog {
         case conversationQueueClear = "conversation.queue.clear"
         case conversationQueueResume = "conversation.queue.resume"
         case conversationQueueList = "conversation.queue.list"
+        case conversationQueuePause = "conversation.queue.pause"
+        case conversationQueueTake = "conversation.queue.take"
         case conversationRetry = "conversation.retry"
         case conversationResume = "conversation.resume"
         case conversationFork = "conversation.fork"
@@ -146,6 +148,10 @@ public enum ProtocolCatalog {
             support = .conditional
             detail =
                 "Daemon-held follow-up queue; requires the provider's backendQueue capability (every provider on current backends)."
+        case .conversationQueuePause, .conversationQueueTake:
+            support = .conditional
+            detail =
+                "Pauses the daemon-held follow-up queue (reason user) or hands one item back for editing; also gates add with paused = true. Requires the provider's backendQueueControl capability."
         case .conversationControl:
             support = .conditional
             detail =

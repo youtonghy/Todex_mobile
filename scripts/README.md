@@ -56,7 +56,7 @@ The 17 groups cover:
 12. WS prompt → confirmed running fake turn → REST cancel → native interrupt/completion and persisted cancellation.
 13. Paginated REST event replay without sequence gaps, and a new WS subscription replaying after a cursor.
 14. Fake Claude stream-json initialization, permission via WS, object-shaped text delta and completion.
-15. Backend follow-up queue: a prompt during a slow fake Claude turn is rejected with `CONFLICT`, `conversation.queue.add` (with content, re-added idempotently) waits and starts after completion, and a cancelled turn pauses the queue until `conversation.queue.resume`.
+15. Backend follow-up queue: a prompt during a slow fake Claude turn is rejected with `CONFLICT`, `conversation.queue.add` (with content, re-added idempotently) waits and starts after completion, and a cancelled turn pauses the queue until `conversation.queue.resume`. When the provider advertises `backendQueueControl`, it also checks that a user pause (`conversation.queue.pause`) survives turn completion, that `add` with `paused: true` never starts an idle conversation, and that `conversation.queue.take` returns the full content (inline image included); otherwise that part is skipped.
 16. Real `/bin/sh` PTY start/input/output/resize/stop in the temporary workspace. Output markers are split in the submitted command so terminal echo cannot satisfy the assertion.
 17. Structured 400 malformed ID, 404 absent UUID, 403 workspace boundary, Unsupported native resume and 422 invalid patch errors.
 

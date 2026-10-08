@@ -198,6 +198,13 @@ public struct ProviderDescriptor: Codable, Sendable, Identifiable, Equatable {
         self.capabilities = capabilities
         self.models = models
     }
+
+    /// The daemon holds this provider's queued follow-ups (`conversation.queue.*`).
+    public var supportsBackendQueue: Bool { capabilities["backendQueue"].boolValue }
+    /// The daemon also pauses a queue on request, hands one item back for
+    /// editing, and accepts `paused: true` on add (`conversation.queue.pause|take`).
+    /// Absent on older backends, which can only resume, remove and clear.
+    public var supportsBackendQueueControl: Bool { capabilities["backendQueueControl"].boolValue }
 }
 
 /// A stored workspace the backend could not validate (directory removed,

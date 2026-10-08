@@ -570,6 +570,35 @@ def verify(root, manifest):
             # `resumeAt` (rate-limit auto-resume) is newer than some backends.
             require(drained.get("resumeAt") is None and {key: drained.get(key) for key in ("items", "paused", "pauseReason", "pauseMessage")}
                     == {"items": [], "paused": False, "pauseReason": None, "pauseMessage": None}, "Resume must drain the queue: " + json.dumps(drained))
+
+            # pause / take / paused add exist only on backends advertising backendQueueControl.
+            providers = http.request("GET", "/v2/providers")["providers"]
+            control = any(p["id"] == "claude-code" and p.get("capabilities", {}).get("backendQueueControl") is True for p in providers)
+            if not control:
+                return {"conversationId": qid, "queueControl": "skipped: backend lacks backendQueueControl"}
+            slow = ws.command("conversation.prompt", {"conversationId": qid, "text": "fixture:slow:3"})
+            ws.command("conversation.queue.add", {"conversationId": qid, "itemId": "fixture-user-pause", "text": "held by the user"})
+            paused = ws.command("conversation.queue.pause", {"conversationId": qid})["queue"]
+            require(paused["paused"] is True and paused["pauseReason"] == "user", "Pause reason: " + json.dumps(paused))
+            started = ws.event(qid, "turn.started", resumed["sequence"])
+            ws.event(qid, "turn.completed", started["sequence"])
+            time.sleep(1)
+            kept = queue()
+            require(kept["paused"] is True and kept["pauseReason"] == "user" and [i["id"] for i in kept["items"]] == ["fixture-user-pause"],
+                    "A user pause must survive the turn completing: " + json.dumps(kept))
+            # An idle conversation never starts an item added paused.
+            image = base64.b64encode(b"\x89PNG fixture").decode()
+            content = [{"type": "image", "data": image, "mimeType": "image/png"}, {"type": "text", "text": "note"}]
+            added = ws.command("conversation.queue.add", {"conversationId": qid, "itemId": "fixture-take", "text": "look [image]",
+                                                        "content": content, "paused": True})
+            require(added["status"] == "queued", "Paused add must not start: " + json.dumps(added))
+            taken = ws.command("conversation.queue.take", {"conversationId": qid, "itemId": "fixture-take"})
+            require(taken["item"]["id"] == "fixture-take" and taken["item"]["text"] == "look [image]" and taken["item"]["content"] == content,
+                    "Take must return the full content: " + json.dumps(taken)[:400])
+            require([i["id"] for i in taken["queue"]["items"]] == ["fixture-user-pause"], "Taken item must leave the queue")
+            ws.command("conversation.queue.take", {"conversationId": qid, "itemId": "fixture-take"}, error="NOT_FOUND")
+            cleared = ws.command("conversation.queue.clear", {"conversationId": qid})["queue"]
+            require(cleared["items"] == [] and not cleared["paused"], "Clear must empty the queue: " + json.dumps(cleared))
             return qid
         check("backend-follow-up-queue", follow_up_queue)
 
