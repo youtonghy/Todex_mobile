@@ -107,8 +107,10 @@ final class AgentLiveView: UIView {
     /// The conversation's projected desktop state; cheap when unchanged.
     func update(computer: DesktopComputerState, browser: DesktopBrowserState) {
         guard computer != self.computer || browser != self.browser else { return }
-        if browser.tabOpen == true, self.browser.actions.last?.actionId != browser.actions.last?.actionId {
-            // A new action after `closed`: the tab may be back.
+        if browser.tabOpen == true,
+            self.browser.tabOpen != true || self.browser.actions.last?.actionId != browser.actions.last?.actionId
+        {
+            // The tab reopened (or a new action followed `closed`): the tab may be back.
             browserClosed = false
         }
         self.computer = computer

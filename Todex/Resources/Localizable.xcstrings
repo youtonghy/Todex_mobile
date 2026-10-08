@@ -6889,6 +6889,34 @@
         }
       }
     },
+    "允许 Agent 使用 %@ 上的浏览器？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow the agent to use a browser on %@?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントが %@ のブラウザを使用することを許可しますか？"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "에이전트가 %@의 브라우저를 사용하도록 허용할까요?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允许 Agent 使用 %@ 上的浏览器？"
+          }
+        }
+      }
+    },
     "允许 Agent 使用浏览器和 Computer Use": {
       "localizations": {
         "en": {
@@ -6913,6 +6941,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "允许 Agent 使用浏览器和 Computer Use"
+          }
+        }
+      }
+    },
+    "允许 Agent 在浏览器中执行：%@？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow the agent to do this in the browser: %@?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントがブラウザで次の操作を行うことを許可しますか：%@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "에이전트가 브라우저에서 다음 작업을 하도록 허용할까요: %@?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允许 Agent 在浏览器中执行：%@？"
           }
         }
       }
@@ -27577,6 +27633,62 @@
           "stringUnit": {
             "state": "translated",
             "value": "本地草稿仍在加载"
+          }
+        }
+      }
+    },
+    "本对话内允许": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow for this conversation"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この会話中は許可"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 대화에서 허용"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本对话内允许"
+          }
+        }
+      }
+    },
+    "本对话内始终允许": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always allow in this conversation"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この会話では常に許可"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 대화에서 항상 허용"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本对话内始终允许"
           }
         }
       }

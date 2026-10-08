@@ -93,8 +93,14 @@ private func nonEmpty(_ value: JSONValue) -> String? {
 }
 
 extension DesktopBrowserState {
-    /// `desktop.browser.grant` / `desktop.browser.action`, as `projectDesktopBrowser`.
+    /// `desktop.browser.grant` / `.tab` / `.action`, as `projectDesktopBrowser`.
     mutating func apply(type: String, payload: JSONValue, time: String) {
+        if type == "desktop.browser.tab" {
+            // The backend closed the tab (idle, crash, user, revoked, restart); the next
+            // successful action reopens it.
+            if payload["status"].stringValue == "closed" { tabOpen = false }
+            return
+        }
         if type == "desktop.browser.grant" {
             let isGranted = payload["status"].stringValue == "granted"
             granted = isGranted

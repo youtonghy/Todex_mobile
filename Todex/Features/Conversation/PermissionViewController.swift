@@ -141,7 +141,7 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
 
     private func buildContent() {
         let payload = permission.payload
-        let heading = Theme.label(payload["title"].optionalString ?? String(localized: "需要你确认"), style: .title2)
+        let heading = Theme.label(permission.heading ?? String(localized: "需要你确认"), style: .title2)
         heading.accessibilityTraits.insert(.header)
         content.addArrangedSubview(heading)
         addDetails(payload["details"])
@@ -463,6 +463,26 @@ final class PermissionViewController: UIViewController, UITextViewDelegate {
     }
 }
 
+extension PendingPermission {
+    /// Card title. The daemon words its desktop browser prompts in English, so
+    /// they are rebuilt here from `kind` and `details`; others show the daemon's title.
+    var heading: String? {
+        let details = payload["details"]
+        switch payload["kind"].stringValue {
+        case "desktop_browser":
+            if let host = details["host"].optionalString, !host.isEmpty {
+                return String(localized: "允许 Agent 使用 \(host) 上的浏览器？")
+            }
+        case "desktop_browser_action":
+            if let action = details["action"].optionalString, !action.isEmpty {
+                return String(localized: "允许 Agent 在浏览器中执行：\(action)？")
+            }
+        default: break
+        }
+        return payload["title"].optionalString
+    }
+}
+
 private struct PermissionOption: Equatable {
     let id: String
     let kind: String
@@ -493,6 +513,10 @@ private struct PermissionOption: Equatable {
             "Reject": String(localized: "拒绝"), "Decline": String(localized: "拒绝"), "Cancel": String(localized: "取消请求"),
             "Reject and stop turn": String(localized: "拒绝并停止本轮"), "Respond": String(localized: "提交回答"),
             "Submit": String(localized: "提交回答"), "Answer": String(localized: "提交回答"),
+            // Agent desktop browser prompts (todex_desktop MCP server).
+            "Allow for this conversation": String(localized: "本对话内允许"),
+            "Always allow in this conversation": String(localized: "本对话内始终允许"),
+            "Deny": String(localized: "拒绝"),
         ]
         if let title = translations[name] { return title }
         let action =

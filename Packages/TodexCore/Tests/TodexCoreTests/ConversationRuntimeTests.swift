@@ -102,6 +102,15 @@ struct ConversationRuntimeTests {
         let opened = base + [action("c", ["tool": "browser_open", "url": "http://localhost:5173/"])]
         #expect(try applied(opened).desktopBrowser.tabOpen == true)
         #expect(try applied([action("d", ["tool": "browser_close"])], to: opened).desktopBrowser.tabOpen == false)
+        // The backend closing the tab (idle, crash, ...) closes it; the next successful action reopens it.
+        let tabClosed = try applied([("desktop.browser.tab", ["status": "closed", "reason": "idle"])], to: opened)
+        #expect(tabClosed.messages.isEmpty)
+        #expect(tabClosed.desktopBrowser.tabOpen == false)
+        #expect(tabClosed.desktopBrowser.granted)
+        #expect(tabClosed.desktopBrowser.actions.count == 3)
+        #expect(try applied([action("e")], to: opened + [("desktop.browser.tab", ["status": "closed", "reason": "crash"])]).desktopBrowser.tabOpen == true)
+        // Unknown statuses are ignored.
+        #expect(try applied([("desktop.browser.tab", ["status": "other"])], to: opened).desktopBrowser.tabOpen == true)
         let revoked = try applied([("desktop.browser.grant", ["status": "revoked", "reason": "user"])], to: opened)
         #expect(!revoked.desktopBrowser.granted)
         #expect(revoked.desktopBrowser.tabOpen == false)

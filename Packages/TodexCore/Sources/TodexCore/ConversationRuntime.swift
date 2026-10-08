@@ -831,7 +831,7 @@ public struct ConversationRuntime: Sendable {
 
     private mutating func projectAuxiliary(_ event: ConversationEvent, type: String, turnId: String) {
         let payload = event.payload
-        if type == "desktop.browser.action" || type == "desktop.browser.grant" {
+        if type == "desktop.browser.action" || type == "desktop.browser.grant" || type == "desktop.browser.tab" {
             desktopBrowser.apply(type: type, payload: payload, time: event.time)
         } else if type == "desktop.computer.action" || type == "desktop.computer.session"
             || type == "desktop.computer.grant"

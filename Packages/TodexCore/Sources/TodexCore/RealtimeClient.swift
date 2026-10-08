@@ -8,9 +8,11 @@ public actor RealtimeClient {
     public nonisolated let events: AsyncStream<JSONValue>
     /// `agentBrowser.frame` payloads (after `agentBrowser.watch`), kept out of
     /// `events` so live JPEGs never queue behind or crowd out journal events.
-    /// Latest wins: when the consumer lags, older frames are dropped.
+    /// Latest wins per conversation: when the consumer lags, a conversation's
+    /// older frames are replaced by its newer frame or `closed`, and never evict
+    /// another conversation's pending frame.
     public nonisolated let browserFrames: AsyncStream<JSONValue>
-    private nonisolated let browserFrameSink: AsyncStream<JSONValue>.Continuation
+    private let browserMailbox: BrowserFrameMailbox
     private let eventQueue: RealtimeEventQueue
     private let connection: BackendConnection
     /// Transport v2 client rules: v2 framing for a pinned profile, plaintext
@@ -45,15 +47,16 @@ public actor RealtimeClient {
         let queue = RealtimeEventQueue(capacity: eventCapacity)
         eventQueue = queue
         events = AsyncStream(unfolding: { await queue.next() }, onCancel: { queue.finish() })
-        (browserFrames, browserFrameSink) = AsyncStream.makeStream(
-            of: JSONValue.self,
-            bufferingPolicy: .bufferingNewest(Self.browserFrameBuffer))
+        let mailbox = BrowserFrameMailbox(capacity: Self.browserFrameSlots)
+        browserMailbox = mailbox
+        browserFrames = AsyncStream(unfolding: { await mailbox.next() }, onCancel: { mailbox.finish() })
     }
 
-    deinit { browserFrameSink.finish() }
+    deinit { browserMailbox.finish() }
 
-    /// One slot per live browser view the backend allows on a connection.
-    static let browserFrameBuffer = 8
+    /// Conversations whose newest frame can wait at once: the live browser views
+    /// the backend allows on a connection, with headroom.
+    static let browserFrameSlots = 64
     static let policyTimeout: TimeInterval = 10
     static let policyMaximumBytes = 2048
 
@@ -195,7 +198,7 @@ public actor RealtimeClient {
                 let frame = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
                 guard let response = RealtimeResponse(frame) else { throw TodexError.invalid(String(localized: "后端事件格式无效", bundle: .module)) }
                 if response.type == "agentBrowser.frame" {
-                    browserFrameSink.yield(response.payload)
+                    browserMailbox.offer(response.payload)
                     continue
                 }
                 if let id = response.requestID, let request = pending[id],
@@ -501,5 +504,64 @@ final class RealtimeEventQueue: Sendable {
             return waiters
         }
         for (index, waiter) in waiters.enumerated() { waiter.resume(returning: index == 0 ? finalFrame : nil) }
+    }
+}
+
+/// One pending slot per conversation, delivered oldest slot first. A newer frame
+/// (or `closed`) replaces only its own conversation's slot, so a burst for one
+/// conversation cannot evict another's `closed`. When every slot is taken, the
+/// oldest pending slot makes room for a new conversation.
+final class BrowserFrameMailbox: Sendable {
+    private struct State {
+        var order: [String] = []
+        var latest: [String: JSONValue] = [:]
+        var waiter: CheckedContinuation<JSONValue?, Never>?
+        var finished = false
+    }
+    private let capacity: Int
+    private let state = Mutex(State())
+    init(capacity: Int) {
+        precondition(capacity > 0)
+        self.capacity = capacity
+    }
+    func offer(_ payload: JSONValue) {
+        let key = payload["conversationId"].stringValue
+        var waiter: CheckedContinuation<JSONValue?, Never>?
+        state.withLock {
+            if $0.finished { return }
+            if let pending = $0.waiter {
+                $0.waiter = nil
+                waiter = pending
+                return
+            }
+            if $0.latest.updateValue(payload, forKey: key) == nil {
+                $0.order.append(key)
+                if $0.order.count > capacity { $0.latest.removeValue(forKey: $0.order.removeFirst()) }
+            }
+        }
+        waiter?.resume(returning: payload)
+    }
+    func next() async -> JSONValue? {
+        await withCheckedContinuation { continuation in
+            let result: (Bool, JSONValue?) = state.withLock {
+                if !$0.order.isEmpty {
+                    return (true, $0.latest.removeValue(forKey: $0.order.removeFirst()))
+                }
+                if $0.finished { return (true, nil) }
+                $0.waiter = continuation
+                return (false, nil)
+            }
+            if result.0 { continuation.resume(returning: result.1) }
+        }
+    }
+    func finish() {
+        let waiter: CheckedContinuation<JSONValue?, Never>? = state.withLock {
+            $0.finished = true
+            $0.order.removeAll()
+            $0.latest.removeAll()
+            defer { $0.waiter = nil }
+            return $0.waiter
+        }
+        waiter?.resume(returning: nil)
     }
 }

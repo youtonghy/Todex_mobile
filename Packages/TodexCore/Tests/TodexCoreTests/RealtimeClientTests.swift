@@ -243,7 +243,7 @@ struct RealtimeClientTests {
         await client.disconnect()
     }
 
-    @Test func agentBrowserFramesBypassTheEventQueueAndKeepOnlyTheNewest() async throws {
+    @Test func agentBrowserFramesBypassTheEventQueueAndKeepTheNewestPerConversation() async throws {
         let fixture = NetworkHTTPFixture { _ in .json(["requiredProtocol": "none"]) }
         defer { fixture.close() }
         let socket = ScriptedRealtimeSocket()
@@ -256,27 +256,33 @@ struct RealtimeClientTests {
         await socket.waitForSent(2)
         try socket.push(["type": "server.result", "id": "w", "payload": ["watching": true]])
         #expect(try await watch.value == ["watching": true])
-        let total = RealtimeClient.browserFrameBuffer + 3
-        for seq in 1...total {
+        func frame(_ conversation: String, _ seq: Int) throws {
             try socket.push([
                 "type": "agentBrowser.frame",
                 "payload": [
-                    "conversationId": "c", "seq": .number(Double(seq)), "mimeType": "image/jpeg", "data": "AQID",
-                    "width": 2, "height": 1,
+                    "conversationId": .string(conversation), "seq": .number(Double(seq)), "mimeType": "image/jpeg",
+                    "data": "AQID", "width": 2, "height": 1,
                 ],
             ])
         }
-        try socket.push(["type": "agentBrowser.frame", "payload": ["conversationId": "c", "closed": true]])
+        // A burst for A, B's tab closing, then more A: B's `closed` must survive.
+        let total = RealtimeClient.browserFrameSlots + 3
+        for seq in 1...total { try frame("a", seq) }
+        try socket.push(["type": "agentBrowser.frame", "payload": ["conversationId": "b", "closed": true]])
+        for seq in (total + 1)...(total + 4) { try frame("a", seq) }
         // A ping round trip is a receive-loop barrier for every frame.
         _ = try await client.command(type: "server.ping", payload: [:])
-        var frames: [JSONValue] = []
-        for await frame in client.browserFrames {
-            frames.append(frame)
-            if frame["closed"] == true { break }
-        }
-        #expect(frames.count == RealtimeClient.browserFrameBuffer)
-        #expect(frames.dropLast().map(\.["seq"].intValue) == Array((total - frames.count + 2)...total))
-        #expect(frames.last?["closed"] == true)
+        var frames = client.browserFrames.makeAsyncIterator()
+        let first = await frames.next()
+        let second = await frames.next()
+        #expect(first?["conversationId"] == "a")
+        #expect(first?["seq"].intValue == total + 4)
+        #expect(second?["conversationId"] == "b")
+        #expect(second?["closed"] == true)
+        // Nothing else is pending: the next frame is the one pushed now.
+        try socket.push(["type": "agentBrowser.frame", "payload": ["conversationId": "b", "closed": true]])
+        let third = await frames.next()
+        #expect(third?["conversationId"] == "b")
         var iterator = client.events.makeAsyncIterator()
         var types: [String] = []
         // Two pings, connection.ready and the watch result.
@@ -285,6 +291,26 @@ struct RealtimeClientTests {
         #expect(!types.contains("agentBrowser.frame"))
         #expect(!socket.isCancelled)
         await client.disconnect()
+    }
+
+    @Test func browserFrameMailboxReplacesPerConversationEvictsOldestAndFinishes() async {
+        let mailbox = BrowserFrameMailbox(capacity: 2)
+        func payload(_ conversation: String, _ seq: Int) -> JSONValue {
+            ["conversationId": .string(conversation), "seq": .number(Double(seq))]
+        }
+        mailbox.offer(payload("a", 1))
+        mailbox.offer(payload("b", 1))
+        mailbox.offer(payload("a", 2))
+        mailbox.offer(payload("c", 1))
+        // "a" was the oldest slot and made room for "c".
+        #expect(await mailbox.next()?["conversationId"] == "b")
+        #expect(await mailbox.next()?["conversationId"] == "c")
+        let waiting = Task { await mailbox.next() }
+        await Task.yield()
+        mailbox.finish()
+        #expect(await waiting.value == nil)
+        mailbox.offer(payload("d", 1))
+        #expect(await mailbox.next() == nil)
     }
 
     @Test func permanentConnectionFailuresAreMarkedNotRetryable() {

@@ -721,7 +721,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         // three and summarize the rest so the timeline keeps its space.
         let permissions = runtime?.pendingPermissions ?? []
         for (index, permission) in permissions.prefix(3).enumerated() {
-            let title = permission.payload["title"].optionalString ?? String(localized: "需要你的审批")
+            let title = permission.heading ?? String(localized: "需要你的审批")
             let button = Theme.button(
                 permission.isSessionScoped ? String(localized: "\(title) · 会话") : title, icon: "hand.raised.fill", prominent: index == 0
             ) { [weak self] in self?.presentPermission(permission) }
@@ -889,7 +889,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         let sheet = UIAlertController(title: String(localized: "待审批"), message: nil, preferredStyle: .actionSheet)
         for permission in session.runtimes[conversation.id]?.pendingPermissions ?? [] {
             sheet.addAction(
-                UIAlertAction(title: permission.payload["title"].optionalString ?? String(localized: "需要你的审批"), style: .default) {
+                UIAlertAction(title: permission.heading ?? String(localized: "需要你的审批"), style: .default) {
                     [weak self] _ in self?.presentPermission(permission)
                 })
         }
