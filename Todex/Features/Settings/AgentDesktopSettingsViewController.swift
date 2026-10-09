@@ -327,22 +327,22 @@ final class AgentDesktopSettingsViewController: SettingsListController {
             ) { [weak self, api] enabled in self?.change { try await api.setAgentDesktop(computerEnabled: enabled) } }
         ]
         if status.supported {
-            rows.append(
-                SettingsRow(
-                    title: status.permissions.screen ? String(localized: "已授予屏幕录制") : String(localized: "需要屏幕录制权限"),
-                    symbol: status.permissions.screen ? "checkmark.circle" : "exclamationmark.triangle",
-                    id: "computerUse.screen", color: status.permissions.screen ? .systemGreen : .systemOrange))
-            rows.append(
-                SettingsRow(
-                    title: status.permissions.accessibility ? String(localized: "已授予辅助功能") : String(localized: "需要辅助功能权限"),
-                    symbol: status.permissions.accessibility ? "checkmark.circle" : "exclamationmark.triangle",
-                    id: "computerUse.accessibility", color: status.permissions.accessibility ? .systemGreen : .systemOrange))
-            if missing {
-                rows.append(
-                    SettingsRow(
-                        title: String(localized: "请求授权"), symbol: "lock.open", id: "computerUse.grant", color: Theme.accent,
-                        enabled: !saving
-                    ) { [weak self, api] in self?.change { try await api.requestComputerPermissions() } })
+            // One row per permission; tapping a missing one asks for it alone.
+            for (permission, granted, grantedTitle, missingTitle) in [
+                ("screen", status.permissions.screen, String(localized: "已授予屏幕录制"), String(localized: "需要屏幕录制权限")),
+                ("accessibility", status.permissions.accessibility, String(localized: "已授予辅助功能"), String(localized: "需要辅助功能权限")),
+            ] {
+                if granted {
+                    rows.append(
+                        SettingsRow(
+                            title: grantedTitle, symbol: "checkmark.circle", id: "computerUse.\(permission)", color: .systemGreen))
+                } else {
+                    rows.append(
+                        SettingsRow(
+                            title: missingTitle, symbol: "exclamationmark.triangle", id: "computerUse.\(permission)",
+                            color: .systemOrange, enabled: !saving
+                        ) { [weak self, api] in self?.change { try await api.requestComputerPermissions(permission) } })
+                }
             }
         }
         let footer =

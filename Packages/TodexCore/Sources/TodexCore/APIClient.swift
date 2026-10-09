@@ -403,10 +403,14 @@ public final class APIClient: Sendable {
             .decoded(AgentDesktopSettings.self)
     }
 
-    /// Shows the OS permission prompts (Screen Recording, Accessibility) on the daemon's host.
-    public func requestComputerPermissions() async throws -> AgentDesktopSettings {
-        try await http.request(.post, path: "/v2/agent-desktop/computer/permissions")
-            .decoded(AgentDesktopSettings.self)
+    /// Shows the OS prompt for one permission (`screen` or `accessibility`) on the daemon's host,
+    /// or for each missing one when `permission` is nil. macOS asks only once, so a permission
+    /// still missing afterwards also opens its System Settings pane.
+    public func requestComputerPermissions(_ permission: String? = nil) async throws -> AgentDesktopSettings {
+        try await http.request(
+            .post, path: "/v2/agent-desktop/computer/permissions",
+            body: permission.map { .object(["permission": .string($0)]) }
+        ).decoded(AgentDesktopSettings.self)
     }
 
     /// The host's screen now (404 unless the conversation controls it), or
