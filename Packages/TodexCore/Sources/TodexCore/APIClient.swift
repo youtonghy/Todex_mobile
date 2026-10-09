@@ -413,6 +413,12 @@ public final class APIClient: Sendable {
         ).decoded(AgentDesktopSettings.self)
     }
 
+    /// Apps on the daemon's host for `@app:` mentions. HTTP 409 while Computer Use
+    /// is off; 404 from daemons that predate the list.
+    public func computerApps() async throws -> [HostApp] {
+        try await http.request(path: "/v2/agent-desktop/computer/apps").decoded(HostApps.self).apps
+    }
+
     /// The host's screen now (404 unless the conversation controls it), or
     /// with `.browser` the conversation's tab (404 without one).
     public func agentDesktopFrame(conversationId: String, capability: AgentDesktopCapability = .screen)

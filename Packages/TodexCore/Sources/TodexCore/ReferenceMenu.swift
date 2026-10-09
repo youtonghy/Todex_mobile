@@ -6,7 +6,7 @@ import Foundation
 /// chip, `#mcp`, a conversation export), matching
 /// `@todex/protocol/referenceMenu` on desktop/web.
 public enum ReferenceType: String, CaseIterable, Sendable {
-    case file, folder, chat, skill, mcp, ssh
+    case file, folder, chat, skill, mcp, ssh, app
 }
 
 public enum ReferenceMenuState: Equatable, Sendable {
@@ -64,6 +64,24 @@ public enum ReferenceMenu {
     public static func entryLabel(path: String, isDirectory: Bool) -> String {
         isDirectory ? "@\(trimmingTrailingSlashes(path))/" : "@\(path)"
     }
+
+    /// `@app:` matches an app's name (spaces ignored) or id, case-insensitively,
+    /// mirroring `buildAppReferenceSuggestions` on desktop/web.
+    public static func apps(_ apps: [HostApp], matching query: String) -> [HostApp] {
+        let needle = query.lowercased()
+        return Array(
+            apps.filter {
+                needle.isEmpty
+                    || $0.name.lowercased().filter { !$0.isWhitespace }.contains(needle)
+                    || $0.id.lowercased().contains(needle)
+            }
+            .prefix(suggestionLimit))
+    }
+
+    /// The agent passes the id to Computer Use (`open_app`), whose per-app approval still applies.
+    public static func appInsert(_ app: HostApp) -> String { "@app:\(app.id) " }
+
+    public static func appLabel(_ app: HostApp) -> String { app.name.isEmpty ? app.id : app.name }
 
     private static func trimmingTrailingSlashes(_ path: String) -> String {
         var value = Substring(path)

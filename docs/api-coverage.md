@@ -6,7 +6,7 @@
 - WS 分派及 wire：[websocket.rs](../../TodeX_backend/src/server/websocket.rs)、[protocol.rs](../../TodeX_backend/src/server/protocol.rs)。
 - 模型：[workspace_store.rs](../../TodeX_backend/src/workspace_store.rs)、[conversation/model.rs](../../TodeX_backend/src/conversation/model.rs)、[provider/types.rs](../../TodeX_backend/src/provider/types.rs)。共享客户端 [v2.ts](../../TodeX_protocol/src/v2.ts) 仅作交叉参考。
 
-**67/67 个普通 HTTP method + path 已封装，72/72 个 WS 可识别命令已编目（含 2026-10-06 补充的 13 个 `history.*` 命令）。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 67 个普通 HTTP 接口；`POST /v2/device-pairing/reveal`（配对 v3）与传输隧道 `POST /v2/sealed` 也不计入。
+**68/68 个普通 HTTP method + path 已封装，72/72 个 WS 可识别命令已编目（含 2026-10-06 补充的 13 个 `history.*` 命令）。** `GET /v2/ws` 是 WebSocket upgrade，单独列入协议覆盖，不计入 68 个普通 HTTP 接口；`POST /v2/device-pairing/reveal`（配对 v3）与传输隧道 `POST /v2/sealed` 也不计入。
 
 **传输 v2（2026-10-07 起）**：`HTTPClient` 不再有开关，按配置推导：协议与公钥由设备验证批准后一次写入并标记 `transportVerified`（2026-10-08 起，配对 v3 的 transcript 绑定后端传输协议与公钥）；已验证地固定协议与公钥时，所有 REST（含 `/health`、本机回环）都经 `POST /v2/sealed` 封装，WebSocket 用 `tv=2`；未固定公钥的远程后端在发出任何请求前即被拒绝并提示加密配对；已固定但未经验证的公钥（旧版本保存的配置）在任何主机（含本机回环）都被拒绝并提示重新配对，已验证但缺协议或缺公钥的配置按公钥无效拒绝；仅未固定公钥的本机回环后端走明文。封装 REST 为 revision 2（2026-10-08 起）：请求带 `X-Todex-Sealed-Revision: 2`，只解密 `200` + `application/vnd.todex.sealed; r=2` 的响应，响应体为 32 字节 `response_nonce` 加记录流，`k_down` 按 nonce 逐响应派生；不带 `r=2` 的封装响应或不含 `"sealedRevision": 2` 的传输策略视为后端过旧（提示升级、停止重连、不回落）。隧道内的 `503 TRANSPORT_BUSY`（保证未执行）等待 `Retry-After`（最多 5 秒）后重签重试一次；经认证的 `401 AUTH_TIMESTAMP_REJECTED` 按其 `serverTime` 记录该后端的时钟偏差，重签重试一次，此后 REST 与 WebSocket 升级签名都使用校正后的时间；未经认证的应答从不改变时钟。配对链接（二维码）只读取 `serverUrl`（版本 1 或 2），分片二维码已删除。配对路由由独立的 bootstrap 客户端直连（不签名、不走隧道）。旧的 `todex.crypto.v1` 帧与配对 v2 已删除，APIClient 也不再封装 v2 配对接口。未添加已移除的 /v1 路由或不存在的 HTTP resume/fork/compact、配对 approve 接口。
 
@@ -94,6 +94,7 @@ swift test --package-path /path/to/TodexCore-copy \
 | GET | `/v2/agent-desktop` | `agentDesktop()` | 已封装；设备签名；解码为 `AgentDesktopSettings`；HTTP 404 表示后端早于桌面工具，缺少 `computer`/`browser` 表示旧版（桌面端执行）后端 | `endpointWire(agentDesktop)`、`agentDesktopModelsAcceptLegacyDaemonsAndDecodeDataURLs` |
 | PUT | `/v2/agent-desktop` | `setAgentDesktop(enabled:computerEnabled:)` | 已封装；设备签名；只发送给出的字段（`enabled` 和/或 `computerEnabled`） | `endpointWire(setAgentDesktop)` |
 | POST | `/v2/agent-desktop/computer/permissions` | `requestComputerPermissions()` | 已封装；设备签名；在后端主机上弹出屏幕录制/辅助功能授权 | `endpointWire(requestComputerPermissions)` |
+| GET | `/v2/agent-desktop/computer/apps` | `computerApps()` | 已封装；设备签名；解码 `{ apps }` 为 `[HostApp]`（`id`、`name`、`running`），供 `@app:` 提及；Computer Use 关闭时 HTTP 409，旧后端 404 | `endpointWire(computerApps)`、`appSuggestionsMatchNameOrIdAndInsertAnIdMention` |
 | GET | `/v2/conversations/{conversation_id}/agent-desktop/frame` | `agentDesktopFrame(conversationId:capability:)` | 已封装；设备签名；`.screen`（默认，无 query）为 Computer Use 画面，未控制屏幕时 404；`.browser` 加 `?capability=browser` 为浏览器标签页，无标签页时 404 | `endpointWire(agentDesktopFrame)` |
 | DELETE | `/v2/conversations/{conversation_id}/agent-desktop` | `revokeAgentDesktop(conversationId:capability:)` | 已封装；设备签名；`capability` 为 `browser`/`screen`，缺省同时撤销 | `endpointWire(revokeAgentDesktop)` |
 | GET | `/v2/conversations/{conversation_id}/agent-shots/{shot_id}` | `agentShot(conversationId:shotId:)` | 已封装；设备签名；`desktop.*.action` 事件记录的截图 | `endpointWire(agentShot)` |

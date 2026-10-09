@@ -55,6 +55,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private var skillCatalogTask: Task<Void, Never>?
     private var sshHostCache: [JSONValue]?
     private var sshHostTask: Task<Void, Never>?
+    private var hostApps: HostAppList?
+    private var hostAppTask: Task<Void, Never>?
     private var draft: ComposerDraft { session.drafts[conversation.id] ?? ComposerDraft() }
     private var submitting = false
     var openFile: ((String) -> Void)?
@@ -1832,6 +1834,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             fetchSkillSuggestions((range, query), only: .mcp)
         case .item(.ssh, let query):
             fetchSshSuggestions(query: query, range: range)
+        case .item(.app, let query):
+            fetchAppSuggestions(query: query, range: range)
         }
     }
     private static func referenceTypeDetail(_ type: ReferenceType) -> String {
@@ -1842,6 +1846,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
         case .skill: String(localized: "Agent 目录中的 Skill")
         case .mcp: String(localized: "Agent 目录中的 MCP 服务")
         case .ssh: String(localized: "已开启 Agent 访问的 SSH 主机")
+        case .app: String(localized: "后端电脑上的应用")
         }
     }
     private func fetchEntrySuggestions(
@@ -1931,6 +1936,67 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
             guard let self, let api = session.api else { return }
             guard let value = try? await api.sshHosts(), !Task.isCancelled else { return }
             sshHostCache = value["hosts"].arrayValue
+            updateSuggestions()
+        }
+    }
+    /// What `@app:` can list; only `.loaded` and `.unsupported` stay cached
+    /// once the menu closes, so turning Computer Use on is picked up next time.
+    private enum HostAppList {
+        case loaded([HostApp])
+        /// Desktop tools or Computer Use is off (settings, or HTTP 409).
+        case off
+        /// The backend predates the app list (HTTP 404).
+        case unsupported
+        case failed
+    }
+    /// `@app:` lists apps on the backend host for Computer Use; picking one
+    /// inserts `@app:<id>`, which the agent passes to `open_app`.
+    private func fetchAppSuggestions(query: String, range: NSRange) {
+        let notice: String
+        switch hostApps {
+        case nil:
+            notice = String(localized: "正在读取应用…")
+            loadHostApps()
+        case .off: notice = String(localized: "Computer Use 已关闭，请在设置中开启。")
+        case .unsupported: notice = String(localized: "请更新后端以使用 @app:")
+        case .failed: notice = String(localized: "无法读取应用列表")
+        case .loaded(let apps):
+            let items = ReferenceMenu.apps(apps, matching: query).map { app in
+                Suggestion(
+                    title: ReferenceMenu.appLabel(app),
+                    detail: app.running ? String(localized: "\(app.id) · 运行中") : app.id
+                ) { [weak self] in
+                    self?.applyMention(range: range, text: ReferenceMenu.appInsert(app))
+                }
+            }
+            if !items.isEmpty {
+                showSuggestions(items)
+                return
+            }
+            notice = String(localized: "没有匹配的应用")
+        }
+        showSuggestions([Suggestion(title: notice, detail: "", apply: {})], interactive: false)
+    }
+    /// Reads the settings first so the list is never requested while Computer
+    /// Use is known to be off; keystrokes only refilter the cached result.
+    private func loadHostApps() {
+        guard hostAppTask == nil else { return }
+        hostAppTask = Task { [weak self] in
+            defer { self?.hostAppTask = nil }
+            guard let self, let api = session.api else { return }
+            let result: HostAppList
+            do {
+                let settings = try await api.agentDesktop()
+                result = settings.enabled && settings.computerEnabled ? .loaded(try await api.computerApps()) : .off
+            } catch TodexError.server(let code, _) where ["404", "NOT_FOUND"].contains(code) {
+                result = .unsupported
+            } catch TodexError.server(let code, _) where ["409", "CONFLICT"].contains(code) {
+                result = .off
+            } catch {
+                result = .failed
+            }
+            guard !Task.isCancelled else { return }
+            hostApps = result
             updateSuggestions()
         }
     }
@@ -2207,6 +2273,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate, UIGestureR
     private func hideSuggestions() {
         if !suggestionBox.isHidden { suggestionBox.isHidden = true }
         suggestionItems = []
+        switch hostApps {
+        case .off, .failed: hostApps = nil
+        default: break
+        }
     }
     private func modelMenu() -> UIMenu {
         let pref = session.preferences(for: conversation)

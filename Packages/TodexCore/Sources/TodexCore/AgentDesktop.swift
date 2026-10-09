@@ -214,6 +214,24 @@ public struct AgentDesktopSettings: Codable, Sendable, Equatable {
     public var browser: AgentBrowserStatus?
 }
 
+/// An app on the daemon's host. `id` is what `computer_act open_app` takes
+/// (macOS bundle id, Windows exe name, Linux desktop id) and has no spaces.
+public struct HostApp: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var name: String
+    public var running: Bool
+    public init(id: String, name: String, running: Bool) {
+        self.id = id
+        self.name = name
+        self.running = running
+    }
+}
+
+/// `GET /v2/agent-desktop/computer/apps`: running apps first, then installed ones.
+public struct HostApps: Codable, Sendable, Equatable {
+    public var apps: [HostApp]
+}
+
 public struct AgentBrowserProfile: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var name: String

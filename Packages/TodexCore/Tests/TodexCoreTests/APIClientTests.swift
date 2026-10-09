@@ -823,6 +823,11 @@ private struct EndpointCase: Sendable, CustomStringConvertible {
             response: agentDesktop
         ) { try JSONValue(encoding: await $0.requestComputerPermissions()) },
         .init(
+            name: "computerApps", method: "GET", path: "/v2/agent-desktop/computer/apps",
+            response: ["apps": [["id": "com.apple.TextEdit", "name": "TextEdit", "running": true]]],
+            expectedResult: [["id": "com.apple.TextEdit", "name": "TextEdit", "running": true]]
+        ) { try JSONValue(encoding: await $0.computerApps()) },
+        .init(
             name: "agentDesktopFrame", method: "GET", path: "/v2/conversations/\(escaped)/agent-desktop/frame",
             query: ["capability": "browser"], response: frame
         ) { try JSONValue(encoding: await $0.agentDesktopFrame(conversationId: id, capability: .browser)) },
